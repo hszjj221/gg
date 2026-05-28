@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"gg/internal/agent"
+	"github.com/hszjj221/gg/internal/agent"
 )
 
 type Header struct {

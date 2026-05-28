@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"gg/internal/agent"
-	"gg/internal/config"
-	"gg/internal/session"
+	"github.com/hszjj221/gg/internal/agent"
+	"github.com/hszjj221/gg/internal/config"
+	"github.com/hszjj221/gg/internal/session"
 )
 
 type appFakeProvider struct{}

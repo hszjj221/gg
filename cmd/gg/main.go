@@ -4,7 +4,7 @@ import (
 	"context"
 	"os"
 
-	"gg/internal/app"
+	"github.com/hszjj221/gg/internal/app"
 )
 
 const version = "0.1.0"

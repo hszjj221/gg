@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"gg/internal/agent"
+	"github.com/hszjj221/gg/internal/agent"
 )
 
 func TestStoreWritesHeaderAndMessagesAsJSONL(t *testing.T) {

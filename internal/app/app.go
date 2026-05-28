@@ -10,12 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"gg/internal/agent"
-	"gg/internal/cli"
-	"gg/internal/config"
-	"gg/internal/provider/openai"
-	"gg/internal/session"
-	"gg/internal/tools"
+	"github.com/hszjj221/gg/internal/agent"
+	"github.com/hszjj221/gg/internal/cli"
+	"github.com/hszjj221/gg/internal/config"
+	"github.com/hszjj221/gg/internal/provider/openai"
+	"github.com/hszjj221/gg/internal/session"
+	"github.com/hszjj221/gg/internal/tools"
 )
 
 type Options struct {

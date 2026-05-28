@@ -1,6 +1,6 @@
 package tools
 
-import "gg/internal/agent"
+import "github.com/hszjj221/gg/internal/agent"
 
 type Tool = agent.Tool
 type ToolResult = agent.ToolResult
