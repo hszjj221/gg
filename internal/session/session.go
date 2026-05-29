@@ -30,9 +30,18 @@ type MessageEntry struct {
 	Message   agent.Message `json:"message"`
 }
 
+type UsageEntry struct {
+	Type      string      `json:"type"`
+	ID        string      `json:"id"`
+	ParentID  *string     `json:"parentId"`
+	Timestamp string      `json:"timestamp"`
+	Usage     agent.Usage `json:"usage"`
+}
+
 type Loaded struct {
 	Header   Header
 	Entries  []MessageEntry
+	Usages   []UsageEntry
 	Messages []agent.Message
 }
 
@@ -117,6 +126,25 @@ func (s *Store) AppendMessage(message agent.Message) error {
 	return nil
 }
 
+func (s *Store) AppendUsage(usage agent.Usage) error {
+	if s == nil || usage.IsZero() {
+		return nil
+	}
+	entry := UsageEntry{
+		Type:      "usage",
+		ID:        newID(),
+		ParentID:  s.lastID,
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Usage:     usage,
+	}
+	file, err := os.OpenFile(s.path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return writeJSONLine(file, entry)
+}
+
 func Load(path string) (Loaded, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -139,12 +167,29 @@ func Load(path string) (Loaded, error) {
 			}
 			continue
 		}
-		var entry MessageEntry
-		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+		var probe struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal([]byte(line), &probe); err != nil {
 			return Loaded{}, err
 		}
-		loaded.Entries = append(loaded.Entries, entry)
-		loaded.Messages = append(loaded.Messages, entry.Message)
+		switch probe.Type {
+		case "message":
+			var entry MessageEntry
+			if err := json.Unmarshal([]byte(line), &entry); err != nil {
+				return Loaded{}, err
+			}
+			loaded.Entries = append(loaded.Entries, entry)
+			loaded.Messages = append(loaded.Messages, entry.Message)
+		case "usage":
+			var entry UsageEntry
+			if err := json.Unmarshal([]byte(line), &entry); err != nil {
+				return Loaded{}, err
+			}
+			loaded.Usages = append(loaded.Usages, entry)
+		default:
+			return Loaded{}, fmt.Errorf("unknown session entry type %q", probe.Type)
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		return Loaded{}, err

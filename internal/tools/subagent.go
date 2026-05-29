@@ -87,7 +87,9 @@ func (t SubagentTool) Execute(ctx context.Context, raw json.RawMessage) ToolResu
 	if err != nil {
 		return errorResult(err)
 	}
-	return textResult(reply.Content)
+	result := textResult(reply.Content)
+	result.Usage = runner.Usage()
+	return result
 }
 
 func formatSubagentTask(task, contextText string) string {

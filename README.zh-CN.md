@@ -10,6 +10,7 @@
 
 - 支持 tool calling 的 OpenAI-compatible streaming provider
 - 支持列出和恢复命令的 JSONL 会话存储
+- 通过 `--usage` 可选展示 token 消耗
 - 内置代码工具：`read`、`list`、`grep`、`bash`、`edit`、`write`
 - 用于聚焦代码库调研的同步只读 `subagent` 工具
 - 无第三方 Go 依赖的单二进制 CLI
@@ -57,6 +58,7 @@ gg -p "Say hi"
 gg --model gpt-4.1 --base-url https://api.openai.com/v1 -p "Read README.md"
 gg --no-session -p "Explain this directory"
 gg --session .gg/session.jsonl -p "Continue from this file"
+gg --usage -p "Summarize this repository"
 gg sessions list
 gg resume <id-or-path> "Continue from this session"
 gg --continue "Resume the latest session"
@@ -74,6 +76,12 @@ gg --continue "Resume the latest session"
 - `gg sessions list` 会列出当前工作目录的会话。
 - `gg resume <id-or-path>` 可以通过显示的 ID、JSONL 文件名（不含 `.jsonl` 后缀）、文件名或路径恢复会话。
 - `gg --continue` 和 `gg --last` 会恢复当前工作目录的最新会话。
+
+Token 消耗：
+
+- `gg --usage ...` 会在每次运行后把 token 消耗输出到 stderr。
+- provider 返回 usage 时，`gg` 会把它记录到 session。
+- 不返回 usage 的 provider 仍可使用，并会显示 0 token。
 
 ## Subagents
 

@@ -42,13 +42,21 @@ func NewClient(config Config) *Client {
 }
 
 func (c *Client) Complete(ctx context.Context, req agent.Request, onEvent func(agent.Event)) (agent.AssistantMessage, error) {
+	reply, err := c.complete(ctx, req, onEvent, true)
+	if isUnsupportedUsageError(err) {
+		return c.complete(ctx, req, onEvent, false)
+	}
+	return reply, err
+}
+
+func (c *Client) complete(ctx context.Context, req agent.Request, onEvent func(agent.Event), includeUsage bool) (agent.AssistantMessage, error) {
 	if c.apiKey == "" {
 		return agent.AssistantMessage{}, fmt.Errorf("missing API key: set OPENAI_API_KEY or pass --api-key")
 	}
 	if c.baseURL == "" {
 		return agent.AssistantMessage{}, fmt.Errorf("missing base URL")
 	}
-	body, err := json.Marshal(c.requestPayload(req))
+	body, err := json.Marshal(c.requestPayload(req, includeUsage))
 	if err != nil {
 		return agent.AssistantMessage{}, err
 	}
@@ -67,16 +75,38 @@ func (c *Client) Complete(ctx context.Context, req agent.Request, onEvent func(a
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		return agent.AssistantMessage{}, fmt.Errorf("OpenAI-compatible API returned %s: %s", resp.Status, strings.TrimSpace(string(data)))
+		return agent.AssistantMessage{}, apiError{statusCode: resp.StatusCode, status: resp.Status, body: strings.TrimSpace(string(data))}
 	}
 	return parseStream(resp.Body, onEvent)
 }
 
-func (c *Client) requestPayload(req agent.Request) map[string]any {
+type apiError struct {
+	statusCode int
+	status     string
+	body       string
+}
+
+func (e apiError) Error() string {
+	return fmt.Sprintf("OpenAI-compatible API returned %s: %s", e.status, e.body)
+}
+
+func isUnsupportedUsageError(err error) bool {
+	apiErr, ok := err.(apiError)
+	if !ok || apiErr.statusCode != http.StatusBadRequest {
+		return false
+	}
+	body := strings.ToLower(apiErr.body)
+	return strings.Contains(body, "stream_options") || strings.Contains(body, "include_usage")
+}
+
+func (c *Client) requestPayload(req agent.Request, includeUsage bool) map[string]any {
 	payload := map[string]any{
 		"model":    c.model,
 		"messages": chatMessages(req.Messages),
 		"stream":   true,
+	}
+	if includeUsage {
+		payload["stream_options"] = map[string]any{"include_usage": true}
 	}
 	if len(req.Tools) > 0 {
 		payload["tools"] = chatTools(req.Tools)
@@ -144,6 +174,21 @@ type streamChunk struct {
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
+	Usage openAIUsage `json:"usage"`
+}
+
+type openAIUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+}
+
+func (u openAIUsage) agentUsage() agent.Usage {
+	return agent.Usage{
+		PromptTokens:     u.PromptTokens,
+		CompletionTokens: u.CompletionTokens,
+		TotalTokens:      u.TotalTokens,
+	}
 }
 
 type deltaToolCall struct {
@@ -168,6 +213,7 @@ func parseStream(r io.Reader, onEvent func(agent.Event)) (agent.AssistantMessage
 	var text strings.Builder
 	toolCalls := map[int]*toolCallBuilder{}
 	finishReason := ""
+	var usage agent.Usage
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -181,6 +227,9 @@ func parseStream(r io.Reader, onEvent func(agent.Event)) (agent.AssistantMessage
 		var chunk streamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			return agent.AssistantMessage{}, err
+		}
+		if chunk.Usage.TotalTokens != 0 || chunk.Usage.PromptTokens != 0 || chunk.Usage.CompletionTokens != 0 {
+			usage = chunk.Usage.agentUsage()
 		}
 		for _, choice := range chunk.Choices {
 			if choice.Delta.Content != "" {
@@ -221,6 +270,7 @@ func parseStream(r io.Reader, onEvent func(agent.Event)) (agent.AssistantMessage
 			Content: content,
 		},
 		StopReason: agent.StopReasonEndTurn,
+		Usage:      usage,
 	}
 	if content != "" {
 		msg.ContentBlocks = []agent.ContentBlock{{Type: agent.ContentText, Text: content}}

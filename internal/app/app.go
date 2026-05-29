@@ -82,13 +82,13 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	runner := agent.NewRunner(provider, defaultTools(cfg.CWD, provider))
 
 	if parsed.Prompt != "" {
-		return runPrompt(ctx, runner, sessionStore, loadedMessages, parsed.Prompt, stdout, stderr, false)
+		return runPrompt(ctx, runner, sessionStore, loadedMessages, parsed.Prompt, stdout, stderr, false, parsed.Usage)
 	}
 	if parsed.Print {
 		fmt.Fprintln(stderr, "prompt is required in print mode")
 		return 2
 	}
-	return runInteractive(ctx, runner, sessionStore, loadedMessages, stdin, stdout, stderr)
+	return runInteractive(ctx, runner, sessionStore, loadedMessages, stdin, stdout, stderr, parsed.Usage)
 }
 
 func runPrompt(
@@ -100,6 +100,7 @@ func runPrompt(
 	stdout io.Writer,
 	stderr io.Writer,
 	stream bool,
+	showUsage bool,
 ) int {
 	user := agent.Message{Role: agent.RoleUser, Content: prompt, Timestamp: time.Now().UnixMilli()}
 	messages := append(append([]agent.Message(nil), history...), user)
@@ -124,6 +125,14 @@ func runPrompt(
 	if err := appendNewMessages(store, runner.Transcript(), len(history)); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	usage := runner.Usage()
+	if err := appendUsage(store, usage); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if showUsage {
+		printUsage(stderr, usage)
 	}
 	return 0
 }
@@ -180,6 +189,7 @@ func runInteractive(
 	stdin io.Reader,
 	stdout io.Writer,
 	stderr io.Writer,
+	showUsage bool,
 ) int {
 	fmt.Fprintln(stdout, "gg interactive mode. Press Ctrl+D to exit.")
 	scanner := bufio.NewScanner(stdin)
@@ -192,7 +202,7 @@ func runInteractive(
 		if prompt == "" {
 			continue
 		}
-		code := runPrompt(ctx, runner, store, history, prompt, stdout, stderr, true)
+		code := runPrompt(ctx, runner, store, history, prompt, stdout, stderr, true, showUsage)
 		if code != 0 {
 			return code
 		}
@@ -215,6 +225,17 @@ func appendNewMessages(store *session.Store, transcript []agent.Message, skip in
 		}
 	}
 	return nil
+}
+
+func appendUsage(store *session.Store, usage agent.Usage) error {
+	if store == nil {
+		return nil
+	}
+	return store.AppendUsage(usage)
+}
+
+func printUsage(stderr io.Writer, usage agent.Usage) {
+	fmt.Fprintf(stderr, "tokens: prompt=%d completion=%d total=%d\n", usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
 }
 
 func openSession(args cli.Args, cfg config.Config) (*session.Store, []agent.Message, error) {

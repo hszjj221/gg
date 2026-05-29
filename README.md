@@ -10,6 +10,7 @@ English | [简体中文](README.zh-CN.md)
 
 - OpenAI-compatible streaming provider with tool calling
 - JSONL session storage with list and resume commands
+- Optional token usage reporting with `--usage`
 - Built-in coding tools: `read`, `list`, `grep`, `bash`, `edit`, `write`
 - Synchronous read-only `subagent` tool for focused codebase research
 - Single binary Go CLI with no third-party Go dependencies
@@ -57,6 +58,7 @@ gg -p "Say hi"
 gg --model gpt-4.1 --base-url https://api.openai.com/v1 -p "Read README.md"
 gg --no-session -p "Explain this directory"
 gg --session .gg/session.jsonl -p "Continue from this file"
+gg --usage -p "Summarize this repository"
 gg sessions list
 gg resume <id-or-path> "Continue from this session"
 gg --continue "Resume the latest session"
@@ -74,6 +76,12 @@ Session management:
 - `gg sessions list` lists sessions for the current working directory.
 - `gg resume <id-or-path>` resumes a session by displayed ID, JSONL filename stem, filename, or path.
 - `gg --continue` and `gg --last` resume the latest session for the current working directory.
+
+Token usage:
+
+- `gg --usage ...` prints token usage to stderr after each run.
+- Usage is recorded in the session when the provider returns it.
+- Providers that do not return usage remain supported and report zero tokens.
 
 ## Subagents
 

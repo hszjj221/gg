@@ -55,3 +55,14 @@ func TestParseContinueAndLastFlags(t *testing.T) {
 		t.Fatalf("unexpected args: %+v", args)
 	}
 }
+
+func TestParseUsageFlag(t *testing.T) {
+	args, err := Parse([]string{"--usage", "-p", "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !args.Usage || !args.Print || args.Prompt != "hello" {
+		t.Fatalf("unexpected args: %+v", args)
+	}
+}

@@ -225,6 +225,7 @@ func TestSubagentToolReturnsChildAgentFinalTextAndReadOnlyTools(t *testing.T) {
 	provider := &fakeSubagentProvider{response: agent.AssistantMessage{
 		Message:    agent.Message{Role: agent.RoleAssistant, Content: "checked README.md: ok"},
 		StopReason: agent.StopReasonEndTurn,
+		Usage:      agent.Usage{PromptTokens: 5, CompletionTokens: 2, TotalTokens: 7},
 	}}
 	tool := NewSubagentTool(dir, provider, SubagentOptions{})
 
@@ -235,6 +236,9 @@ func TestSubagentToolReturnsChildAgentFinalTextAndReadOnlyTools(t *testing.T) {
 	}
 	if got := result.Content[0].Text; got != "checked README.md: ok" {
 		t.Fatalf("unexpected subagent result: %q", got)
+	}
+	if result.Usage.TotalTokens != 7 {
+		t.Fatalf("unexpected subagent usage: %+v", result.Usage)
 	}
 	if len(provider.requests) != 1 {
 		t.Fatalf("expected one child request, got %d", len(provider.requests))

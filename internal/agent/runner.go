@@ -20,6 +20,7 @@ type Runner struct {
 	maxTurns int
 
 	transcript []Message
+	usage      Usage
 }
 
 func NewRunner(provider Provider, tools []Tool) *Runner {
@@ -46,15 +47,21 @@ func (r *Runner) Transcript() []Message {
 	return out
 }
 
+func (r *Runner) Usage() Usage {
+	return r.usage
+}
+
 func (r *Runner) Run(ctx context.Context, messages []Message, onEvent func(Event)) (AssistantMessage, error) {
 	current := append([]Message(nil), messages...)
 	r.transcript = append([]Message(nil), messages...)
+	r.usage = Usage{}
 
 	for turn := 0; turn < r.maxTurns; turn++ {
 		reply, err := r.provider.Complete(ctx, Request{Messages: current, Tools: r.defs}, onEvent)
 		if err != nil {
 			return AssistantMessage{}, err
 		}
+		r.usage = r.usage.Add(reply.Usage)
 		current = append(current, reply.Message)
 		r.transcript = append(r.transcript, reply.Message)
 
@@ -64,6 +71,7 @@ func (r *Runner) Run(ctx context.Context, messages []Message, onEvent func(Event
 
 		for _, call := range reply.ToolCalls {
 			result := r.executeToolCall(ctx, call)
+			r.usage = r.usage.Add(result.Usage)
 			content := resultText(result)
 			toolMessage := Message{
 				Role:       RoleTool,

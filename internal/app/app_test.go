@@ -13,6 +13,7 @@ import (
 
 type appFakeProvider struct {
 	requests []agent.Request
+	usage    agent.Usage
 }
 
 func (p *appFakeProvider) Complete(ctx context.Context, req agent.Request, onEvent func(agent.Event)) (agent.AssistantMessage, error) {
@@ -27,6 +28,7 @@ func (p *appFakeProvider) Complete(ctx context.Context, req agent.Request, onEve
 			ContentBlocks: []agent.ContentBlock{{Type: agent.ContentText, Text: "hello"}},
 		},
 		StopReason: agent.StopReasonEndTurn,
+		Usage:      p.usage,
 	}, nil
 }
 
@@ -57,6 +59,69 @@ func TestRunPrintModeOutputsFinalTextAndWritesSession(t *testing.T) {
 	}
 	if len(loaded.Messages) != 2 {
 		t.Fatalf("expected user and assistant messages, got %d", len(loaded.Messages))
+	}
+}
+
+func TestRunPrintModeUsageWritesStderrAndSession(t *testing.T) {
+	dir := t.TempDir()
+	sessionPath := filepath.Join(dir, "session.jsonl")
+	var stdout, stderr strings.Builder
+	provider := &appFakeProvider{usage: agent.Usage{PromptTokens: 7, CompletionTokens: 3, TotalTokens: 10}}
+
+	code := Run(context.Background(), []string{"-p", "--usage", "--api-key", "key", "--session", sessionPath, "say hi"}, Options{
+		CWD:    dir,
+		Stdout: &stdout,
+		Stderr: &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			return provider
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	if got := stdout.String(); got != "hello\n" {
+		t.Fatalf("unexpected stdout: %q", got)
+	}
+	if got := stderr.String(); !strings.Contains(got, "tokens: prompt=7 completion=3 total=10") {
+		t.Fatalf("usage not written to stderr: %q", got)
+	}
+	loaded, err := session.Load(sessionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Usages) != 1 || loaded.Usages[0].Usage.TotalTokens != 10 {
+		t.Fatalf("usage was not persisted: %+v", loaded.Usages)
+	}
+}
+
+func TestRunPrintModeDoesNotPrintUsageByDefault(t *testing.T) {
+	dir := t.TempDir()
+	sessionPath := filepath.Join(dir, "session.jsonl")
+	var stdout, stderr strings.Builder
+	provider := &appFakeProvider{usage: agent.Usage{PromptTokens: 7, CompletionTokens: 3, TotalTokens: 10}}
+
+	code := Run(context.Background(), []string{"-p", "--api-key", "key", "--session", sessionPath, "say hi"}, Options{
+		CWD:    dir,
+		Stdout: &stdout,
+		Stderr: &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			return provider
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "tokens:") {
+		t.Fatalf("usage should not be written by default: %q", stderr.String())
+	}
+	loaded, err := session.Load(sessionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Usages) != 1 || loaded.Usages[0].Usage.TotalTokens != 10 {
+		t.Fatalf("usage should still be persisted by default: %+v", loaded.Usages)
 	}
 }
 

@@ -74,6 +74,34 @@ func TestStoreLoadsMessagesAndMaintainsParentChain(t *testing.T) {
 	}
 }
 
+func TestStoreWritesAndLoadsUsageEntries(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(filepath.Join(dir, "session.jsonl"), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage(agent.Message{Role: agent.RoleUser, Content: "one"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendUsage(agent.Usage{PromptTokens: 7, CompletionTokens: 3, TotalTokens: 10}); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := Load(store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Messages) != 1 {
+		t.Fatalf("usage entry should not be loaded as a message: %+v", loaded.Messages)
+	}
+	if len(loaded.Usages) != 1 {
+		t.Fatalf("expected one usage entry, got %d", len(loaded.Usages))
+	}
+	if loaded.Usages[0].Usage.TotalTokens != 10 {
+		t.Fatalf("unexpected usage entry: %+v", loaded.Usages[0])
+	}
+}
+
 func TestListForCWDReturnsNewestFirst(t *testing.T) {
 	dir := t.TempDir()
 	cwd := filepath.Join(dir, "project")
