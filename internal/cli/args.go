@@ -8,17 +8,29 @@ import (
 )
 
 type Args struct {
-	Print      bool
-	Help       bool
-	Version    bool
-	NoSession  bool
-	APIKey     string
-	BaseURL    string
-	Model      string
-	Session    string
-	SessionDir string
-	Prompt     string
+	Print        bool
+	Help         bool
+	Version      bool
+	NoSession    bool
+	Continue     bool
+	Last         bool
+	APIKey       string
+	BaseURL      string
+	Model        string
+	Session      string
+	SessionDir   string
+	Command      Command
+	ResumeTarget string
+	Prompt       string
 }
+
+type Command string
+
+const (
+	CommandRun          Command = ""
+	CommandSessionsList Command = "sessions-list"
+	CommandResume       Command = "resume"
+)
 
 func Parse(argv []string) (Args, error) {
 	var args Args
@@ -32,6 +44,8 @@ func Parse(argv []string) (Args, error) {
 	fs.BoolVar(&args.Version, "version", false, "show version")
 	fs.BoolVar(&args.Version, "v", false, "show version")
 	fs.BoolVar(&args.NoSession, "no-session", false, "disable session persistence")
+	fs.BoolVar(&args.Continue, "continue", false, "resume the latest session")
+	fs.BoolVar(&args.Last, "last", false, "resume the latest session")
 	fs.StringVar(&args.APIKey, "api-key", "", "API key")
 	fs.StringVar(&args.BaseURL, "base-url", "", "OpenAI-compatible base URL")
 	fs.StringVar(&args.Model, "model", "", "model name")
@@ -44,8 +58,33 @@ func Parse(argv []string) (Args, error) {
 		}
 		return Args{}, fmt.Errorf("%s", msg)
 	}
-	args.Prompt = strings.Join(fs.Args(), " ")
+	if err := parseCommand(&args, fs.Args()); err != nil {
+		return Args{}, err
+	}
 	return args, nil
+}
+
+func parseCommand(args *Args, rest []string) error {
+	if len(rest) == 0 {
+		return nil
+	}
+	switch rest[0] {
+	case "sessions":
+		if len(rest) != 2 || rest[1] != "list" {
+			return fmt.Errorf("usage: gg sessions list")
+		}
+		args.Command = CommandSessionsList
+	case "resume":
+		if len(rest) < 2 {
+			return fmt.Errorf("usage: gg resume <id-or-path> [prompt]")
+		}
+		args.Command = CommandResume
+		args.ResumeTarget = rest[1]
+		args.Prompt = strings.Join(rest[2:], " ")
+	default:
+		args.Prompt = strings.Join(rest, " ")
+	}
+	return nil
 }
 
 func HelpText() string {
@@ -53,6 +92,8 @@ func HelpText() string {
 
 Usage:
   gg [options] [prompt]
+  gg sessions list
+  gg resume <id-or-path> [prompt]
 
 Options:
   -p, --print              run once and print the final assistant text
@@ -62,6 +103,8 @@ Options:
   --session <path>         use a specific JSONL session file
   --session-dir <dir>      session directory (default: ~/.gg/sessions)
   --no-session             disable session persistence
+  --continue               resume the latest session
+  --last                   resume the latest session
   -h, --help               show help
   -v, --version            show version`)
 }

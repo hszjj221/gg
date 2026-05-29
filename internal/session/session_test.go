@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
 )
@@ -73,6 +74,72 @@ func TestStoreLoadsMessagesAndMaintainsParentChain(t *testing.T) {
 	}
 }
 
+func TestListForCWDReturnsNewestFirst(t *testing.T) {
+	dir := t.TempDir()
+	cwd := filepath.Join(dir, "project")
+	first := createSession(t, dir, cwd, "first.jsonl", "first")
+	second := createSession(t, dir, cwd, "second.jsonl", "second")
+
+	infos, err := ListForCWD(dir, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(infos) != 2 {
+		t.Fatalf("expected 2 sessions, got %d", len(infos))
+	}
+	if infos[0].Path != second || infos[1].Path != first {
+		t.Fatalf("sessions not sorted newest first: %+v", infos)
+	}
+	if infos[0].MessageCount != 1 || infos[0].Preview != "second" {
+		t.Fatalf("unexpected newest session info: %+v", infos[0])
+	}
+}
+
+func TestFindForCWDResolvesHeaderIDFilenameAndFilenameStem(t *testing.T) {
+	dir := t.TempDir()
+	cwd := filepath.Join(dir, "project")
+	path := createSession(t, dir, cwd, "target.jsonl", "hello")
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	byID, err := FindForCWD(dir, cwd, loaded.Header.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byFilename, err := FindForCWD(dir, cwd, "target.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byStem, err := FindForCWD(dir, cwd, "target")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if byID != path || byFilename != path || byStem != path {
+		t.Fatalf("unexpected resolved paths: id=%q filename=%q stem=%q want %q", byID, byFilename, byStem, path)
+	}
+}
+
+func TestLatestForCWDReturnsNewestSession(t *testing.T) {
+	dir := t.TempDir()
+	cwd := filepath.Join(dir, "project")
+	createSession(t, dir, cwd, "old.jsonl", "old")
+	newest := createSession(t, dir, cwd, "new.jsonl", "new")
+
+	info, err := LatestForCWD(dir, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if info.Path != newest {
+		t.Fatalf("unexpected latest session: %+v", info)
+	}
+}
+
 func splitJSONLines(s string) []string {
 	var lines []string
 	for _, line := range strings.Split(s, "\n") {
@@ -81,4 +148,17 @@ func splitJSONLines(s string) []string {
 		}
 	}
 	return lines
+}
+
+func createSession(t *testing.T, sessionDir, cwd, filename, content string) string {
+	t.Helper()
+	path := filepath.Join(CWDDir(sessionDir, cwd), filename)
+	store, err := NewStore(path, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage(agent.Message{Role: agent.RoleUser, Content: content, Timestamp: time.Now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -87,5 +88,75 @@ func TestRunPrintModeIncludesSubagentTool(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("subagent tool missing from request tools: %+v", provider.requests[0].Tools)
+	}
+}
+
+func TestRunSessionsListPrintsSessionsWithoutProvider(t *testing.T) {
+	dir := t.TempDir()
+	sessionDir := filepath.Join(dir, "sessions")
+	sessionPath := filepath.Join(session.CWDDir(sessionDir, dir), "session.jsonl")
+	store, err := session.NewStore(sessionPath, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage(agent.Message{Role: agent.RoleUser, Content: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	providerCalled := false
+
+	code := Run(context.Background(), []string{"--session-dir", sessionDir, "sessions", "list"}, Options{
+		CWD:    dir,
+		Stdout: &stdout,
+		Stderr: &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			providerCalled = true
+			return &appFakeProvider{}
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	if providerCalled {
+		t.Fatalf("provider should not be created for sessions list")
+	}
+	if !strings.Contains(stdout.String(), "session.jsonl") || !strings.Contains(stdout.String(), "hello") {
+		t.Fatalf("unexpected sessions list output: %q", stdout.String())
+	}
+}
+
+func TestRunContinueLoadsLatestSession(t *testing.T) {
+	dir := t.TempDir()
+	sessionDir := filepath.Join(dir, "sessions")
+	sessionPath := filepath.Join(session.CWDDir(sessionDir, dir), "session.jsonl")
+	store, err := session.NewStore(sessionPath, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage(agent.Message{Role: agent.RoleUser, Content: "previous"}); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	provider := &appFakeProvider{}
+
+	code := Run(context.Background(), []string{"--continue", "--session-dir", sessionDir, "next"}, Options{
+		CWD:    dir,
+		Stdout: &stdout,
+		Stderr: &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			return provider
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("expected one request, got %d", len(provider.requests))
+	}
+	messages := provider.requests[0].Messages
+	if len(messages) != 2 || messages[0].Content != "previous" || messages[1].Content != "next" {
+		t.Fatalf("latest session was not loaded: %+v", messages)
 	}
 }

@@ -22,3 +22,36 @@ func TestParseArgsRejectsUnknownFlags(t *testing.T) {
 		t.Fatalf("expected unknown flag error")
 	}
 }
+
+func TestParseSessionsListCommand(t *testing.T) {
+	args, err := Parse([]string{"--session-dir", "/tmp/sessions", "sessions", "list"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if args.Command != CommandSessionsList || args.SessionDir != "/tmp/sessions" {
+		t.Fatalf("unexpected args: %+v", args)
+	}
+}
+
+func TestParseResumeCommandTargetAndPrompt(t *testing.T) {
+	args, err := Parse([]string{"resume", "abc123", "continue", "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if args.Command != CommandResume || args.ResumeTarget != "abc123" || args.Prompt != "continue work" {
+		t.Fatalf("unexpected args: %+v", args)
+	}
+}
+
+func TestParseContinueAndLastFlags(t *testing.T) {
+	args, err := Parse([]string{"--continue", "--last"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !args.Continue || !args.Last {
+		t.Fatalf("unexpected args: %+v", args)
+	}
+}

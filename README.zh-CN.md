@@ -9,7 +9,7 @@
 ## Features
 
 - 支持 tool calling 的 OpenAI-compatible streaming provider
-- JSONL 会话存储
+- 支持列出和恢复命令的 JSONL 会话存储
 - 内置代码工具：`read`、`list`、`grep`、`bash`、`edit`、`write`
 - 用于聚焦代码库调研的同步只读 `subagent` 工具
 - 无第三方 Go 依赖的单二进制 CLI
@@ -57,6 +57,9 @@ gg -p "Say hi"
 gg --model gpt-4.1 --base-url https://api.openai.com/v1 -p "Read README.md"
 gg --no-session -p "Explain this directory"
 gg --session .gg/session.jsonl -p "Continue from this file"
+gg sessions list
+gg resume <id-or-path> "Continue from this session"
+gg --continue "Resume the latest session"
 ```
 
 配置优先级：
@@ -65,6 +68,12 @@ gg --session .gg/session.jsonl -p "Continue from this file"
 - Base URL：`--base-url`，然后是 `OPENAI_BASE_URL`，最后是 `https://api.openai.com/v1`
 - Model：`--model`，然后是 `GG_MODEL`，最后是 `gpt-4.1`
 - Session directory：`--session-dir`，然后是 `GG_SESSION_DIR`，最后是 `~/.gg/sessions`
+
+会话管理：
+
+- `gg sessions list` 会列出当前工作目录的会话。
+- `gg resume <id-or-path>` 可以通过显示的 ID、JSONL 文件名（不含 `.jsonl` 后缀）、文件名或路径恢复会话。
+- `gg --continue` 和 `gg --last` 会恢复当前工作目录的最新会话。
 
 ## Subagents
 

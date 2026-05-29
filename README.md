@@ -9,7 +9,7 @@ English | [简体中文](README.zh-CN.md)
 ## Features
 
 - OpenAI-compatible streaming provider with tool calling
-- JSONL session storage
+- JSONL session storage with list and resume commands
 - Built-in coding tools: `read`, `list`, `grep`, `bash`, `edit`, `write`
 - Synchronous read-only `subagent` tool for focused codebase research
 - Single binary Go CLI with no third-party Go dependencies
@@ -57,6 +57,9 @@ gg -p "Say hi"
 gg --model gpt-4.1 --base-url https://api.openai.com/v1 -p "Read README.md"
 gg --no-session -p "Explain this directory"
 gg --session .gg/session.jsonl -p "Continue from this file"
+gg sessions list
+gg resume <id-or-path> "Continue from this session"
+gg --continue "Resume the latest session"
 ```
 
 Configuration precedence:
@@ -65,6 +68,12 @@ Configuration precedence:
 - Base URL: `--base-url`, then `OPENAI_BASE_URL`, then `https://api.openai.com/v1`
 - Model: `--model`, then `GG_MODEL`, then `gpt-4.1`
 - Session directory: `--session-dir`, then `GG_SESSION_DIR`, then `~/.gg/sessions`
+
+Session management:
+
+- `gg sessions list` lists sessions for the current working directory.
+- `gg resume <id-or-path>` resumes a session by displayed ID, JSONL filename stem, filename, or path.
+- `gg --continue` and `gg --last` resume the latest session for the current working directory.
 
 ## Subagents
 

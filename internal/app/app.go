@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
@@ -57,6 +58,13 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		SessionDir: parsed.SessionDir,
 		CWD:        options.CWD,
 	})
+	if err := validateSessionArgs(parsed); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	if parsed.Command == cli.CommandSessionsList {
+		return runSessionsList(cfg, stdout, stderr)
+	}
 	providerFactory := options.ProviderFactory
 	if providerFactory == nil {
 		providerFactory = func(cfg config.Config) agent.Provider {
@@ -132,6 +140,38 @@ func defaultTools(cwd string, provider agent.Provider) []agent.Tool {
 	}
 }
 
+func validateSessionArgs(args cli.Args) error {
+	if args.NoSession && (args.Command == cli.CommandResume || args.Continue || args.Last) {
+		return fmt.Errorf("--no-session cannot be used with resume, --continue, or --last")
+	}
+	if args.Session != "" && (args.Command == cli.CommandResume || args.Continue || args.Last) {
+		return fmt.Errorf("--session cannot be combined with resume, --continue, or --last")
+	}
+	return nil
+}
+
+func runSessionsList(cfg config.Config, stdout io.Writer, stderr io.Writer) int {
+	infos, err := session.ListForCWD(cfg.SessionDir, cfg.CWD)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if len(infos) == 0 {
+		fmt.Fprintln(stdout, "no sessions found")
+		return 0
+	}
+	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tUPDATED\tMESSAGES\tPATH\tPREVIEW")
+	for _, info := range infos {
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\n", info.ID, info.Timestamp, info.MessageCount, info.Path, info.Preview)
+	}
+	if err := w.Flush(); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
+}
+
 func runInteractive(
 	ctx context.Context,
 	runner *agent.Runner,
@@ -182,6 +222,20 @@ func openSession(args cli.Args, cfg config.Config) (*session.Store, []agent.Mess
 		return nil, nil, nil
 	}
 	path := args.Session
+	switch {
+	case args.Command == cli.CommandResume:
+		resolved, err := session.FindForCWD(cfg.SessionDir, cfg.CWD, args.ResumeTarget)
+		if err != nil {
+			return nil, nil, err
+		}
+		path = resolved
+	case args.Continue || args.Last:
+		latest, err := session.LatestForCWD(cfg.SessionDir, cfg.CWD)
+		if err != nil {
+			return nil, nil, err
+		}
+		path = latest.Path
+	}
 	if path == "" {
 		path = defaultSessionPath(cfg.SessionDir, cfg.CWD)
 	}
@@ -197,18 +251,8 @@ func openSession(args cli.Args, cfg config.Config) (*session.Store, []agent.Mess
 }
 
 func defaultSessionPath(sessionDir, cwd string) string {
-	name := sanitizePath(cwd)
 	filename := fmt.Sprintf("%d.jsonl", time.Now().UnixNano())
-	return filepath.Join(sessionDir, name, filename)
-}
-
-func sanitizePath(path string) string {
-	replacer := strings.NewReplacer("/", "-", "\\", "-", ":", "-")
-	safe := strings.Trim(replacer.Replace(path), "-")
-	if safe == "" {
-		return "default"
-	}
-	return safe
+	return filepath.Join(session.CWDDir(sessionDir, cwd), filename)
 }
 
 func writerOrDefault(w io.Writer, fallback io.Writer) io.Writer {
