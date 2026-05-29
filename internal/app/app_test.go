@@ -40,9 +40,10 @@ func TestRunPrintModeOutputsFinalTextAndWritesSession(t *testing.T) {
 	provider := &appFakeProvider{}
 
 	code := Run(context.Background(), []string{"-p", "--api-key", "key", "--session", sessionPath, "say hi"}, Options{
-		CWD:    dir,
-		Stdout: &stdout,
-		Stderr: &stderr,
+		CWD:     dir,
+		HomeDir: filepath.Join(dir, "home"),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
 		ProviderFactory: func(config.Config) agent.Provider {
 			return provider
 		},
@@ -61,6 +62,9 @@ func TestRunPrintModeOutputsFinalTextAndWritesSession(t *testing.T) {
 	if len(loaded.Messages) != 2 {
 		t.Fatalf("expected user and assistant messages, got %d", len(loaded.Messages))
 	}
+	if len(loaded.Models) != 1 || loaded.Models[0].Selection != "openai:gpt-4.1" {
+		t.Fatalf("initial model was not persisted: %+v", loaded.Models)
+	}
 }
 
 func TestRunPrintModeUsageWritesStderrAndSession(t *testing.T) {
@@ -70,9 +74,10 @@ func TestRunPrintModeUsageWritesStderrAndSession(t *testing.T) {
 	provider := &appFakeProvider{usage: agent.Usage{PromptTokens: 7, CompletionTokens: 3, TotalTokens: 10}}
 
 	code := Run(context.Background(), []string{"-p", "--usage", "--api-key", "key", "--session", sessionPath, "say hi"}, Options{
-		CWD:    dir,
-		Stdout: &stdout,
-		Stderr: &stderr,
+		CWD:     dir,
+		HomeDir: filepath.Join(dir, "home"),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
 		ProviderFactory: func(config.Config) agent.Provider {
 			return provider
 		},
@@ -103,9 +108,10 @@ func TestRunPrintModeDoesNotPrintUsageByDefault(t *testing.T) {
 	provider := &appFakeProvider{usage: agent.Usage{PromptTokens: 7, CompletionTokens: 3, TotalTokens: 10}}
 
 	code := Run(context.Background(), []string{"-p", "--api-key", "key", "--session", sessionPath, "say hi"}, Options{
-		CWD:    dir,
-		Stdout: &stdout,
-		Stderr: &stderr,
+		CWD:     dir,
+		HomeDir: filepath.Join(dir, "home"),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
 		ProviderFactory: func(config.Config) agent.Provider {
 			return provider
 		},
@@ -132,9 +138,10 @@ func TestRunPrintModeIncludesSubagentTool(t *testing.T) {
 	provider := &appFakeProvider{}
 
 	code := Run(context.Background(), []string{"-p", "--api-key", "key", "--no-session", "say hi"}, Options{
-		CWD:    dir,
-		Stdout: &stdout,
-		Stderr: &stderr,
+		CWD:     dir,
+		HomeDir: filepath.Join(dir, "home"),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
 		ProviderFactory: func(config.Config) agent.Provider {
 			return provider
 		},
@@ -212,9 +219,10 @@ description: Review local changes.
 	provider := &appFakeProvider{}
 
 	code := Run(context.Background(), []string{"-p", "--no-skills", "--api-key", "key", "--no-session", "check this"}, Options{
-		CWD:    dir,
-		Stdout: &stdout,
-		Stderr: &stderr,
+		CWD:     dir,
+		HomeDir: filepath.Join(dir, "home"),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
 		ProviderFactory: func(config.Config) agent.Provider {
 			return provider
 		},
@@ -245,9 +253,10 @@ Follow review-first workflow.
 	provider := &appFakeProvider{}
 
 	code := Run(context.Background(), []string{"-p", "--api-key", "key", "--no-session", "/skill:ca", "commit", "changes"}, Options{
-		CWD:    dir,
-		Stdout: &stdout,
-		Stderr: &stderr,
+		CWD:     dir,
+		HomeDir: filepath.Join(dir, "home"),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
 		ProviderFactory: func(config.Config) agent.Provider {
 			return provider
 		},
@@ -275,9 +284,10 @@ func TestRunSkillCommandMissingSkillDoesNotCallProvider(t *testing.T) {
 	provider := &appFakeProvider{}
 
 	code := Run(context.Background(), []string{"-p", "--api-key", "key", "--no-session", "/skill:missing", "task"}, Options{
-		CWD:    dir,
-		Stdout: &stdout,
-		Stderr: &stderr,
+		CWD:     dir,
+		HomeDir: filepath.Join(dir, "home"),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
 		ProviderFactory: func(config.Config) agent.Provider {
 			return provider
 		},
@@ -309,9 +319,10 @@ func TestRunSessionsListPrintsSessionsWithoutProvider(t *testing.T) {
 	providerCalled := false
 
 	code := Run(context.Background(), []string{"--session-dir", sessionDir, "sessions", "list"}, Options{
-		CWD:    dir,
-		Stdout: &stdout,
-		Stderr: &stderr,
+		CWD:     dir,
+		HomeDir: filepath.Join(dir, "home"),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
 		ProviderFactory: func(config.Config) agent.Provider {
 			providerCalled = true
 			return &appFakeProvider{}
@@ -354,9 +365,10 @@ func TestRunContinueLoadsLatestSession(t *testing.T) {
 	provider := &appFakeProvider{}
 
 	code := Run(context.Background(), []string{"--continue", "--no-skills", "--session-dir", sessionDir, "next"}, Options{
-		CWD:    dir,
-		Stdout: &stdout,
-		Stderr: &stderr,
+		CWD:     dir,
+		HomeDir: filepath.Join(dir, "home"),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
 		ProviderFactory: func(config.Config) agent.Provider {
 			return provider
 		},
@@ -380,10 +392,11 @@ func TestRunWithoutPromptUsesLineInteractiveWhenNotTTY(t *testing.T) {
 	provider := &appFakeProvider{}
 
 	code := Run(context.Background(), []string{"--api-key", "key", "--no-session"}, Options{
-		CWD:    dir,
-		Stdin:  strings.NewReader("say hi\n"),
-		Stdout: &stdout,
-		Stderr: &stderr,
+		CWD:     dir,
+		HomeDir: filepath.Join(dir, "home"),
+		Stdin:   strings.NewReader("say hi\n"),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
 		ProviderFactory: func(config.Config) agent.Provider {
 			return provider
 		},
@@ -397,5 +410,201 @@ func TestRunWithoutPromptUsesLineInteractiveWhenNotTTY(t *testing.T) {
 	}
 	if len(provider.requests) != 1 {
 		t.Fatalf("expected one request, got %d", len(provider.requests))
+	}
+}
+
+func TestLineInteractiveModelCommandSwitchesProviderModel(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	writeAppConfig(t, home, `{
+  "default": "openai:gpt-4.1",
+  "providers": {
+    "openai": {
+      "type": "openai-compatible",
+      "baseURL": "https://api.openai.com/v1",
+      "apiKey": "openai-key",
+      "models": ["gpt-4.1", "gpt-4.1-mini"]
+    },
+    "local": {
+      "type": "openai-compatible",
+      "baseURL": "http://localhost:11434/v1",
+      "apiKey": "ollama",
+      "models": ["qwen2.5-coder"]
+    }
+  }
+}`)
+	var stdout, stderr strings.Builder
+	provider := &appFakeProvider{}
+	var configs []config.Config
+
+	code := Run(context.Background(), []string{"--no-skills", "--no-session"}, Options{
+		CWD:     dir,
+		HomeDir: home,
+		Stdin:   strings.NewReader("/model local:qwen2.5-coder\nsay hi\n"),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		ProviderFactory: func(cfg config.Config) agent.Provider {
+			configs = append(configs, cfg)
+			return provider
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("expected one provider request after model command, got %d", len(provider.requests))
+	}
+	if len(configs) != 1 || configs[0].Selection != "local:qwen2.5-coder" || configs[0].BaseURL != "http://localhost:11434/v1" {
+		t.Fatalf("provider did not use switched config: %+v", configs)
+	}
+	if !strings.Contains(stdout.String(), "model switched to local:qwen2.5-coder") {
+		t.Fatalf("missing switch output: %q", stdout.String())
+	}
+}
+
+func TestModelCommandMissingSelectionDoesNotCallProvider(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	writeAppConfig(t, home, `{
+  "default": "openai:gpt-4.1",
+  "providers": {
+    "openai": {
+      "type": "openai-compatible",
+      "baseURL": "https://api.openai.com/v1",
+      "apiKey": "openai-key",
+      "models": ["gpt-4.1"]
+    }
+  }
+}`)
+	var stdout, stderr strings.Builder
+	providerCalled := false
+
+	code := Run(context.Background(), []string{"-p", "--no-skills", "--no-session", "/model", "missing:model"}, Options{
+		CWD:     dir,
+		HomeDir: home,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			providerCalled = true
+			return &appFakeProvider{}
+		},
+	})
+
+	if code == 0 {
+		t.Fatalf("expected missing model to fail")
+	}
+	if providerCalled {
+		t.Fatalf("provider should not be called for missing model")
+	}
+	if !strings.Contains(stderr.String(), `unknown provider "missing"`) {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
+func TestModelCommandListsSelectionsWithoutCallingProviderOrWritingMessages(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	sessionPath := filepath.Join(dir, "session.jsonl")
+	writeAppConfig(t, home, `{
+  "default": "openai:gpt-4.1",
+  "providers": {
+    "openai": {
+      "type": "openai-compatible",
+      "baseURL": "https://api.openai.com/v1",
+      "apiKey": "openai-key",
+      "models": ["gpt-4.1", "gpt-4.1-mini"]
+    }
+  }
+}`)
+	var stdout, stderr strings.Builder
+	providerCalled := false
+
+	code := Run(context.Background(), []string{"-p", "--no-skills", "--session", sessionPath, "/model"}, Options{
+		CWD:     dir,
+		HomeDir: home,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			providerCalled = true
+			return &appFakeProvider{}
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	if providerCalled {
+		t.Fatalf("provider should not be called for /model list")
+	}
+	if !strings.Contains(stdout.String(), "current model: openai:gpt-4.1") || !strings.Contains(stdout.String(), "- openai:gpt-4.1-mini") {
+		t.Fatalf("unexpected /model output: %q", stdout.String())
+	}
+	loaded, err := session.Load(sessionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Messages) != 0 {
+		t.Fatalf("/model list should not write messages: %+v", loaded.Messages)
+	}
+}
+
+func TestResumeRestoresLastModelSelection(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	writeAppConfig(t, home, `{
+  "default": "openai:gpt-4.1",
+  "providers": {
+    "openai": {
+      "type": "openai-compatible",
+      "baseURL": "https://api.openai.com/v1",
+      "apiKey": "openai-key",
+      "models": ["gpt-4.1", "gpt-4.1-mini"]
+    }
+  }
+}`)
+	sessionDir := filepath.Join(dir, "sessions")
+	sessionPath := filepath.Join(session.CWDDir(sessionDir, dir), "session.jsonl")
+	store, err := session.NewStore(sessionPath, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendModel("openai", "gpt-4.1-mini"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage(agent.Message{Role: agent.RoleUser, Content: "previous"}); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	provider := &appFakeProvider{}
+	var configs []config.Config
+
+	code := Run(context.Background(), []string{"--continue", "--no-skills", "--session-dir", sessionDir, "next"}, Options{
+		CWD:     dir,
+		HomeDir: home,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		ProviderFactory: func(cfg config.Config) agent.Provider {
+			configs = append(configs, cfg)
+			return provider
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	if len(configs) != 1 || configs[0].Selection != "openai:gpt-4.1-mini" {
+		t.Fatalf("resume did not restore model selection: %+v", configs)
+	}
+}
+
+func writeAppConfig(t *testing.T, home, content string) {
+	t.Helper()
+	dir := filepath.Join(home, ".gg")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

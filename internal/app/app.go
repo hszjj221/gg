@@ -54,13 +54,18 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		return 0
 	}
 
-	cfg := config.Resolve(config.Options{
+	cfg, err := config.Resolve(config.Options{
 		APIKey:     parsed.APIKey,
 		BaseURL:    parsed.BaseURL,
 		Model:      parsed.Model,
 		SessionDir: parsed.SessionDir,
 		CWD:        options.CWD,
+		HomeDir:    options.HomeDir,
 	})
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	if err := validateSessionArgs(parsed); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
@@ -80,15 +85,21 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		}
 	}
 
-	sessionStore, loadedMessages, err := openSession(parsed, cfg)
+	sessionStore, loaded, err := openSession(parsed, cfg)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	if parsed.Model == "" && loaded.LastModel != nil {
+		cfg, err = cfg.WithSelection(loaded.LastModel.Selection)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
 
-	provider := providerFactory(cfg)
-	runner := agent.NewRunner(provider, defaultTools(cfg.CWD, provider, skillSet.ReadRoots()))
-	executor := newTurnExecutor(runner, sessionStore, loadedMessages, skillSet)
+	modelRecorded := loaded.LastModel != nil && loaded.LastModel.Selection == cfg.Selection
+	executor := newTurnExecutor(cfg, providerFactory, sessionStore, loaded.Messages, skillSet, modelRecorded)
 
 	if parsed.Prompt != "" {
 		return runPrompt(ctx, executor, parsed.Prompt, stdout, stderr, false, parsed.Usage)
@@ -113,8 +124,10 @@ func runPrompt(
 	showUsage bool,
 ) int {
 	var onDelta func(string)
+	var streamed strings.Builder
 	if stream {
 		onDelta = func(text string) {
+			streamed.WriteString(text)
 			fmt.Fprint(stdout, text)
 		}
 	}
@@ -124,6 +137,9 @@ func runPrompt(
 		return 1
 	}
 	if stream {
+		if streamed.Len() == 0 && result.Content != "" {
+			fmt.Fprint(stdout, result.Content)
+		}
 		fmt.Fprintln(stdout)
 	} else {
 		fmt.Fprintln(stdout, result.Content)
@@ -135,29 +151,42 @@ func runPrompt(
 }
 
 type turnResult struct {
-	Content string
-	Usage   agent.Usage
+	Content   string
+	Usage     agent.Usage
+	ModelName string
 }
 
 type turnExecutor struct {
-	runner   *agent.Runner
-	store    *session.Store
-	history  []agent.Message
-	skillSet skills.Set
+	cfg             config.Config
+	providerFactory agentProviderFactory
+	store           *session.Store
+	history         []agent.Message
+	skillSet        skills.Set
+	modelRecorded   bool
 }
 
-func newTurnExecutor(runner *agent.Runner, store *session.Store, history []agent.Message, skillSet skills.Set) *turnExecutor {
+type agentProviderFactory func(config.Config) agent.Provider
+
+func newTurnExecutor(cfg config.Config, providerFactory agentProviderFactory, store *session.Store, history []agent.Message, skillSet skills.Set, modelRecorded bool) *turnExecutor {
 	return &turnExecutor{
-		runner:   runner,
-		store:    store,
-		history:  append([]agent.Message(nil), history...),
-		skillSet: skillSet,
+		cfg:             cfg,
+		providerFactory: providerFactory,
+		store:           store,
+		history:         append([]agent.Message(nil), history...),
+		skillSet:        skillSet,
+		modelRecorded:   modelRecorded,
 	}
 }
 
 func (e *turnExecutor) Run(ctx context.Context, prompt string, onDelta func(string)) (turnResult, error) {
+	if result, ok, err := e.handleModelCommand(prompt); ok || err != nil {
+		return result, err
+	}
 	preparedPrompt, err := preparePrompt(prompt, e.skillSet)
 	if err != nil {
+		return turnResult{}, err
+	}
+	if err := e.ensureModelRecorded(); err != nil {
 		return turnResult{}, err
 	}
 	systemMessages := skillSystemMessages(e.skillSet)
@@ -174,19 +203,73 @@ func (e *turnExecutor) Run(ctx context.Context, prompt string, onDelta func(stri
 			}
 		}
 	}
-	reply, err := e.runner.Run(ctx, messages, onEvent)
+	provider := e.providerFactory(e.cfg)
+	runner := agent.NewRunner(provider, defaultTools(e.cfg.CWD, provider, e.skillSet.ReadRoots()))
+	reply, err := runner.Run(ctx, messages, onEvent)
 	if err != nil {
 		return turnResult{}, err
 	}
-	if err := appendNewMessages(e.store, e.runner.Transcript(), len(systemMessages)+len(e.history)); err != nil {
+	if err := appendNewMessages(e.store, runner.Transcript(), len(systemMessages)+len(e.history)); err != nil {
 		return turnResult{}, err
 	}
-	usage := e.runner.Usage()
+	usage := runner.Usage()
 	if err := appendUsage(e.store, usage); err != nil {
 		return turnResult{}, err
 	}
-	e.history = stripSystemMessages(e.runner.Transcript())
-	return turnResult{Content: reply.Content, Usage: usage}, nil
+	e.history = stripSystemMessages(runner.Transcript())
+	return turnResult{Content: reply.Content, Usage: usage, ModelName: e.cfg.Selection}, nil
+}
+
+func (e *turnExecutor) handleModelCommand(prompt string) (turnResult, bool, error) {
+	arg, ok, err := parseModelCommand(prompt)
+	if !ok || err != nil {
+		return turnResult{}, ok, err
+	}
+	if arg == "" {
+		return turnResult{Content: e.modelListText(), ModelName: e.cfg.Selection}, true, nil
+	}
+	next, err := e.cfg.WithSelection(arg)
+	if err != nil {
+		return turnResult{}, true, err
+	}
+	e.cfg = next
+	if err := e.appendCurrentModel(); err != nil {
+		return turnResult{}, true, err
+	}
+	e.modelRecorded = true
+	return turnResult{Content: "model switched to " + e.cfg.Selection, ModelName: e.cfg.Selection}, true, nil
+}
+
+func (e *turnExecutor) ensureModelRecorded() error {
+	if e.modelRecorded {
+		return nil
+	}
+	if err := e.appendCurrentModel(); err != nil {
+		return err
+	}
+	e.modelRecorded = true
+	return nil
+}
+
+func (e *turnExecutor) appendCurrentModel() error {
+	if e.store == nil {
+		return nil
+	}
+	return e.store.AppendModel(e.cfg.Provider, e.cfg.Model)
+}
+
+func (e *turnExecutor) modelListText() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "current model: %s", e.cfg.Selection)
+	selections := e.cfg.AvailableSelections()
+	if len(selections) == 0 {
+		return b.String()
+	}
+	b.WriteString("\navailable models:")
+	for _, selection := range selections {
+		fmt.Fprintf(&b, "\n- %s", selection)
+	}
+	return b.String()
 }
 
 func defaultTools(cwd string, provider agent.Provider, readRoots []string) []agent.Tool {
@@ -275,14 +358,14 @@ func runTUI(
 ) int {
 	err := tui.Run(ctx, tui.Config{
 		CWD:             cfg.CWD,
-		ModelName:       cfg.Model,
+		ModelName:       cfg.Selection,
 		ShowUsage:       showUsage,
 		InitialMessages: displayMessages(executor.history),
 		Input:           stdin,
 		Output:          stdout,
 		Submit: func(ctx context.Context, prompt string, onDelta func(string)) (tui.SubmitResult, error) {
 			result, err := executor.Run(ctx, prompt, onDelta)
-			return tui.SubmitResult{Content: result.Content, Usage: result.Usage}, err
+			return tui.SubmitResult{Content: result.Content, Usage: result.Usage, ModelName: result.ModelName}, err
 		},
 	})
 	if err != nil && err != context.Canceled {
@@ -342,6 +425,20 @@ func preparePrompt(prompt string, skillSet skills.Set) (string, error) {
 	return skills.FormatForcedPrompt(skill, content, task), nil
 }
 
+func parseModelCommand(prompt string) (arg string, ok bool, err error) {
+	fields := strings.Fields(strings.TrimSpace(prompt))
+	if len(fields) == 0 || fields[0] != "/model" {
+		return "", false, nil
+	}
+	if len(fields) > 2 {
+		return "", true, fmt.Errorf("usage: /model [provider:model]")
+	}
+	if len(fields) == 1 {
+		return "", true, nil
+	}
+	return fields[1], true, nil
+}
+
 func parseSkillCommand(prompt string) (name, task string, ok bool) {
 	trimmed := strings.TrimSpace(prompt)
 	fields := strings.Fields(trimmed)
@@ -396,22 +493,22 @@ func displayMessages(messages []agent.Message) []tui.Message {
 	return out
 }
 
-func openSession(args cli.Args, cfg config.Config) (*session.Store, []agent.Message, error) {
+func openSession(args cli.Args, cfg config.Config) (*session.Store, session.Loaded, error) {
 	if args.NoSession {
-		return nil, nil, nil
+		return nil, session.Loaded{}, nil
 	}
 	path := args.Session
 	switch {
 	case args.Command == cli.CommandResume:
 		resolved, err := session.FindForCWD(cfg.SessionDir, cfg.CWD, args.ResumeTarget)
 		if err != nil {
-			return nil, nil, err
+			return nil, session.Loaded{}, err
 		}
 		path = resolved
 	case args.Continue || args.Last:
 		latest, err := session.LatestForCWD(cfg.SessionDir, cfg.CWD)
 		if err != nil {
-			return nil, nil, err
+			return nil, session.Loaded{}, err
 		}
 		path = latest.Path
 	}
@@ -420,13 +517,13 @@ func openSession(args cli.Args, cfg config.Config) (*session.Store, []agent.Mess
 	}
 	store, err := session.NewStore(path, cfg.CWD)
 	if err != nil {
-		return nil, nil, err
+		return nil, session.Loaded{}, err
 	}
 	loaded, err := session.Load(store.Path())
 	if err != nil {
-		return nil, nil, err
+		return nil, session.Loaded{}, err
 	}
-	return store, loaded.Messages, nil
+	return store, loaded, nil
 }
 
 func defaultSessionPath(sessionDir, cwd string) string {

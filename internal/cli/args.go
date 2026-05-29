@@ -52,7 +52,7 @@ func Parse(argv []string) (Args, error) {
 	fs.BoolVar(&args.NoSkills, "no-skills", false, "disable .agents/skills discovery")
 	fs.StringVar(&args.APIKey, "api-key", "", "API key")
 	fs.StringVar(&args.BaseURL, "base-url", "", "OpenAI-compatible base URL")
-	fs.StringVar(&args.Model, "model", "", "model name")
+	fs.StringVar(&args.Model, "model", "", "model selection as provider:model")
 	fs.StringVar(&args.Session, "session", "", "session JSONL path")
 	fs.StringVar(&args.SessionDir, "session-dir", "", "session storage directory")
 	if err := fs.Parse(argv); err != nil {
@@ -104,7 +104,7 @@ Running gg without a prompt starts the TUI interactive mode when stdin/stdout ar
 
 Options:
   -p, --print              run once and print the final assistant text
-  --model <name>           model name (default: GG_MODEL or gpt-4.1)
+  --model <provider:model> model selection (default: ~/.gg/config.json or openai:gpt-4.1)
   --base-url <url>         OpenAI-compatible base URL
   --api-key <key>          API key (default: OPENAI_API_KEY)
   --session <path>         use a specific JSONL session file

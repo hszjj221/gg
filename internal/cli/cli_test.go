@@ -6,12 +6,12 @@ import (
 )
 
 func TestParseArgsSupportsPrintModeProviderOptionsAndPrompt(t *testing.T) {
-	args, err := Parse([]string{"-p", "--model", "gpt-test", "--base-url", "https://example/v1", "--api-key", "key", "--no-session", "hello"})
+	args, err := Parse([]string{"-p", "--model", "openai:gpt-test", "--base-url", "https://example/v1", "--api-key", "key", "--no-session", "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if !args.Print || args.Model != "gpt-test" || args.BaseURL != "https://example/v1" || args.APIKey != "key" || !args.NoSession {
+	if !args.Print || args.Model != "openai:gpt-test" || args.BaseURL != "https://example/v1" || args.APIKey != "key" || !args.NoSession {
 		t.Fatalf("unexpected args: %+v", args)
 	}
 	if args.Prompt != "hello" {
@@ -84,7 +84,7 @@ func TestParseNoSkillsFlag(t *testing.T) {
 func TestHelpTextMentionsTUIInteractiveMode(t *testing.T) {
 	help := HelpText()
 
-	if !strings.Contains(help, "gg\n") || !strings.Contains(help, "TUI interactive mode") {
+	if !strings.Contains(help, "gg\n") || !strings.Contains(help, "TUI interactive mode") || !strings.Contains(help, "provider:model") {
 		t.Fatalf("help text should mention TUI interactive mode:\n%s", help)
 	}
 }

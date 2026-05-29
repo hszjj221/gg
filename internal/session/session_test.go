@@ -102,6 +102,37 @@ func TestStoreWritesAndLoadsUsageEntries(t *testing.T) {
 	}
 }
 
+func TestStoreWritesAndLoadsModelEntries(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(filepath.Join(dir, "session.jsonl"), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage(agent.Message{Role: agent.RoleUser, Content: "one"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendModel("openai", "gpt-4.1-mini"); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := Load(store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Messages) != 1 {
+		t.Fatalf("model entry should not be loaded as a message: %+v", loaded.Messages)
+	}
+	if len(loaded.Models) != 1 {
+		t.Fatalf("expected one model entry, got %d", len(loaded.Models))
+	}
+	if got := loaded.Models[0].Selection; got != "openai:gpt-4.1-mini" {
+		t.Fatalf("unexpected model selection: %q", got)
+	}
+	if loaded.LastModel == nil || loaded.LastModel.Selection != "openai:gpt-4.1-mini" {
+		t.Fatalf("last model not recorded: %+v", loaded.LastModel)
+	}
+}
+
 func TestListForCWDReturnsNewestFirst(t *testing.T) {
 	dir := t.TempDir()
 	cwd := filepath.Join(dir, "project")

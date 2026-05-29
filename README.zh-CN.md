@@ -56,7 +56,7 @@ gg
 
 ```bash
 gg -p "Say hi"
-gg --model gpt-4.1 --base-url https://api.openai.com/v1 -p "Read README.md"
+gg --model openai:gpt-4.1 --base-url https://api.openai.com/v1 -p "Read README.md"
 gg --no-session -p "Explain this directory"
 gg --session .gg/session.jsonl -p "Continue from this file"
 gg --usage -p "Summarize this repository"
@@ -71,14 +71,41 @@ gg --continue "Resume the latest session"
 
 - 在终端中运行 `gg` 会启动 TUI chat 界面。
 - TUI 会展示对话、单行 prompt 输入框、streaming 回复和状态栏。
+- 使用 `/model` 查看已配置模型，使用 `/model provider:model` 切换后续 turn 使用的 provider/model。
 - 当 stdin/stdout 不是终端时，`gg` 会回退到简单的按行交互模式，方便脚本和测试使用。
 
-配置优先级：
+Provider/model 配置：
 
-- API key：`--api-key`，然后是 `OPENAI_API_KEY`
-- Base URL：`--base-url`，然后是 `OPENAI_BASE_URL`，最后是 `https://api.openai.com/v1`
-- Model：`--model`，然后是 `GG_MODEL`，最后是 `gpt-4.1`
+`gg` 会在存在时读取 `~/.gg/config.json`：
+
+```json
+{
+  "default": "openai:gpt-4.1",
+  "providers": {
+    "openai": {
+      "type": "openai-compatible",
+      "baseURL": "https://api.openai.com/v1",
+      "apiKey": "sk-your-key",
+      "models": ["gpt-4.1", "gpt-4.1-mini"]
+    },
+    "local": {
+      "type": "openai-compatible",
+      "baseURL": "http://localhost:11434/v1",
+      "apiKey": "ollama",
+      "models": ["qwen2.5-coder"]
+    }
+  }
+}
+```
+
+模型选择统一使用 `provider:model`：
+
+- Provider/model：`--model provider:model`，然后是恢复会话中的模型，接着是配置里的 `default`，最后是 `openai:gpt-4.1`
+- API key：当前 provider 的 `apiKey`；`--api-key` 可以覆盖它。没有配置文件时，沿用 legacy `OPENAI_API_KEY`。
+- Base URL：当前 provider 的 `baseURL`；`--base-url` 可以覆盖它。没有配置文件时，沿用 legacy `OPENAI_BASE_URL`，最后是 `https://api.openai.com/v1`。
 - Session directory：`--session-dir`，然后是 `GG_SESSION_DIR`，最后是 `~/.gg/sessions`
+
+v1 只支持 `openai-compatible` provider。不支持远端拉取模型列表；请在 `models` 里显式列出可选模型。
 
 会话管理：
 
@@ -155,6 +182,8 @@ go fmt ./...
 ## Security
 
 当模型使用内置工具时，`gg` 可以执行 shell 命令并编辑文件。请只在你愿意授予这些能力的工作区中运行它。
+
+`~/.gg/config.json` 可能包含明文 API key。不要把它提交到仓库，也不要放进不受控的备份。
 
 请私下报告安全漏洞。参见 [SECURITY.md](SECURITY.md)。
 

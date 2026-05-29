@@ -56,7 +56,7 @@ Common examples:
 
 ```bash
 gg -p "Say hi"
-gg --model gpt-4.1 --base-url https://api.openai.com/v1 -p "Read README.md"
+gg --model openai:gpt-4.1 --base-url https://api.openai.com/v1 -p "Read README.md"
 gg --no-session -p "Explain this directory"
 gg --session .gg/session.jsonl -p "Continue from this file"
 gg --usage -p "Summarize this repository"
@@ -71,14 +71,41 @@ Interactive mode:
 
 - Running `gg` in a terminal starts the TUI chat interface.
 - The TUI shows the conversation, a single-line prompt input, streaming replies, and a status bar.
+- Use `/model` to list configured models and `/model provider:model` to switch the provider/model used by later turns.
 - When stdin/stdout are not terminals, `gg` falls back to the simple line-based interactive mode for scripts and tests.
 
-Configuration precedence:
+Provider/model configuration:
 
-- API key: `--api-key`, then `OPENAI_API_KEY`
-- Base URL: `--base-url`, then `OPENAI_BASE_URL`, then `https://api.openai.com/v1`
-- Model: `--model`, then `GG_MODEL`, then `gpt-4.1`
+`gg` reads `~/.gg/config.json` when present:
+
+```json
+{
+  "default": "openai:gpt-4.1",
+  "providers": {
+    "openai": {
+      "type": "openai-compatible",
+      "baseURL": "https://api.openai.com/v1",
+      "apiKey": "sk-your-key",
+      "models": ["gpt-4.1", "gpt-4.1-mini"]
+    },
+    "local": {
+      "type": "openai-compatible",
+      "baseURL": "http://localhost:11434/v1",
+      "apiKey": "ollama",
+      "models": ["qwen2.5-coder"]
+    }
+  }
+}
+```
+
+Selection uses `provider:model`:
+
+- Provider/model: `--model provider:model`, then the resumed session model, then config `default`, then `openai:gpt-4.1`
+- API key: selected provider `apiKey`; `--api-key` overrides it. If no config file exists, legacy `OPENAI_API_KEY` is used.
+- Base URL: selected provider `baseURL`; `--base-url` overrides it. If no config file exists, legacy `OPENAI_BASE_URL` then `https://api.openai.com/v1` are used.
 - Session directory: `--session-dir`, then `GG_SESSION_DIR`, then `~/.gg/sessions`
+
+Only `openai-compatible` providers are supported in v1. Remote model discovery is not implemented; list allowed model names in `models`.
 
 Session management:
 
@@ -155,6 +182,8 @@ go fmt ./...
 ## Security
 
 `gg` can execute shell commands and edit files when the model uses the built-in tools. Run it only in workspaces where you are comfortable granting those capabilities.
+
+`~/.gg/config.json` may contain cleartext API keys. Keep it out of repositories and backups you do not control.
 
 Please report vulnerabilities privately. See [SECURITY.md](SECURITY.md).
 

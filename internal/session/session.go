@@ -38,11 +38,23 @@ type UsageEntry struct {
 	Usage     agent.Usage `json:"usage"`
 }
 
+type ModelEntry struct {
+	Type      string  `json:"type"`
+	ID        string  `json:"id"`
+	ParentID  *string `json:"parentId"`
+	Timestamp string  `json:"timestamp"`
+	Provider  string  `json:"provider"`
+	Model     string  `json:"model"`
+	Selection string  `json:"selection"`
+}
+
 type Loaded struct {
-	Header   Header
-	Entries  []MessageEntry
-	Usages   []UsageEntry
-	Messages []agent.Message
+	Header    Header
+	Entries   []MessageEntry
+	Usages    []UsageEntry
+	Models    []ModelEntry
+	LastModel *ModelEntry
+	Messages  []agent.Message
 }
 
 type Store struct {
@@ -145,6 +157,27 @@ func (s *Store) AppendUsage(usage agent.Usage) error {
 	return writeJSONLine(file, entry)
 }
 
+func (s *Store) AppendModel(provider, model string) error {
+	if s == nil {
+		return nil
+	}
+	entry := ModelEntry{
+		Type:      "model",
+		ID:        newID(),
+		ParentID:  s.lastID,
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Provider:  provider,
+		Model:     model,
+		Selection: provider + ":" + model,
+	}
+	file, err := os.OpenFile(s.path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return writeJSONLine(file, entry)
+}
+
 func Load(path string) (Loaded, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -187,6 +220,14 @@ func Load(path string) (Loaded, error) {
 				return Loaded{}, err
 			}
 			loaded.Usages = append(loaded.Usages, entry)
+		case "model":
+			var entry ModelEntry
+			if err := json.Unmarshal([]byte(line), &entry); err != nil {
+				return Loaded{}, err
+			}
+			loaded.Models = append(loaded.Models, entry)
+			last := entry
+			loaded.LastModel = &last
 		default:
 			return Loaded{}, fmt.Errorf("unknown session entry type %q", probe.Type)
 		}

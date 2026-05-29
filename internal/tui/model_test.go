@@ -14,13 +14,13 @@ import (
 func TestInitialViewContainsInputAndStatus(t *testing.T) {
 	model := NewModel(Config{
 		CWD:       "/tmp/project",
-		ModelName: "gpt-test",
+		ModelName: "openai:gpt-test",
 		Submit:    successSubmit("hello"),
 	})
 	model, _ = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 20})
 
 	view := model.View()
-	for _, want := range []string{"gg", "/tmp/project", "gpt-test"} {
+	for _, want := range []string{"gg", "/tmp/project", "openai:gpt-test"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
@@ -34,13 +34,14 @@ func TestEnterSubmitsPromptAndRecordsUsage(t *testing.T) {
 	var prompts []string
 	model := NewModel(Config{
 		CWD:       "/tmp/project",
-		ModelName: "gpt-test",
+		ModelName: "openai:gpt-test",
 		ShowUsage: true,
 		Submit: func(ctx context.Context, prompt string, onDelta func(string)) (SubmitResult, error) {
 			prompts = append(prompts, prompt)
 			return SubmitResult{
-				Content: "assistant reply",
-				Usage:   agent.Usage{PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5},
+				Content:   "assistant reply",
+				ModelName: "local:qwen2.5-coder",
+				Usage:     agent.Usage{PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5},
 			}, nil
 		},
 	})
@@ -72,15 +73,19 @@ func TestEnterSubmitsPromptAndRecordsUsage(t *testing.T) {
 	if got := model.lastUsage.TotalTokens; got != 5 {
 		t.Fatalf("usage not recorded: %+v", model.lastUsage)
 	}
-	if !strings.Contains(model.View(), "tokens: prompt=3 completion=2 total=5") {
+	view := model.View()
+	if !strings.Contains(view, "tokens: prompt=3") || !strings.Contains(view, "completion=2") || !strings.Contains(view, "total=5") {
 		t.Fatalf("usage not rendered:\n%s", model.View())
+	}
+	if !strings.Contains(view, "local:qwen2.5-coder") {
+		t.Fatalf("model name not updated:\n%s", model.View())
 	}
 }
 
 func TestStreamingDeltaUpdatesPendingAssistantMessage(t *testing.T) {
 	model := NewModel(Config{
 		CWD:       "/tmp/project",
-		ModelName: "gpt-test",
+		ModelName: "openai:gpt-test",
 		Submit: func(ctx context.Context, prompt string, onDelta func(string)) (SubmitResult, error) {
 			onDelta("he")
 			onDelta("llo")
@@ -101,7 +106,7 @@ func TestStreamingDeltaUpdatesPendingAssistantMessage(t *testing.T) {
 func TestSubmitErrorLeavesModelIdleAndShowsError(t *testing.T) {
 	model := NewModel(Config{
 		CWD:       "/tmp/project",
-		ModelName: "gpt-test",
+		ModelName: "openai:gpt-test",
 		Submit: func(ctx context.Context, prompt string, onDelta func(string)) (SubmitResult, error) {
 			return SubmitResult{}, errors.New("provider failed")
 		},
@@ -128,7 +133,7 @@ func TestBusyEnterDoesNotSubmitAgain(t *testing.T) {
 	started := make(chan struct{}, 1)
 	model := NewModel(Config{
 		CWD:       "/tmp/project",
-		ModelName: "gpt-test",
+		ModelName: "openai:gpt-test",
 		Submit: func(ctx context.Context, prompt string, onDelta func(string)) (SubmitResult, error) {
 			calls++
 			started <- struct{}{}
@@ -165,7 +170,7 @@ func TestBusyEnterDoesNotSubmitAgain(t *testing.T) {
 func TestResizeUpdatesLayout(t *testing.T) {
 	model := NewModel(Config{
 		CWD:       "/tmp/project",
-		ModelName: "gpt-test",
+		ModelName: "openai:gpt-test",
 		Submit:    successSubmit("hello"),
 	})
 

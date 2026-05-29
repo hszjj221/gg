@@ -17,8 +17,9 @@ import (
 type SubmitFunc func(context.Context, string, func(string)) (SubmitResult, error)
 
 type SubmitResult struct {
-	Content string
-	Usage   agent.Usage
+	Content   string
+	ModelName string
+	Usage     agent.Usage
 }
 
 type Message struct {
@@ -119,6 +120,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		} else {
 			m.err = nil
+			if msg.result.ModelName != "" {
+				m.modelName = msg.result.ModelName
+			}
 			if len(m.messages) == 0 || m.messages[len(m.messages)-1].Role != agent.RoleAssistant {
 				m.messages = append(m.messages, Message{Role: agent.RoleAssistant})
 			}
