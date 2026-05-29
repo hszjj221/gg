@@ -1,15 +1,54 @@
 # gg
 
-`gg` is a minimal Go coding agent inspired by Pi. It provides a small CLI, an OpenAI-compatible streaming provider, JSONL sessions, and four built-in coding tools: `read`, `bash`, `edit`, and `write`.
+[![CI](https://github.com/hszjj221/gg/actions/workflows/ci.yml/badge.svg)](https://github.com/hszjj221/gg/actions/workflows/ci.yml)
+
+`gg` is a minimal Go coding agent inspired by Pi. It runs as a small CLI, talks to OpenAI-compatible chat completion APIs, persists JSONL sessions, and gives the model a compact set of coding tools.
+
+## Features
+
+- OpenAI-compatible streaming provider with tool calling
+- JSONL session storage
+- Built-in coding tools: `read`, `list`, `grep`, `bash`, `edit`, `write`
+- Synchronous read-only `subagent` tool for focused codebase research
+- Single binary Go CLI with no third-party Go dependencies
+
+## Install
+
+Install the latest public version with Go:
+
+```bash
+go install github.com/hszjj221/gg/cmd/gg@latest
+```
+
+Or run from a local checkout:
+
+```bash
+go run ./cmd/gg --help
+```
+
+## Quick Start
+
+Set an API key for an OpenAI-compatible provider:
+
+```bash
+export OPENAI_API_KEY=sk-your-key
+```
+
+Run a one-shot prompt:
+
+```bash
+gg -p "List the files in this project"
+```
+
+Start the simple line-based interactive mode:
+
+```bash
+gg
+```
 
 ## Usage
 
-```bash
-export OPENAI_API_KEY=sk-...
-go run ./cmd/gg -p "List the files in this project"
-```
-
-Common options:
+Common examples:
 
 ```bash
 gg -p "Say hi"
@@ -18,7 +57,12 @@ gg --no-session -p "Explain this directory"
 gg --session .gg/session.jsonl -p "Continue from this file"
 ```
 
-With no prompt, `gg` starts a simple line-based interactive mode.
+Configuration precedence:
+
+- API key: `--api-key`, then `OPENAI_API_KEY`
+- Base URL: `--base-url`, then `OPENAI_BASE_URL`, then `https://api.openai.com/v1`
+- Model: `--model`, then `GG_MODEL`, then `gpt-4.1`
+- Session directory: `--session-dir`, then `GG_SESSION_DIR`, then `~/.gg/sessions`
 
 ## Subagents
 
@@ -36,18 +80,27 @@ Example:
 gg -p "Use a subagent to inspect how sessions are stored, then summarize the flow"
 ```
 
-## Configuration
-
-Resolution order:
-
-- API key: `--api-key`, then `OPENAI_API_KEY`
-- Base URL: `--base-url`, then `OPENAI_BASE_URL`, then `https://api.openai.com/v1`
-- Model: `--model`, then `GG_MODEL`, then `gpt-4.1`
-- Session directory: `--session-dir`, then `GG_SESSION_DIR`, then `~/.gg/sessions`
-
 ## Development
 
+Run the test suite:
+
 ```bash
-go test ./...
-go run ./cmd/gg --help
+go test -count=1 ./...
+go vet ./...
 ```
+
+Format code:
+
+```bash
+go fmt ./...
+```
+
+## Security
+
+`gg` can execute shell commands and edit files when the model uses the built-in tools. Run it only in workspaces where you are comfortable granting those capabilities.
+
+Please report vulnerabilities privately. See [SECURITY.md](SECURITY.md).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
