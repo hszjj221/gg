@@ -11,6 +11,7 @@
 - 支持 tool calling 的 OpenAI-compatible streaming provider
 - 支持列出和恢复命令的 JSONL 会话存储
 - 通过 `--usage` 可选展示 token 消耗
+- 从 `.agents/skills` 加载 Codex 风格本地 skills
 - 内置代码工具：`read`、`list`、`grep`、`bash`、`edit`、`write`
 - 用于聚焦代码库调研的同步只读 `subagent` 工具
 - 无第三方 Go 依赖的单二进制 CLI
@@ -59,6 +60,8 @@ gg --model gpt-4.1 --base-url https://api.openai.com/v1 -p "Read README.md"
 gg --no-session -p "Explain this directory"
 gg --session .gg/session.jsonl -p "Continue from this file"
 gg --usage -p "Summarize this repository"
+gg --no-skills -p "Run without local skills"
+gg -p "/skill:ca review and commit my changes"
 gg sessions list
 gg resume <id-or-path> "Continue from this session"
 gg --continue "Resume the latest session"
@@ -82,6 +85,35 @@ Token 消耗：
 - `gg --usage ...` 会在每次运行后把 token 消耗输出到 stderr。
 - provider 返回 usage 时，`gg` 会把它记录到 session。
 - 不返回 usage 的 provider 仍可使用，并会显示 0 token。
+
+## Skills
+
+`gg` 默认从 `.agents/skills` 加载 Codex 风格 skills。当前目录及其父目录中的项目 skills 优先于 `~/.agents/skills` 中的全局 skills。
+
+每个 skill 是一个包含 `SKILL.md` 的目录：
+
+```markdown
+---
+name: ca
+description: Review local changes and commit after checks pass.
+---
+
+# ca
+```
+
+Skill 行为：
+
+- `gg` 只会把可用 skill 的名称、描述和 `SKILL.md` 路径注入 system prompt。
+- 模型可以用 `read` 工具读取 `SKILL.md` 以及该 skill 目录下的文件。
+- 会跳过 `.agents/skills/.system` 等隐藏目录。
+- 设置了 `disable-model-invocation: true` 的 skill 不会出现在自动 skill 列表中，但仍可以显式加载。
+- 使用 `--no-skills` 可以在单次运行中关闭 skill discovery。
+
+强制本轮 prompt 使用某个 skill：
+
+```bash
+gg -p "/skill:ca review and commit my changes"
+```
 
 ## Subagents
 

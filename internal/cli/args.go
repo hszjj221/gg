@@ -15,6 +15,7 @@ type Args struct {
 	Continue     bool
 	Last         bool
 	Usage        bool
+	NoSkills     bool
 	APIKey       string
 	BaseURL      string
 	Model        string
@@ -48,6 +49,7 @@ func Parse(argv []string) (Args, error) {
 	fs.BoolVar(&args.Continue, "continue", false, "resume the latest session")
 	fs.BoolVar(&args.Last, "last", false, "resume the latest session")
 	fs.BoolVar(&args.Usage, "usage", false, "print token usage to stderr")
+	fs.BoolVar(&args.NoSkills, "no-skills", false, "disable .agents/skills discovery")
 	fs.StringVar(&args.APIKey, "api-key", "", "API key")
 	fs.StringVar(&args.BaseURL, "base-url", "", "OpenAI-compatible base URL")
 	fs.StringVar(&args.Model, "model", "", "model name")
@@ -108,6 +110,7 @@ Options:
   --continue               resume the latest session
   --last                   resume the latest session
   --usage                  print token usage to stderr
+  --no-skills              disable .agents/skills discovery
   -h, --help               show help
   -v, --version            show version`)
 }

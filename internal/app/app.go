@@ -16,6 +16,7 @@ import (
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/provider/openai"
 	"github.com/hszjj221/gg/internal/session"
+	"github.com/hszjj221/gg/internal/skills"
 	"github.com/hszjj221/gg/internal/tools"
 )
 
@@ -25,6 +26,7 @@ type Options struct {
 	Stdout          io.Writer
 	Stderr          io.Writer
 	Version         string
+	HomeDir         string
 	ProviderFactory func(config.Config) agent.Provider
 }
 
@@ -65,6 +67,11 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	if parsed.Command == cli.CommandSessionsList {
 		return runSessionsList(cfg, stdout, stderr)
 	}
+	skillSet, err := loadSkills(parsed, cfg.CWD, options.HomeDir)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	providerFactory := options.ProviderFactory
 	if providerFactory == nil {
 		providerFactory = func(cfg config.Config) agent.Provider {
@@ -79,16 +86,16 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	}
 
 	provider := providerFactory(cfg)
-	runner := agent.NewRunner(provider, defaultTools(cfg.CWD, provider))
+	runner := agent.NewRunner(provider, defaultTools(cfg.CWD, provider, skillSet.ReadRoots()))
 
 	if parsed.Prompt != "" {
-		return runPrompt(ctx, runner, sessionStore, loadedMessages, parsed.Prompt, stdout, stderr, false, parsed.Usage)
+		return runPrompt(ctx, runner, sessionStore, loadedMessages, parsed.Prompt, stdout, stderr, false, parsed.Usage, skillSet)
 	}
 	if parsed.Print {
 		fmt.Fprintln(stderr, "prompt is required in print mode")
 		return 2
 	}
-	return runInteractive(ctx, runner, sessionStore, loadedMessages, stdin, stdout, stderr, parsed.Usage)
+	return runInteractive(ctx, runner, sessionStore, loadedMessages, stdin, stdout, stderr, parsed.Usage, skillSet)
 }
 
 func runPrompt(
@@ -101,9 +108,19 @@ func runPrompt(
 	stderr io.Writer,
 	stream bool,
 	showUsage bool,
+	skillSet skills.Set,
 ) int {
-	user := agent.Message{Role: agent.RoleUser, Content: prompt, Timestamp: time.Now().UnixMilli()}
-	messages := append(append([]agent.Message(nil), history...), user)
+	preparedPrompt, err := preparePrompt(prompt, skillSet)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	systemMessages := skillSystemMessages(skillSet)
+	user := agent.Message{Role: agent.RoleUser, Content: preparedPrompt, Timestamp: time.Now().UnixMilli()}
+	messages := make([]agent.Message, 0, len(systemMessages)+len(history)+1)
+	messages = append(messages, systemMessages...)
+	messages = append(messages, history...)
+	messages = append(messages, user)
 	var onEvent func(agent.Event)
 	if stream {
 		onEvent = func(event agent.Event) {
@@ -122,7 +139,7 @@ func runPrompt(
 	} else {
 		fmt.Fprintln(stdout, reply.Content)
 	}
-	if err := appendNewMessages(store, runner.Transcript(), len(history)); err != nil {
+	if err := appendNewMessages(store, runner.Transcript(), len(systemMessages)+len(history)); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
@@ -137,9 +154,9 @@ func runPrompt(
 	return 0
 }
 
-func defaultTools(cwd string, provider agent.Provider) []agent.Tool {
+func defaultTools(cwd string, provider agent.Provider, readRoots []string) []agent.Tool {
 	return []agent.Tool{
-		tools.NewReadTool(cwd),
+		tools.NewReadToolWithOptions(cwd, tools.ReadOptions{ExtraRoots: readRoots}),
 		tools.NewListTool(cwd),
 		tools.NewGrepTool(cwd),
 		tools.NewBashTool(cwd, tools.BashOptions{}),
@@ -190,6 +207,7 @@ func runInteractive(
 	stdout io.Writer,
 	stderr io.Writer,
 	showUsage bool,
+	skillSet skills.Set,
 ) int {
 	fmt.Fprintln(stdout, "gg interactive mode. Press Ctrl+D to exit.")
 	scanner := bufio.NewScanner(stdin)
@@ -202,11 +220,11 @@ func runInteractive(
 		if prompt == "" {
 			continue
 		}
-		code := runPrompt(ctx, runner, store, history, prompt, stdout, stderr, true, showUsage)
+		code := runPrompt(ctx, runner, store, history, prompt, stdout, stderr, true, showUsage, skillSet)
 		if code != 0 {
 			return code
 		}
-		history = runner.Transcript()
+		history = stripSystemMessages(runner.Transcript())
 	}
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -232,6 +250,57 @@ func appendUsage(store *session.Store, usage agent.Usage) error {
 		return nil
 	}
 	return store.AppendUsage(usage)
+}
+
+func loadSkills(args cli.Args, cwd, homeDir string) (skills.Set, error) {
+	if args.NoSkills {
+		return skills.Set{}, nil
+	}
+	return skills.Load(skills.LoadOptions{CWD: cwd, HomeDir: homeDir})
+}
+
+func skillSystemMessages(skillSet skills.Set) []agent.Message {
+	prompt := skillSet.FormatSystemPrompt()
+	if prompt == "" {
+		return nil
+	}
+	return []agent.Message{{Role: agent.RoleSystem, Content: prompt, Timestamp: time.Now().UnixMilli()}}
+}
+
+func preparePrompt(prompt string, skillSet skills.Set) (string, error) {
+	name, task, ok := parseSkillCommand(prompt)
+	if !ok {
+		return prompt, nil
+	}
+	skill, found := skillSet.Find(name)
+	if !found {
+		return "", fmt.Errorf("skill %q not found", name)
+	}
+	content, err := skills.ReadSkillFile(skill)
+	if err != nil {
+		return "", err
+	}
+	return skills.FormatForcedPrompt(skill, content, task), nil
+}
+
+func parseSkillCommand(prompt string) (name, task string, ok bool) {
+	trimmed := strings.TrimSpace(prompt)
+	fields := strings.Fields(trimmed)
+	if len(fields) == 0 || !strings.HasPrefix(fields[0], "/skill:") {
+		return "", "", false
+	}
+	name = strings.TrimPrefix(fields[0], "/skill:")
+	return name, strings.TrimSpace(strings.TrimPrefix(trimmed, fields[0])), true
+}
+
+func stripSystemMessages(messages []agent.Message) []agent.Message {
+	out := make([]agent.Message, 0, len(messages))
+	for _, message := range messages {
+		if message.Role != agent.RoleSystem {
+			out = append(out, message)
+		}
+	}
+	return out
 }
 
 func printUsage(stderr io.Writer, usage agent.Usage) {

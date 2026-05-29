@@ -66,3 +66,14 @@ func TestParseUsageFlag(t *testing.T) {
 		t.Fatalf("unexpected args: %+v", args)
 	}
 }
+
+func TestParseNoSkillsFlag(t *testing.T) {
+	args, err := Parse([]string{"--no-skills", "-p", "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !args.NoSkills || !args.Print || args.Prompt != "hello" {
+		t.Fatalf("unexpected args: %+v", args)
+	}
+}

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -156,6 +157,143 @@ func TestRunPrintModeIncludesSubagentTool(t *testing.T) {
 	}
 }
 
+func TestRunInjectsAvailableSkillsSystemMessage(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	project := filepath.Join(dir, "project")
+	writeAppSkill(t, filepath.Join(project, ".agents", "skills", "review"), `---
+name: review
+description: Review local changes.
+---
+
+# review
+`)
+	var stdout, stderr strings.Builder
+	provider := &appFakeProvider{}
+
+	code := Run(context.Background(), []string{"-p", "--api-key", "key", "--no-session", "check this"}, Options{
+		CWD:     project,
+		HomeDir: home,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			return provider
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("expected one request, got %d", len(provider.requests))
+	}
+	messages := provider.requests[0].Messages
+	if len(messages) < 2 || messages[0].Role != agent.RoleSystem {
+		t.Fatalf("expected system message first: %+v", messages)
+	}
+	if got := messages[0].Content; !strings.Contains(got, "<available_skills>") || !strings.Contains(got, "<name>review</name>") {
+		t.Fatalf("system message missing skill list:\n%s", got)
+	}
+	if got := messages[1].Content; got != "check this" {
+		t.Fatalf("unexpected user prompt: %q", got)
+	}
+}
+
+func TestRunNoSkillsDoesNotInjectSystemMessage(t *testing.T) {
+	dir := t.TempDir()
+	writeAppSkill(t, filepath.Join(dir, ".agents", "skills", "review"), `---
+name: review
+description: Review local changes.
+---
+
+# review
+`)
+	var stdout, stderr strings.Builder
+	provider := &appFakeProvider{}
+
+	code := Run(context.Background(), []string{"-p", "--no-skills", "--api-key", "key", "--no-session", "check this"}, Options{
+		CWD:    dir,
+		Stdout: &stdout,
+		Stderr: &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			return provider
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	messages := provider.requests[0].Messages
+	if len(messages) != 1 || messages[0].Role != agent.RoleUser || messages[0].Content != "check this" {
+		t.Fatalf("--no-skills should leave only user prompt, got %+v", messages)
+	}
+}
+
+func TestRunSkillCommandInjectsFullSkillMarkdown(t *testing.T) {
+	dir := t.TempDir()
+	skillContent := `---
+name: ca
+description: Review and commit.
+---
+
+# ca
+
+Follow review-first workflow.
+`
+	writeAppSkill(t, filepath.Join(dir, ".agents", "skills", "ca"), skillContent)
+	var stdout, stderr strings.Builder
+	provider := &appFakeProvider{}
+
+	code := Run(context.Background(), []string{"-p", "--api-key", "key", "--no-session", "/skill:ca", "commit", "changes"}, Options{
+		CWD:    dir,
+		Stdout: &stdout,
+		Stderr: &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			return provider
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	messages := provider.requests[0].Messages
+	if len(messages) < 2 {
+		t.Fatalf("expected system and user messages: %+v", messages)
+	}
+	userPrompt := messages[len(messages)-1].Content
+	if !strings.Contains(userPrompt, "<skill name=\"ca\"") || !strings.Contains(userPrompt, "Follow review-first workflow.") {
+		t.Fatalf("forced skill prompt missing skill markdown:\n%s", userPrompt)
+	}
+	if !strings.Contains(userPrompt, "commit changes") {
+		t.Fatalf("forced skill prompt missing user task:\n%s", userPrompt)
+	}
+}
+
+func TestRunSkillCommandMissingSkillDoesNotCallProvider(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr strings.Builder
+	provider := &appFakeProvider{}
+
+	code := Run(context.Background(), []string{"-p", "--api-key", "key", "--no-session", "/skill:missing", "task"}, Options{
+		CWD:    dir,
+		Stdout: &stdout,
+		Stderr: &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			return provider
+		},
+	})
+
+	if code == 0 {
+		t.Fatalf("expected missing skill to fail")
+	}
+	if len(provider.requests) != 0 {
+		t.Fatalf("provider should not be called when skill is missing")
+	}
+	if !strings.Contains(stderr.String(), `skill "missing" not found`) {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
 func TestRunSessionsListPrintsSessionsWithoutProvider(t *testing.T) {
 	dir := t.TempDir()
 	sessionDir := filepath.Join(dir, "sessions")
@@ -191,6 +329,16 @@ func TestRunSessionsListPrintsSessionsWithoutProvider(t *testing.T) {
 	}
 }
 
+func writeAppSkill(t *testing.T, dir string, content string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunContinueLoadsLatestSession(t *testing.T) {
 	dir := t.TempDir()
 	sessionDir := filepath.Join(dir, "sessions")
@@ -205,7 +353,7 @@ func TestRunContinueLoadsLatestSession(t *testing.T) {
 	var stdout, stderr strings.Builder
 	provider := &appFakeProvider{}
 
-	code := Run(context.Background(), []string{"--continue", "--session-dir", sessionDir, "next"}, Options{
+	code := Run(context.Background(), []string{"--continue", "--no-skills", "--session-dir", sessionDir, "next"}, Options{
 		CWD:    dir,
 		Stdout: &stdout,
 		Stderr: &stderr,

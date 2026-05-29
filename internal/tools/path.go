@@ -7,10 +7,14 @@ import (
 )
 
 func resolveInsideCWD(cwd, path string) (string, error) {
+	return resolveInsideRoot(cwd, path, "working directory")
+}
+
+func resolveInsideRoot(root, path, rootLabel string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", fmt.Errorf("path is required")
 	}
-	root, err := filepath.Abs(cwd)
+	root, err := filepath.Abs(root)
 	if err != nil {
 		return "", err
 	}
@@ -27,7 +31,7 @@ func resolveInsideCWD(cwd, path string) (string, error) {
 		return "", err
 	}
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		return "", fmt.Errorf("path %q is outside working directory", path)
+		return "", fmt.Errorf("path %q is outside %s", path, rootLabel)
 	}
 	return target, nil
 }

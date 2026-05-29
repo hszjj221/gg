@@ -57,6 +57,53 @@ func TestReadToolRejectsPathOutsideCWD(t *testing.T) {
 	}
 }
 
+func TestReadToolAllowsExtraReadOnlyRoots(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(t.TempDir(), "ca")
+	if err := os.MkdirAll(filepath.Join(skillDir, "references"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "references", "guide.md"), []byte("use ca"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewReadToolWithOptions(dir, ReadOptions{ExtraRoots: []string{skillDir}})
+	result := executeTool(t, tool, `{"path":"`+filepath.ToSlash(filepath.Join(skillDir, "references", "guide.md"))+`"}`)
+
+	if result.IsError {
+		t.Fatalf("expected extra root read success: %s", result.Content[0].Text)
+	}
+	if got := result.Content[0].Text; got != "use ca" {
+		t.Fatalf("unexpected content: %q", got)
+	}
+}
+
+func TestReadToolRejectsSymlinkEscapeFromExtraReadOnlyRoot(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	skillDir := filepath.Join(t.TempDir(), "ca")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(skillDir, "secret.txt")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewReadToolWithOptions(dir, ReadOptions{ExtraRoots: []string{skillDir}})
+	result := executeTool(t, tool, `{"path":"`+filepath.ToSlash(link)+`"}`)
+
+	if !result.IsError {
+		t.Fatalf("expected symlink escape to be rejected")
+	}
+	if !strings.Contains(result.Content[0].Text, "outside working directory") {
+		t.Fatalf("unexpected error: %s", result.Content[0].Text)
+	}
+}
+
 func TestWriteToolCreatesParentDirectoriesAndOverwrites(t *testing.T) {
 	dir := t.TempDir()
 	tool := NewWriteTool(dir)

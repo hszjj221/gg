@@ -11,6 +11,7 @@ English | [简体中文](README.zh-CN.md)
 - OpenAI-compatible streaming provider with tool calling
 - JSONL session storage with list and resume commands
 - Optional token usage reporting with `--usage`
+- Codex-style local skills from `.agents/skills`
 - Built-in coding tools: `read`, `list`, `grep`, `bash`, `edit`, `write`
 - Synchronous read-only `subagent` tool for focused codebase research
 - Single binary Go CLI with no third-party Go dependencies
@@ -59,6 +60,8 @@ gg --model gpt-4.1 --base-url https://api.openai.com/v1 -p "Read README.md"
 gg --no-session -p "Explain this directory"
 gg --session .gg/session.jsonl -p "Continue from this file"
 gg --usage -p "Summarize this repository"
+gg --no-skills -p "Run without local skills"
+gg -p "/skill:ca review and commit my changes"
 gg sessions list
 gg resume <id-or-path> "Continue from this session"
 gg --continue "Resume the latest session"
@@ -82,6 +85,35 @@ Token usage:
 - `gg --usage ...` prints token usage to stderr after each run.
 - Usage is recorded in the session when the provider returns it.
 - Providers that do not return usage remain supported and report zero tokens.
+
+## Skills
+
+`gg` loads Codex-style skills from `.agents/skills` by default. Project skills in the current directory or its parents take precedence over global skills in `~/.agents/skills`.
+
+Each skill is a directory with a `SKILL.md` file:
+
+```markdown
+---
+name: ca
+description: Review local changes and commit after checks pass.
+---
+
+# ca
+```
+
+Skill behavior:
+
+- `gg` injects only the available skill name, description, and `SKILL.md` location into the system prompt.
+- The model can use the `read` tool to load `SKILL.md` and files under that skill directory.
+- Hidden directories such as `.agents/skills/.system` are skipped.
+- Skills with `disable-model-invocation: true` are hidden from the automatic skill list, but can still be loaded explicitly.
+- Use `--no-skills` to disable skill discovery for a run.
+
+Force a skill for one prompt:
+
+```bash
+gg -p "/skill:ca review and commit my changes"
+```
 
 ## Subagents
 
