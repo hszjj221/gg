@@ -5,14 +5,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
 )
+
+var retryDelays = []time.Duration{250 * time.Millisecond, 500 * time.Millisecond}
 
 type Config struct {
 	APIKey     string
@@ -42,11 +46,23 @@ func NewClient(config Config) *Client {
 }
 
 func (c *Client) Complete(ctx context.Context, req agent.Request, onEvent func(agent.Event)) (agent.AssistantMessage, error) {
-	reply, err := c.complete(ctx, req, onEvent, true)
-	if isUnsupportedUsageError(err) {
-		return c.complete(ctx, req, onEvent, false)
+	includeUsage := true
+	for attempt := 0; ; attempt++ {
+		reply, err := c.complete(ctx, req, onEvent, includeUsage)
+		if isUnsupportedUsageError(err) && includeUsage {
+			includeUsage = false
+			reply, err = c.complete(ctx, req, onEvent, includeUsage)
+		}
+		if err == nil {
+			return reply, nil
+		}
+		if attempt >= len(retryDelays) || !isRetryableError(err) {
+			return agent.AssistantMessage{}, err
+		}
+		if err := sleepContext(ctx, retryDelays[attempt]); err != nil {
+			return agent.AssistantMessage{}, err
+		}
 	}
-	return reply, err
 }
 
 func (c *Client) complete(ctx context.Context, req agent.Request, onEvent func(agent.Event), includeUsage bool) (agent.AssistantMessage, error) {
@@ -70,7 +86,7 @@ func (c *Client) complete(ctx context.Context, req agent.Request, onEvent func(a
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
-		return agent.AssistantMessage{}, err
+		return agent.AssistantMessage{}, transportError{err: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -78,6 +94,18 @@ func (c *Client) complete(ctx context.Context, req agent.Request, onEvent func(a
 		return agent.AssistantMessage{}, apiError{statusCode: resp.StatusCode, status: resp.Status, body: strings.TrimSpace(string(data))}
 	}
 	return parseStream(resp.Body, onEvent)
+}
+
+type transportError struct {
+	err error
+}
+
+func (e transportError) Error() string {
+	return e.err.Error()
+}
+
+func (e transportError) Unwrap() error {
+	return e.err
 }
 
 type apiError struct {
@@ -91,12 +119,35 @@ func (e apiError) Error() string {
 }
 
 func isUnsupportedUsageError(err error) bool {
-	apiErr, ok := err.(apiError)
-	if !ok || apiErr.statusCode != http.StatusBadRequest {
+	var apiErr apiError
+	if !errors.As(err, &apiErr) || apiErr.statusCode != http.StatusBadRequest {
 		return false
 	}
 	body := strings.ToLower(apiErr.body)
 	return strings.Contains(body, "stream_options") || strings.Contains(body, "include_usage")
+}
+
+func isRetryableError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var apiErr apiError
+	if errors.As(err, &apiErr) {
+		return apiErr.statusCode == http.StatusTooManyRequests || (apiErr.statusCode >= 500 && apiErr.statusCode <= 599)
+	}
+	var transportErr transportError
+	return errors.As(err, &transportErr)
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (c *Client) requestPayload(req agent.Request, includeUsage bool) map[string]any {

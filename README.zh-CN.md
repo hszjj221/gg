@@ -9,6 +9,7 @@
 ## Features
 
 - 支持 tool calling 的 OpenAI-compatible streaming provider
+- 对临时模型调用失败自动重试
 - 支持列出和恢复命令的 JSONL 会话存储
 - 通过 `--usage` 可选展示 token 消耗
 - 从 `.agents/skills` 加载 Codex 风格本地 skills
@@ -106,6 +107,8 @@ Provider/model 配置：
 - Session directory：`--session-dir`，然后是 `GG_SESSION_DIR`，最后是 `~/.gg/sessions`
 
 v1 只支持 `openai-compatible` provider。不支持远端拉取模型列表；请在 `models` 里显式列出可选模型。
+
+模型调用遇到网络错误、限流或 5xx 响应等临时失败时会自动重试。`gg` 不会 fallback 到其他 provider 或模型；如果所有重试都失败，会继续走现有 CLI 或 TUI 错误展示路径。
 
 会话管理：
 

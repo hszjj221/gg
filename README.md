@@ -9,6 +9,7 @@ English | [简体中文](README.zh-CN.md)
 ## Features
 
 - OpenAI-compatible streaming provider with tool calling
+- Automatic retry for transient model call failures
 - JSONL session storage with list and resume commands
 - Optional token usage reporting with `--usage`
 - Codex-style local skills from `.agents/skills`
@@ -106,6 +107,8 @@ Selection uses `provider:model`:
 - Session directory: `--session-dir`, then `GG_SESSION_DIR`, then `~/.gg/sessions`
 
 Only `openai-compatible` providers are supported in v1. Remote model discovery is not implemented; list allowed model names in `models`.
+
+Model calls are retried on temporary failures such as network errors, rate limits, and 5xx responses. `gg` does not fall back to another provider or model; if all retry attempts fail, the normal CLI or TUI error path is used.
 
 Session management:
 
