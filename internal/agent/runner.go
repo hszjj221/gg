@@ -7,24 +7,37 @@ import (
 	"strings"
 )
 
-const maxTurns = 32
+const defaultMaxTurns = 32
+
+type RunnerOptions struct {
+	MaxTurns int
+}
 
 type Runner struct {
 	provider Provider
 	tools    map[string]Tool
 	defs     []ToolDefinition
+	maxTurns int
 
 	transcript []Message
 }
 
 func NewRunner(provider Provider, tools []Tool) *Runner {
+	return NewRunnerWithOptions(provider, tools, RunnerOptions{})
+}
+
+func NewRunnerWithOptions(provider Provider, tools []Tool, options RunnerOptions) *Runner {
 	toolMap := make(map[string]Tool, len(tools))
 	defs := make([]ToolDefinition, 0, len(tools))
 	for _, tool := range tools {
 		toolMap[tool.Name()] = tool
 		defs = append(defs, tool.Definition())
 	}
-	return &Runner{provider: provider, tools: toolMap, defs: defs}
+	maxTurns := options.MaxTurns
+	if maxTurns <= 0 {
+		maxTurns = defaultMaxTurns
+	}
+	return &Runner{provider: provider, tools: toolMap, defs: defs, maxTurns: maxTurns}
 }
 
 func (r *Runner) Transcript() []Message {
@@ -37,7 +50,7 @@ func (r *Runner) Run(ctx context.Context, messages []Message, onEvent func(Event
 	current := append([]Message(nil), messages...)
 	r.transcript = append([]Message(nil), messages...)
 
-	for turn := 0; turn < maxTurns; turn++ {
+	for turn := 0; turn < r.maxTurns; turn++ {
 		reply, err := r.provider.Complete(ctx, Request{Messages: current, Tools: r.defs}, onEvent)
 		if err != nil {
 			return AssistantMessage{}, err
@@ -67,7 +80,7 @@ func (r *Runner) Run(ctx context.Context, messages []Message, onEvent func(Event
 		}
 	}
 
-	return AssistantMessage{}, fmt.Errorf("agent exceeded %d turns", maxTurns)
+	return AssistantMessage{}, fmt.Errorf("agent exceeded %d turns", r.maxTurns)
 }
 
 func (r *Runner) executeToolCall(ctx context.Context, call ToolCall) ToolResult {

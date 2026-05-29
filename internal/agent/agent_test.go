@@ -97,3 +97,32 @@ func TestRunnerExecutesToolCallsAndContinues(t *testing.T) {
 		t.Fatalf("tool result not appended before second call: %+v", second.Messages)
 	}
 }
+
+func TestRunnerHonorsMaxTurnsOption(t *testing.T) {
+	provider := &fakeProvider{responses: []AssistantMessage{
+		{
+			Message: Message{
+				Role: RoleAssistant,
+				ToolCalls: []ToolCall{{
+					ID:        "call-1",
+					Name:      "read",
+					Arguments: json.RawMessage(`{"path":"x"}`),
+				}},
+			},
+			StopReason: StopReasonToolUse,
+		},
+		{
+			Message:    Message{Role: RoleAssistant, Content: "done"},
+			StopReason: StopReasonEndTurn,
+		},
+	}}
+	runner := NewRunnerWithOptions(provider, []Tool{fakeTool{name: "read"}}, RunnerOptions{MaxTurns: 1})
+
+	_, err := runner.Run(context.Background(), []Message{{Role: RoleUser, Content: "read x"}}, nil)
+	if err == nil {
+		t.Fatalf("expected max turns error")
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("expected one provider call before max turn error, got %d", len(provider.requests))
+	}
+}

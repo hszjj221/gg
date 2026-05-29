@@ -70,13 +70,8 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		return 1
 	}
 
-	toolset := []agent.Tool{
-		tools.NewReadTool(cfg.CWD),
-		tools.NewBashTool(cfg.CWD, tools.BashOptions{}),
-		tools.NewEditTool(cfg.CWD),
-		tools.NewWriteTool(cfg.CWD),
-	}
-	runner := agent.NewRunner(providerFactory(cfg), toolset)
+	provider := providerFactory(cfg)
+	runner := agent.NewRunner(provider, defaultTools(cfg.CWD, provider))
 
 	if parsed.Prompt != "" {
 		return runPrompt(ctx, runner, sessionStore, loadedMessages, parsed.Prompt, stdout, stderr, false)
@@ -123,6 +118,18 @@ func runPrompt(
 		return 1
 	}
 	return 0
+}
+
+func defaultTools(cwd string, provider agent.Provider) []agent.Tool {
+	return []agent.Tool{
+		tools.NewReadTool(cwd),
+		tools.NewListTool(cwd),
+		tools.NewGrepTool(cwd),
+		tools.NewBashTool(cwd, tools.BashOptions{}),
+		tools.NewEditTool(cwd),
+		tools.NewWriteTool(cwd),
+		tools.NewSubagentTool(cwd, provider, tools.SubagentOptions{}),
+	}
 }
 
 func runInteractive(

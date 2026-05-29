@@ -20,6 +20,22 @@ gg --session .gg/session.jsonl -p "Continue from this file"
 
 With no prompt, `gg` starts a simple line-based interactive mode.
 
+## Subagents
+
+`gg` exposes a synchronous `subagent` tool to the model. The main agent can delegate focused read-only research tasks to a child agent running in the same process.
+
+The v1 subagent is intentionally limited:
+
+- It can use `read`, `list`, and `grep`.
+- It cannot use `bash`, `edit`, `write`, or another `subagent`.
+- It returns only its final summary to the main agent; its full transcript is not stored as a separate session.
+
+Example:
+
+```bash
+gg -p "Use a subagent to inspect how sessions are stored, then summarize the flow"
+```
+
 ## Configuration
 
 Resolution order:
