@@ -1,6 +1,9 @@
 package cli
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseArgsSupportsPrintModeProviderOptionsAndPrompt(t *testing.T) {
 	args, err := Parse([]string{"-p", "--model", "gpt-test", "--base-url", "https://example/v1", "--api-key", "key", "--no-session", "hello"})
@@ -75,5 +78,13 @@ func TestParseNoSkillsFlag(t *testing.T) {
 
 	if !args.NoSkills || !args.Print || args.Prompt != "hello" {
 		t.Fatalf("unexpected args: %+v", args)
+	}
+}
+
+func TestHelpTextMentionsTUIInteractiveMode(t *testing.T) {
+	help := HelpText()
+
+	if !strings.Contains(help, "gg\n") || !strings.Contains(help, "TUI interactive mode") {
+		t.Fatalf("help text should mention TUI interactive mode:\n%s", help)
 	}
 }

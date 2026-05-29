@@ -14,7 +14,7 @@
 - 从 `.agents/skills` 加载 Codex 风格本地 skills
 - 内置代码工具：`read`、`list`、`grep`、`bash`、`edit`、`write`
 - 用于聚焦代码库调研的同步只读 `subagent` 工具
-- 无第三方 Go 依赖的单二进制 CLI
+- 带 Bubble Tea TUI 的单二进制 Go CLI
 
 ## Install
 
@@ -44,7 +44,7 @@ export OPENAI_API_KEY=sk-your-key
 gg -p "List the files in this project"
 ```
 
-启动简单的按行交互模式：
+启动 TUI 交互模式：
 
 ```bash
 gg
@@ -66,6 +66,12 @@ gg sessions list
 gg resume <id-or-path> "Continue from this session"
 gg --continue "Resume the latest session"
 ```
+
+交互模式：
+
+- 在终端中运行 `gg` 会启动 TUI chat 界面。
+- TUI 会展示对话、单行 prompt 输入框、streaming 回复和状态栏。
+- 当 stdin/stdout 不是终端时，`gg` 会回退到简单的按行交互模式，方便脚本和测试使用。
 
 配置优先级：
 

@@ -18,6 +18,7 @@ import (
 	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/skills"
 	"github.com/hszjj221/gg/internal/tools"
+	"github.com/hszjj221/gg/internal/tui"
 )
 
 type Options struct {
@@ -87,49 +88,37 @@ func Run(ctx context.Context, argv []string, options Options) int {
 
 	provider := providerFactory(cfg)
 	runner := agent.NewRunner(provider, defaultTools(cfg.CWD, provider, skillSet.ReadRoots()))
+	executor := newTurnExecutor(runner, sessionStore, loadedMessages, skillSet)
 
 	if parsed.Prompt != "" {
-		return runPrompt(ctx, runner, sessionStore, loadedMessages, parsed.Prompt, stdout, stderr, false, parsed.Usage, skillSet)
+		return runPrompt(ctx, executor, parsed.Prompt, stdout, stderr, false, parsed.Usage)
 	}
 	if parsed.Print {
 		fmt.Fprintln(stderr, "prompt is required in print mode")
 		return 2
 	}
-	return runInteractive(ctx, runner, sessionStore, loadedMessages, stdin, stdout, stderr, parsed.Usage, skillSet)
+	if shouldRunTUI(stdin, stdout) {
+		return runTUI(ctx, executor, cfg, stdin, stdout, stderr, parsed.Usage)
+	}
+	return runInteractive(ctx, executor, stdin, stdout, stderr, parsed.Usage)
 }
 
 func runPrompt(
 	ctx context.Context,
-	runner *agent.Runner,
-	store *session.Store,
-	history []agent.Message,
+	executor *turnExecutor,
 	prompt string,
 	stdout io.Writer,
 	stderr io.Writer,
 	stream bool,
 	showUsage bool,
-	skillSet skills.Set,
 ) int {
-	preparedPrompt, err := preparePrompt(prompt, skillSet)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	systemMessages := skillSystemMessages(skillSet)
-	user := agent.Message{Role: agent.RoleUser, Content: preparedPrompt, Timestamp: time.Now().UnixMilli()}
-	messages := make([]agent.Message, 0, len(systemMessages)+len(history)+1)
-	messages = append(messages, systemMessages...)
-	messages = append(messages, history...)
-	messages = append(messages, user)
-	var onEvent func(agent.Event)
+	var onDelta func(string)
 	if stream {
-		onEvent = func(event agent.Event) {
-			if event.Type == agent.EventTextDelta {
-				fmt.Fprint(stdout, event.Text)
-			}
+		onDelta = func(text string) {
+			fmt.Fprint(stdout, text)
 		}
 	}
-	reply, err := runner.Run(ctx, messages, onEvent)
+	result, err := executor.Run(ctx, prompt, onDelta)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -137,21 +126,67 @@ func runPrompt(
 	if stream {
 		fmt.Fprintln(stdout)
 	} else {
-		fmt.Fprintln(stdout, reply.Content)
-	}
-	if err := appendNewMessages(store, runner.Transcript(), len(systemMessages)+len(history)); err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	usage := runner.Usage()
-	if err := appendUsage(store, usage); err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
+		fmt.Fprintln(stdout, result.Content)
 	}
 	if showUsage {
-		printUsage(stderr, usage)
+		printUsage(stderr, result.Usage)
 	}
 	return 0
+}
+
+type turnResult struct {
+	Content string
+	Usage   agent.Usage
+}
+
+type turnExecutor struct {
+	runner   *agent.Runner
+	store    *session.Store
+	history  []agent.Message
+	skillSet skills.Set
+}
+
+func newTurnExecutor(runner *agent.Runner, store *session.Store, history []agent.Message, skillSet skills.Set) *turnExecutor {
+	return &turnExecutor{
+		runner:   runner,
+		store:    store,
+		history:  append([]agent.Message(nil), history...),
+		skillSet: skillSet,
+	}
+}
+
+func (e *turnExecutor) Run(ctx context.Context, prompt string, onDelta func(string)) (turnResult, error) {
+	preparedPrompt, err := preparePrompt(prompt, e.skillSet)
+	if err != nil {
+		return turnResult{}, err
+	}
+	systemMessages := skillSystemMessages(e.skillSet)
+	user := agent.Message{Role: agent.RoleUser, Content: preparedPrompt, Timestamp: time.Now().UnixMilli()}
+	messages := make([]agent.Message, 0, len(systemMessages)+len(e.history)+1)
+	messages = append(messages, systemMessages...)
+	messages = append(messages, e.history...)
+	messages = append(messages, user)
+	var onEvent func(agent.Event)
+	if onDelta != nil {
+		onEvent = func(event agent.Event) {
+			if event.Type == agent.EventTextDelta {
+				onDelta(event.Text)
+			}
+		}
+	}
+	reply, err := e.runner.Run(ctx, messages, onEvent)
+	if err != nil {
+		return turnResult{}, err
+	}
+	if err := appendNewMessages(e.store, e.runner.Transcript(), len(systemMessages)+len(e.history)); err != nil {
+		return turnResult{}, err
+	}
+	usage := e.runner.Usage()
+	if err := appendUsage(e.store, usage); err != nil {
+		return turnResult{}, err
+	}
+	e.history = stripSystemMessages(e.runner.Transcript())
+	return turnResult{Content: reply.Content, Usage: usage}, nil
 }
 
 func defaultTools(cwd string, provider agent.Provider, readRoots []string) []agent.Tool {
@@ -200,14 +235,11 @@ func runSessionsList(cfg config.Config, stdout io.Writer, stderr io.Writer) int 
 
 func runInteractive(
 	ctx context.Context,
-	runner *agent.Runner,
-	store *session.Store,
-	history []agent.Message,
+	executor *turnExecutor,
 	stdin io.Reader,
 	stdout io.Writer,
 	stderr io.Writer,
 	showUsage bool,
-	skillSet skills.Set,
 ) int {
 	fmt.Fprintln(stdout, "gg interactive mode. Press Ctrl+D to exit.")
 	scanner := bufio.NewScanner(stdin)
@@ -220,13 +252,40 @@ func runInteractive(
 		if prompt == "" {
 			continue
 		}
-		code := runPrompt(ctx, runner, store, history, prompt, stdout, stderr, true, showUsage, skillSet)
+		code := runPrompt(ctx, executor, prompt, stdout, stderr, true, showUsage)
 		if code != 0 {
 			return code
 		}
-		history = stripSystemMessages(runner.Transcript())
 	}
 	if err := scanner.Err(); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
+}
+
+func runTUI(
+	ctx context.Context,
+	executor *turnExecutor,
+	cfg config.Config,
+	stdin io.Reader,
+	stdout io.Writer,
+	stderr io.Writer,
+	showUsage bool,
+) int {
+	err := tui.Run(ctx, tui.Config{
+		CWD:             cfg.CWD,
+		ModelName:       cfg.Model,
+		ShowUsage:       showUsage,
+		InitialMessages: displayMessages(executor.history),
+		Input:           stdin,
+		Output:          stdout,
+		Submit: func(ctx context.Context, prompt string, onDelta func(string)) (tui.SubmitResult, error) {
+			result, err := executor.Run(ctx, prompt, onDelta)
+			return tui.SubmitResult{Content: result.Content, Usage: result.Usage}, err
+		},
+	})
+	if err != nil && err != context.Canceled {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
@@ -305,6 +364,36 @@ func stripSystemMessages(messages []agent.Message) []agent.Message {
 
 func printUsage(stderr io.Writer, usage agent.Usage) {
 	fmt.Fprintf(stderr, "tokens: prompt=%d completion=%d total=%d\n", usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
+}
+
+func shouldRunTUI(stdin io.Reader, stdout io.Writer) bool {
+	return isTerminal(stdin) && isTerminal(stdout)
+}
+
+func isTerminal(value any) bool {
+	file, ok := value.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
+func displayMessages(messages []agent.Message) []tui.Message {
+	out := make([]tui.Message, 0, len(messages))
+	for _, message := range messages {
+		if message.Content == "" {
+			continue
+		}
+		switch message.Role {
+		case agent.RoleUser, agent.RoleAssistant:
+			out = append(out, tui.Message{Role: message.Role, Content: message.Content})
+		}
+	}
+	return out
 }
 
 func openSession(args cli.Args, cfg config.Config) (*session.Store, []agent.Message, error) {

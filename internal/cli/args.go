@@ -95,9 +95,12 @@ func HelpText() string {
 	return strings.TrimSpace(`gg - Go coding agent
 
 Usage:
+  gg
   gg [options] [prompt]
   gg sessions list
   gg resume <id-or-path> [prompt]
+
+Running gg without a prompt starts the TUI interactive mode when stdin/stdout are terminals.
 
 Options:
   -p, --print              run once and print the final assistant text

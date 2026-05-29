@@ -14,7 +14,7 @@ English | [简体中文](README.zh-CN.md)
 - Codex-style local skills from `.agents/skills`
 - Built-in coding tools: `read`, `list`, `grep`, `bash`, `edit`, `write`
 - Synchronous read-only `subagent` tool for focused codebase research
-- Single binary Go CLI with no third-party Go dependencies
+- Single binary Go CLI with a Bubble Tea-powered TUI
 
 ## Install
 
@@ -44,7 +44,7 @@ Run a one-shot prompt:
 gg -p "List the files in this project"
 ```
 
-Start the simple line-based interactive mode:
+Start the TUI interactive mode:
 
 ```bash
 gg
@@ -66,6 +66,12 @@ gg sessions list
 gg resume <id-or-path> "Continue from this session"
 gg --continue "Resume the latest session"
 ```
+
+Interactive mode:
+
+- Running `gg` in a terminal starts the TUI chat interface.
+- The TUI shows the conversation, a single-line prompt input, streaming replies, and a status bar.
+- When stdin/stdout are not terminals, `gg` falls back to the simple line-based interactive mode for scripts and tests.
 
 Configuration precedence:
 

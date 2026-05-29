@@ -373,3 +373,29 @@ func TestRunContinueLoadsLatestSession(t *testing.T) {
 		t.Fatalf("latest session was not loaded: %+v", messages)
 	}
 }
+
+func TestRunWithoutPromptUsesLineInteractiveWhenNotTTY(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr strings.Builder
+	provider := &appFakeProvider{}
+
+	code := Run(context.Background(), []string{"--api-key", "key", "--no-session"}, Options{
+		CWD:    dir,
+		Stdin:  strings.NewReader("say hi\n"),
+		Stdout: &stdout,
+		Stderr: &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			return provider
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "gg interactive mode") || !strings.Contains(stdout.String(), "hello") {
+		t.Fatalf("line interactive fallback not used, stdout: %q", stdout.String())
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("expected one request, got %d", len(provider.requests))
+	}
+}
