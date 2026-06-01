@@ -62,7 +62,7 @@ func (t EditTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, e
 	if len(input.Edits) == 0 {
 		return agent.ApprovalRequest{}, fmt.Errorf("edits must contain at least one replacement")
 	}
-	path, err := resolveInsideCWD(t.cwd, input.Path)
+	path, err := resolveExistingInsideCWD(t.cwd, input.Path)
 	if err != nil {
 		return agent.ApprovalRequest{}, err
 	}
@@ -99,7 +99,7 @@ func (t EditTool) Execute(_ context.Context, raw json.RawMessage) ToolResult {
 	if len(input.Edits) == 0 {
 		return errorResult(fmt.Errorf("edits must contain at least one replacement"))
 	}
-	path, err := resolveInsideCWD(t.cwd, input.Path)
+	path, err := resolveExistingInsideCWD(t.cwd, input.Path)
 	if err != nil {
 		return errorResult(err)
 	}

@@ -64,7 +64,7 @@ func (t GrepTool) Execute(_ context.Context, raw json.RawMessage) ToolResult {
 	if limit > maxGrepLimit {
 		limit = maxGrepLimit
 	}
-	path, err := resolveInsideCWD(t.cwd, input.Path)
+	path, err := resolveExistingInsideCWD(t.cwd, input.Path)
 	if err != nil {
 		return errorResult(err)
 	}
@@ -108,7 +108,11 @@ func grepFile(cwd, path, pattern string, limit int, matches *[]string) error {
 	}
 	text := strings.ReplaceAll(string(data), "\r\n", "\n")
 	lines := strings.Split(text, "\n")
-	rel, err := filepath.Rel(cwd, path)
+	realCWD, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(realCWD, path)
 	if err != nil {
 		return err
 	}

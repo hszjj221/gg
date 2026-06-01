@@ -43,7 +43,7 @@ func (t WriteTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, 
 	if err := json.Unmarshal(raw, &input); err != nil {
 		return agent.ApprovalRequest{}, fmt.Errorf("invalid write arguments: %w", err)
 	}
-	path, err := resolveInsideCWD(t.cwd, input.Path)
+	path, err := resolveWritableInsideCWD(t.cwd, input.Path)
 	if err != nil {
 		return agent.ApprovalRequest{}, err
 	}
@@ -72,7 +72,7 @@ func (t WriteTool) Execute(_ context.Context, raw json.RawMessage) ToolResult {
 	if err := json.Unmarshal(raw, &input); err != nil {
 		return errorResult(fmt.Errorf("invalid write arguments: %w", err))
 	}
-	path, err := resolveInsideCWD(t.cwd, input.Path)
+	path, err := resolveWritableInsideCWD(t.cwd, input.Path)
 	if err != nil {
 		return errorResult(err)
 	}

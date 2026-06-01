@@ -107,26 +107,3 @@ func (t ReadTool) resolve(path string) (string, error) {
 	}
 	return "", cwdErr
 }
-
-func resolveExistingInsideRoot(root, path, rootLabel string) (string, error) {
-	target, err := resolveInsideRoot(root, path, rootLabel)
-	if err != nil {
-		return "", err
-	}
-	realRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return "", err
-	}
-	realTarget, err := filepath.EvalSymlinks(target)
-	if err != nil {
-		return "", err
-	}
-	rel, err := filepath.Rel(realRoot, realTarget)
-	if err != nil {
-		return "", err
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		return "", fmt.Errorf("path %q is outside %s", path, rootLabel)
-	}
-	return realTarget, nil
-}

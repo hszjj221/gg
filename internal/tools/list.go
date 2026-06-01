@@ -46,7 +46,7 @@ func (t ListTool) Execute(_ context.Context, raw json.RawMessage) ToolResult {
 	if strings.TrimSpace(input.Path) == "" {
 		input.Path = "."
 	}
-	path, err := resolveInsideCWD(t.cwd, input.Path)
+	path, err := resolveExistingInsideCWD(t.cwd, input.Path)
 	if err != nil {
 		return errorResult(err)
 	}

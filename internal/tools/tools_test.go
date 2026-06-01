@@ -126,6 +126,24 @@ func TestWriteToolCreatesParentDirectoriesAndOverwrites(t *testing.T) {
 	}
 }
 
+func TestWriteToolRejectsSymlinkParentEscapeFromCWD(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	link := filepath.Join(dir, "outside")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	result := executeTool(t, NewWriteTool(dir), `{"path":"outside/file.txt","content":"secret"}`)
+
+	if !result.IsError || !strings.Contains(result.Content[0].Text, "outside working directory") {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "file.txt")); !os.IsNotExist(err) {
+		t.Fatalf("write escaped cwd through symlink")
+	}
+}
+
 func TestWriteToolApprovalRequestPreviewsCreateAndOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	tool := NewWriteTool(dir)
@@ -187,6 +205,31 @@ func TestEditToolRequiresUniqueOldText(t *testing.T) {
 	}
 	if !strings.Contains(result.Content[0].Text, "must match exactly once") {
 		t.Fatalf("unexpected error: %s", result.Content[0].Text)
+	}
+}
+
+func TestEditToolRejectsSymlinkFileEscapeFromCWD(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "secret.txt")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	result := executeTool(t, NewEditTool(dir), `{"path":"secret.txt","edits":[{"oldText":"old","newText":"new"}]}`)
+
+	if !result.IsError || !strings.Contains(result.Content[0].Text, "outside working directory") {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	data, err := os.ReadFile(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "old\n" {
+		t.Fatalf("edit escaped cwd through symlink: %q", string(data))
 	}
 }
 
@@ -337,6 +380,24 @@ func TestListToolRejectsOutsidePathAndFiles(t *testing.T) {
 	}
 }
 
+func TestListToolRejectsSymlinkDirectoryEscapeFromCWD(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "outside")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	result := executeTool(t, NewListTool(dir), `{"path":"outside"}`)
+
+	if !result.IsError || !strings.Contains(result.Content[0].Text, "outside working directory") {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
 func TestGrepToolFindsMatchesWithPathAndLineNumber(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "pkg"), 0o755); err != nil {
@@ -367,6 +428,24 @@ func TestGrepToolRejectsOutsidePath(t *testing.T) {
 	}
 
 	result := executeTool(t, NewGrepTool(dir), `{"path":"`+filepath.ToSlash(outside)+`","pattern":"needle"}`)
+
+	if !result.IsError || !strings.Contains(result.Content[0].Text, "outside working directory") {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestGrepToolRejectsSymlinkFileEscapeFromCWD(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("needle"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "secret.txt")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	result := executeTool(t, NewGrepTool(dir), `{"path":"secret.txt","pattern":"needle"}`)
 
 	if !result.IsError || !strings.Contains(result.Content[0].Text, "outside working directory") {
 		t.Fatalf("unexpected result: %+v", result)
