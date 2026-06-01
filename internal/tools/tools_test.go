@@ -152,6 +152,27 @@ func TestWriteToolApprovalRequestPreviewsCreateAndOverwrite(t *testing.T) {
 	}
 }
 
+func TestWriteToolApprovalRequestShowsOverwriteChangeAfterLongCommonPrefix(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file.txt")
+	prefix := strings.Repeat("x", approvalPreviewLimit+100)
+	if err := os.WriteFile(path, []byte(prefix+"\nold tail\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewWriteTool(dir)
+
+	req, err := tool.ApprovalRequest(json.RawMessage(`{"path":"file.txt","content":"` + prefix + `\nnew tail\n"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{"old tail", "new tail"} {
+		if !strings.Contains(req.Details, want) {
+			t.Fatalf("approval preview should show changed tail %q:\n%s", want, req.Details)
+		}
+	}
+}
+
 func TestEditToolRequiresUniqueOldText(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.go")
@@ -206,6 +227,27 @@ func TestEditToolApprovalRequestPreviewsReplacement(t *testing.T) {
 	for _, want := range []string{"edit file.txt", "1 replacement", "before", "after"} {
 		if !strings.Contains(req.Summary+"\n"+req.Details, want) {
 			t.Fatalf("edit approval missing %q: %+v", want, req)
+		}
+	}
+}
+
+func TestEditToolApprovalRequestShowsChangeAfterLongCommonPrefix(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file.txt")
+	prefix := strings.Repeat("x", approvalPreviewLimit+100)
+	if err := os.WriteFile(path, []byte(prefix+"\nold tail\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewEditTool(dir)
+
+	req, err := tool.ApprovalRequest(json.RawMessage(`{"path":"file.txt","edits":[{"oldText":"old tail","newText":"new tail"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{"old tail", "new tail"} {
+		if !strings.Contains(req.Details, want) {
+			t.Fatalf("approval preview should show changed tail %q:\n%s", want, req.Details)
 		}
 	}
 }

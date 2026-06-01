@@ -606,6 +606,35 @@ func TestRunApprovalOnRequestAllowsToolInPromptMode(t *testing.T) {
 	}
 }
 
+func TestRunApprovalOnRequestAllowsPromptModeWithRedirectedStdout(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "marker.txt")
+	stdin := strings.NewReader("y\n")
+	var stdout, stderr strings.Builder
+	provider := &appToolProvider{command: "printf ok > " + strconv.Quote(marker)}
+
+	code := Run(context.Background(), []string{"-p", "--approval", "on-request", "--api-key", "key", "--no-session", "write marker"}, Options{
+		CWD:     dir,
+		HomeDir: filepath.Join(dir, "home"),
+		Stdin:   stdin,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		IsTerminal: func(value any) bool {
+			return value == stdin || value == &stderr
+		},
+		ProviderFactory: func(config.Config) agent.Provider {
+			return provider
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected redirected stdout prompt mode to run, got %d: %s", code, stderr.String())
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("approved tool should run with redirected stdout: %v", err)
+	}
+}
+
 func TestRunApprovalOnRequestDeniesToolInPromptMode(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "marker.txt")

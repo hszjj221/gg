@@ -76,7 +76,7 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	if parsed.Command == cli.CommandSessionsList {
 		return runSessionsList(cfg, stdout, stderr)
 	}
-	if parsed.Approval == "on-request" && !bothTerminals(stdin, stdout, isTerm) {
+	if parsed.Approval == "on-request" && !approvalTerminalAvailable(parsed, stdin, stdout, stderr, isTerm) {
 		fmt.Fprintln(stderr, "--approval on-request requires a terminal")
 		return 2
 	}
@@ -659,6 +659,13 @@ func shouldRunTUI(stdin io.Reader, stdout io.Writer, isTerm func(any) bool) bool
 
 func bothTerminals(stdin io.Reader, stdout io.Writer, isTerm func(any) bool) bool {
 	return isTerm(stdin) && isTerm(stdout)
+}
+
+func approvalTerminalAvailable(args cli.Args, stdin io.Reader, stdout io.Writer, stderr io.Writer, isTerm func(any) bool) bool {
+	if args.Prompt == "" && !args.Print && shouldRunTUI(stdin, stdout, isTerm) {
+		return true
+	}
+	return isTerm(stdin) && isTerm(stderr)
 }
 
 func terminalChecker(options Options) func(any) bool {
