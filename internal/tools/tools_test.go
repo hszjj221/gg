@@ -104,6 +104,40 @@ func TestReadToolRejectsSymlinkEscapeFromExtraReadOnlyRoot(t *testing.T) {
 	}
 }
 
+func TestReadToolRejectsBinaryFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "image.bin"), []byte{'g', 'g', 0, 'b', 'i', 'n'}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := executeTool(t, NewReadTool(dir), `{"path":"image.bin"}`)
+
+	if !result.IsError || !strings.Contains(result.Content[0].Text, "binary file") {
+		t.Fatalf("unexpected binary read result: %+v", result)
+	}
+}
+
+func TestReadToolMarksLargeFileTruncation(t *testing.T) {
+	dir := t.TempDir()
+	content := strings.Repeat("x", defaultMaxReadBytes+1024)
+	if err := os.WriteFile(filepath.Join(dir, "large.txt"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := executeTool(t, NewReadTool(dir), `{"path":"large.txt","limit":1}`)
+
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.Content[0].Text)
+	}
+	text := result.Content[0].Text
+	if len(text) > defaultMaxReadBytes+512 {
+		t.Fatalf("read output was not capped, got %d bytes", len(text))
+	}
+	if !strings.Contains(text, "truncated after") {
+		t.Fatalf("truncation marker missing from read output")
+	}
+}
+
 func TestWriteToolCreatesParentDirectoriesAndOverwrites(t *testing.T) {
 	dir := t.TempDir()
 	tool := NewWriteTool(dir)
@@ -467,6 +501,74 @@ func TestGrepToolRejectsSymlinkFileEscapeFromCWD(t *testing.T) {
 
 	if !result.IsError || !strings.Contains(result.Content[0].Text, "outside working directory") {
 		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestGrepToolRejectsBinaryFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "image.bin"), []byte{'n', 'e', 'e', 'd', 'l', 'e', 0}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := executeTool(t, NewGrepTool(dir), `{"path":"image.bin","pattern":"needle"}`)
+
+	if !result.IsError || !strings.Contains(result.Content[0].Text, "binary file") {
+		t.Fatalf("unexpected binary grep result: %+v", result)
+	}
+}
+
+func TestGrepToolRejectsLargeFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "large.txt"), []byte(strings.Repeat("needle\n", 200000)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := executeTool(t, NewGrepTool(dir), `{"path":"large.txt","pattern":"needle"}`)
+
+	if !result.IsError || !strings.Contains(result.Content[0].Text, "too large") {
+		t.Fatalf("unexpected large grep result: %+v", result)
+	}
+}
+
+func TestGrepToolSkipsBinaryAndLargeFilesInDirectory(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "binary.bin"), []byte{'n', 'e', 'e', 'd', 'l', 'e', 0}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "large.txt"), []byte(strings.Repeat("needle\n", 200000)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "text.txt"), []byte("needle here\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := executeTool(t, NewGrepTool(dir), `{"path":".","pattern":"needle","limit":10}`)
+
+	if result.IsError {
+		t.Fatalf("expected directory grep success, got error: %s", result.Content[0].Text)
+	}
+	if got := result.Content[0].Text; got != "text.txt:1: needle here" {
+		t.Fatalf("unexpected directory grep output: %q", got)
+	}
+}
+
+func TestGrepToolSkipsSymlinkEscapeDuringDirectoryWalk(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("needle"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "secret.txt")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	result := executeTool(t, NewGrepTool(dir), `{"path":".","pattern":"needle"}`)
+
+	if result.IsError {
+		t.Fatalf("expected directory grep to skip symlink escape, got error: %s", result.Content[0].Text)
+	}
+	if got := result.Content[0].Text; got != "" {
+		t.Fatalf("directory grep should skip symlink escape, got %q", got)
 	}
 }
 

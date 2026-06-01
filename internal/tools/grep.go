@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 const (
 	defaultGrepLimit = 50
 	maxGrepLimit     = 200
+	maxGrepFileBytes = 1024 * 1024
 )
 
 type GrepTool struct {
@@ -90,7 +92,13 @@ func (t GrepTool) Execute(_ context.Context, raw json.RawMessage) ToolResult {
 		if entry.IsDir() {
 			return nil
 		}
-		return grepFile(t.cwd, filePath, input.Pattern, limit, &matches)
+		if err := grepFile(t.cwd, filePath, input.Pattern, limit, &matches); err != nil {
+			if isSkippedGrepFile(err) {
+				return nil
+			}
+			return err
+		}
+		return nil
 	})
 	if err != nil {
 		return errorResult(err)
@@ -102,16 +110,38 @@ func grepFile(cwd, path, pattern string, limit int, matches *[]string) error {
 	if len(*matches) >= limit {
 		return nil
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	text := strings.ReplaceAll(string(data), "\r\n", "\n")
-	lines := strings.Split(text, "\n")
 	realCWD, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
 		return err
 	}
+	target := path
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(realCWD, target)
+	}
+	realPath, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		return err
+	}
+	if err := ensureInsideRealRoot(realCWD, realPath, path, "working directory"); err != nil {
+		return skippedGrepFileError{path: path, reason: err.Error()}
+	}
+	path = realPath
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.Size() > maxGrepFileBytes {
+		return skippedGrepFileError{path: path, reason: fmt.Sprintf("file too large: %d bytes exceeds %d bytes", info.Size(), maxGrepFileBytes)}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if containsNUL(data) {
+		return skippedGrepFileError{path: path, reason: "binary file"}
+	}
+	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	lines := strings.Split(text, "\n")
 	rel, err := filepath.Rel(realCWD, path)
 	if err != nil {
 		return err
@@ -126,4 +156,18 @@ func grepFile(cwd, path, pattern string, limit int, matches *[]string) error {
 		}
 	}
 	return nil
+}
+
+type skippedGrepFileError struct {
+	path   string
+	reason string
+}
+
+func (e skippedGrepFileError) Error() string {
+	return fmt.Sprintf("skipped %s: %s", e.path, e.reason)
+}
+
+func isSkippedGrepFile(err error) bool {
+	var skipped skippedGrepFileError
+	return errors.As(err, &skipped)
 }

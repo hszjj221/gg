@@ -20,3 +20,12 @@ func textResult(text string) ToolResult {
 func errorResult(err error) ToolResult {
 	return ToolResult{IsError: true, Content: []ContentBlock{{Type: ContentText, Text: err.Error()}}}
 }
+
+func containsNUL(data []byte) bool {
+	for _, b := range data {
+		if b == 0 {
+			return true
+		}
+	}
+	return false
+}

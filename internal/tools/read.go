@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,12 +60,12 @@ func (t ReadTool) Execute(_ context.Context, raw json.RawMessage) ToolResult {
 	if err != nil {
 		return errorResult(err)
 	}
-	data, err := os.ReadFile(path)
+	data, truncated, err := readFilePrefix(path, defaultMaxReadBytes)
 	if err != nil {
 		return errorResult(err)
 	}
-	if len(data) > defaultMaxReadBytes {
-		data = data[:defaultMaxReadBytes]
+	if containsNUL(data) {
+		return errorResult(fmt.Errorf("binary file not readable as text: %s", input.Path))
 	}
 	text := strings.ReplaceAll(string(data), "\r\n", "\n")
 	lines := strings.Split(text, "\n")
@@ -87,7 +88,11 @@ func (t ReadTool) Execute(_ context.Context, raw json.RawMessage) ToolResult {
 	if end > len(lines) {
 		end = len(lines)
 	}
-	return textResult(strings.Join(lines[start:end], "\n"))
+	output := strings.Join(lines[start:end], "\n")
+	if truncated {
+		output += fmt.Sprintf("\n... truncated after %d bytes ...", defaultMaxReadBytes)
+	}
+	return textResult(output)
 }
 
 func (t ReadTool) resolve(path string) (string, error) {
@@ -106,4 +111,22 @@ func (t ReadTool) resolve(path string) (string, error) {
 		}
 	}
 	return "", cwdErr
+}
+
+func readFilePrefix(path string, maxBytes int) ([]byte, bool, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, false, err
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(io.LimitReader(file, int64(maxBytes)+1))
+	if err != nil {
+		return nil, false, err
+	}
+	truncated := len(data) > maxBytes
+	if truncated {
+		data = data[:maxBytes]
+	}
+	return data, truncated, nil
 }
