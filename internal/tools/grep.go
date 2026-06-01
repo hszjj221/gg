@@ -137,11 +137,10 @@ func grepFile(cwd, path, pattern string, limit int, matches *[]string) error {
 	if err != nil {
 		return err
 	}
-	if containsNUL(data) {
+	if isBinaryContent(data) {
 		return skippedGrepFileError{path: path, reason: "binary file"}
 	}
-	text := strings.ReplaceAll(string(data), "\r\n", "\n")
-	lines := strings.Split(text, "\n")
+	lines := splitTextLines(string(data))
 	rel, err := filepath.Rel(realCWD, path)
 	if err != nil {
 		return err
