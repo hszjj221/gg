@@ -81,10 +81,28 @@ func TestParseNoSkillsFlag(t *testing.T) {
 	}
 }
 
+func TestParseApprovalFlag(t *testing.T) {
+	args, err := Parse([]string{"--approval", "on-request", "-p", "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if args.Approval != "on-request" {
+		t.Fatalf("unexpected approval mode: %+v", args)
+	}
+}
+
+func TestParseRejectsInvalidApprovalFlag(t *testing.T) {
+	_, err := Parse([]string{"--approval", "sometimes", "-p", "hello"})
+	if err == nil || !strings.Contains(err.Error(), "approval must be one of") {
+		t.Fatalf("expected invalid approval error, got %v", err)
+	}
+}
+
 func TestHelpTextMentionsTUIInteractiveMode(t *testing.T) {
 	help := HelpText()
 
-	if !strings.Contains(help, "gg\n") || !strings.Contains(help, "TUI interactive mode") || !strings.Contains(help, "provider:model") {
+	if !strings.Contains(help, "gg\n") || !strings.Contains(help, "TUI interactive mode") || !strings.Contains(help, "provider:model") || !strings.Contains(help, "--approval") {
 		t.Fatalf("help text should mention TUI interactive mode:\n%s", help)
 	}
 }

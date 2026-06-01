@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -30,6 +31,35 @@ func (p *appFakeProvider) Complete(ctx context.Context, req agent.Request, onEve
 		},
 		StopReason: agent.StopReasonEndTurn,
 		Usage:      p.usage,
+	}, nil
+}
+
+type appToolProvider struct {
+	requests []agent.Request
+	command  string
+}
+
+func (p *appToolProvider) Complete(ctx context.Context, req agent.Request, onEvent func(agent.Event)) (agent.AssistantMessage, error) {
+	p.requests = append(p.requests, req)
+	if len(p.requests) == 1 {
+		return agent.AssistantMessage{
+			Message: agent.Message{
+				Role: agent.RoleAssistant,
+				ToolCalls: []agent.ToolCall{{
+					ID:        "call-1",
+					Name:      "bash",
+					Arguments: []byte(`{"command":` + strconv.Quote(p.command) + `}`),
+				}},
+			},
+			StopReason: agent.StopReasonToolUse,
+		}, nil
+	}
+	if onEvent != nil {
+		onEvent(agent.Event{Type: agent.EventTextDelta, Text: "done"})
+	}
+	return agent.AssistantMessage{
+		Message:    agent.Message{Role: agent.RoleAssistant, Content: "done", ContentBlocks: []agent.ContentBlock{{Type: agent.ContentText, Text: "done"}}},
+		StopReason: agent.StopReasonEndTurn,
 	}, nil
 }
 
@@ -161,6 +191,122 @@ func TestRunPrintModeIncludesSubagentTool(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("subagent tool missing from request tools: %+v", provider.requests[0].Tools)
+	}
+}
+
+func TestRunPrintModeAutoApprovalDoesNotPrompt(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "marker.txt")
+	var stdout, stderr strings.Builder
+	provider := &appToolProvider{command: "printf ok > " + strconv.Quote(marker)}
+
+	code := Run(context.Background(), []string{"-p", "--api-key", "key", "--no-session", "write marker"}, Options{
+		CWD:     dir,
+		HomeDir: filepath.Join(dir, "home"),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			return provider
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("auto print mode should execute without approval prompt: %v", err)
+	}
+	if strings.Contains(stderr.String(), "Approve tool call") {
+		t.Fatalf("auto print mode should not prompt: %q", stderr.String())
+	}
+}
+
+func TestRunApprovalOnRequestRequiresTerminal(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr strings.Builder
+	providerCalled := false
+
+	code := Run(context.Background(), []string{"-p", "--approval", "on-request", "--api-key", "key", "--no-session", "write marker"}, Options{
+		CWD:     dir,
+		HomeDir: filepath.Join(dir, "home"),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			providerCalled = true
+			return &appFakeProvider{}
+		},
+	})
+
+	if code == 0 {
+		t.Fatalf("expected on-request without terminal to fail")
+	}
+	if providerCalled {
+		t.Fatalf("provider should not be called when approval cannot prompt")
+	}
+	if !strings.Contains(stderr.String(), "--approval on-request requires a terminal") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
+func TestRunApprovalOnRequestAllowsToolInPromptMode(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "marker.txt")
+	var stdout, stderr strings.Builder
+	provider := &appToolProvider{command: "printf ok > " + strconv.Quote(marker)}
+
+	code := Run(context.Background(), []string{"-p", "--approval", "on-request", "--api-key", "key", "--no-session", "write marker"}, Options{
+		CWD:        dir,
+		HomeDir:    filepath.Join(dir, "home"),
+		Stdin:      strings.NewReader("y\n"),
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+		IsTerminal: func(any) bool { return true },
+		ProviderFactory: func(config.Config) agent.Provider {
+			return provider
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("approved tool should run: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "Approve tool call") || !strings.Contains(stderr.String(), "bash") {
+		t.Fatalf("approval prompt not written to stderr: %q", stderr.String())
+	}
+}
+
+func TestRunApprovalOnRequestDeniesToolInPromptMode(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "marker.txt")
+	var stdout, stderr strings.Builder
+	provider := &appToolProvider{command: "printf ok > " + strconv.Quote(marker)}
+
+	code := Run(context.Background(), []string{"-p", "--approval", "on-request", "--api-key", "key", "--no-session", "write marker"}, Options{
+		CWD:        dir,
+		HomeDir:    filepath.Join(dir, "home"),
+		Stdin:      strings.NewReader("n\n"),
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+		IsTerminal: func(any) bool { return true },
+		ProviderFactory: func(config.Config) agent.Provider {
+			return provider
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("denied tool should not create marker, stat err=%v", err)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("model should receive denied tool result and continue, requests=%d", len(provider.requests))
+	}
+	last := provider.requests[1].Messages[len(provider.requests[1].Messages)-1]
+	if !strings.Contains(last.Content, `tool call "bash" denied by user`) {
+		t.Fatalf("denied tool result not sent to model: %+v", last)
 	}
 }
 

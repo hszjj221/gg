@@ -62,6 +62,7 @@ gg --no-session -p "Explain this directory"
 gg --session .gg/session.jsonl -p "Continue from this file"
 gg --usage -p "Summarize this repository"
 gg --no-skills -p "Run without local skills"
+gg --approval on-request -p "Run tests and fix failures"
 gg -p "/skill:ca review and commit my changes"
 gg sessions list
 gg resume <id-or-path> "Continue from this session"
@@ -74,6 +75,13 @@ Interactive mode:
 - The TUI shows the conversation, a single-line prompt input, streaming replies, and a status bar.
 - Use `/model` to list configured models and `/model provider:model` to switch the provider/model used by later turns.
 - When stdin/stdout are not terminals, `gg` falls back to the simple line-based interactive mode for scripts and tests.
+
+Tool approval:
+
+- `--approval auto` is the default. TUI sessions ask before running `bash`, `edit`, or `write`; one-shot prompts and non-terminal runs keep the previous non-interactive behavior.
+- `--approval on-request` always asks before those tools run and requires a real terminal.
+- `--approval never` disables approval prompts.
+- Denying a tool call returns a tool error to the model so it can explain or choose another path.
 
 Provider/model configuration:
 

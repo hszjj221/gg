@@ -28,6 +28,7 @@ type Options struct {
 	Stderr          io.Writer
 	Version         string
 	HomeDir         string
+	IsTerminal      func(any) bool
 	ProviderFactory func(config.Config) agent.Provider
 }
 
@@ -35,6 +36,7 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	stdout := writerOrDefault(options.Stdout, os.Stdout)
 	stderr := writerOrDefault(options.Stderr, os.Stderr)
 	stdin := readerOrDefault(options.Stdin, os.Stdin)
+	isTerm := terminalChecker(options)
 
 	parsed, err := cli.Parse(argv)
 	if err != nil {
@@ -73,6 +75,10 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	if parsed.Command == cli.CommandSessionsList {
 		return runSessionsList(cfg, stdout, stderr)
 	}
+	if parsed.Approval == "on-request" && !bothTerminals(stdin, stdout, isTerm) {
+		fmt.Fprintln(stderr, "--approval on-request requires a terminal")
+		return 2
+	}
 	skillSet, err := loadSkills(parsed, cfg.CWD, options.HomeDir)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -102,16 +108,17 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	executor := newTurnExecutor(cfg, providerFactory, sessionStore, loaded.Messages, skillSet, modelRecorded)
 
 	if parsed.Prompt != "" {
-		return runPrompt(ctx, executor, parsed.Prompt, stdout, stderr, false, parsed.Usage)
+		return runPrompt(ctx, executor, parsed.Prompt, stdout, stderr, false, parsed.Usage, promptApprover(parsed, stdin, stderr))
 	}
 	if parsed.Print {
 		fmt.Fprintln(stderr, "prompt is required in print mode")
 		return 2
 	}
-	if shouldRunTUI(stdin, stdout) {
-		return runTUI(ctx, executor, cfg, stdin, stdout, stderr, parsed.Usage)
+	if shouldRunTUI(stdin, stdout, isTerm) {
+		return runTUI(ctx, executor, cfg, stdin, stdout, stderr, parsed.Usage, parsed.Approval != "never")
 	}
-	return runInteractive(ctx, executor, stdin, stdout, stderr, parsed.Usage)
+	reader := bufio.NewReader(stdin)
+	return runInteractive(ctx, executor, reader, stdout, stderr, parsed.Usage, interactiveApprover(parsed, reader, stderr, bothTerminals(stdin, stdout, isTerm)))
 }
 
 func runPrompt(
@@ -122,6 +129,7 @@ func runPrompt(
 	stderr io.Writer,
 	stream bool,
 	showUsage bool,
+	approver agent.Approver,
 ) int {
 	var onDelta func(string)
 	var streamed strings.Builder
@@ -131,7 +139,7 @@ func runPrompt(
 			fmt.Fprint(stdout, text)
 		}
 	}
-	result, err := executor.Run(ctx, prompt, onDelta)
+	result, err := executor.Run(ctx, prompt, onDelta, approver)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -178,7 +186,7 @@ func newTurnExecutor(cfg config.Config, providerFactory agentProviderFactory, st
 	}
 }
 
-func (e *turnExecutor) Run(ctx context.Context, prompt string, onDelta func(string)) (turnResult, error) {
+func (e *turnExecutor) Run(ctx context.Context, prompt string, onDelta func(string), approver agent.Approver) (turnResult, error) {
 	if result, ok, err := e.handleModelCommand(prompt); ok || err != nil {
 		return result, err
 	}
@@ -204,7 +212,7 @@ func (e *turnExecutor) Run(ctx context.Context, prompt string, onDelta func(stri
 		}
 	}
 	provider := e.providerFactory(e.cfg)
-	runner := agent.NewRunner(provider, defaultTools(e.cfg.CWD, provider, e.skillSet.ReadRoots()))
+	runner := agent.NewRunnerWithOptions(provider, defaultTools(e.cfg.CWD, provider, e.skillSet.ReadRoots()), agent.RunnerOptions{Approver: approver})
 	reply, err := runner.Run(ctx, messages, onEvent)
 	if err != nil {
 		return turnResult{}, err
@@ -319,30 +327,37 @@ func runSessionsList(cfg config.Config, stdout io.Writer, stderr io.Writer) int 
 func runInteractive(
 	ctx context.Context,
 	executor *turnExecutor,
-	stdin io.Reader,
+	stdin *bufio.Reader,
 	stdout io.Writer,
 	stderr io.Writer,
 	showUsage bool,
+	approver agent.Approver,
 ) int {
 	fmt.Fprintln(stdout, "gg interactive mode. Press Ctrl+D to exit.")
-	scanner := bufio.NewScanner(stdin)
 	for {
 		fmt.Fprint(stdout, "> ")
-		if !scanner.Scan() {
+		line, err := stdin.ReadString('\n')
+		if err == io.EOF && line == "" {
 			break
 		}
-		prompt := strings.TrimSpace(scanner.Text())
+		if err != nil && err != io.EOF {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		prompt := strings.TrimSpace(line)
 		if prompt == "" {
+			if err == io.EOF {
+				break
+			}
 			continue
 		}
-		code := runPrompt(ctx, executor, prompt, stdout, stderr, true, showUsage)
+		code := runPrompt(ctx, executor, prompt, stdout, stderr, true, showUsage, approver)
 		if code != 0 {
 			return code
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
+		if err == io.EOF {
+			break
+		}
 	}
 	return 0
 }
@@ -355,16 +370,18 @@ func runTUI(
 	stdout io.Writer,
 	stderr io.Writer,
 	showUsage bool,
+	enableApproval bool,
 ) int {
 	err := tui.Run(ctx, tui.Config{
 		CWD:             cfg.CWD,
 		ModelName:       cfg.Selection,
 		ShowUsage:       showUsage,
+		EnableApproval:  enableApproval,
 		InitialMessages: displayMessages(executor.history),
 		Input:           stdin,
 		Output:          stdout,
-		Submit: func(ctx context.Context, prompt string, onDelta func(string)) (tui.SubmitResult, error) {
-			result, err := executor.Run(ctx, prompt, onDelta)
+		Submit: func(ctx context.Context, prompt string, onDelta func(string), approver agent.Approver) (tui.SubmitResult, error) {
+			result, err := executor.Run(ctx, prompt, onDelta, approver)
 			return tui.SubmitResult{Content: result.Content, Usage: result.Usage, ModelName: result.ModelName}, err
 		},
 	})
@@ -463,8 +480,66 @@ func printUsage(stderr io.Writer, usage agent.Usage) {
 	fmt.Fprintf(stderr, "tokens: prompt=%d completion=%d total=%d\n", usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
 }
 
-func shouldRunTUI(stdin io.Reader, stdout io.Writer) bool {
-	return isTerminal(stdin) && isTerminal(stdout)
+type lineApprover struct {
+	reader *bufio.Reader
+	stderr io.Writer
+}
+
+func newLineApprover(reader *bufio.Reader, stderr io.Writer) agent.Approver {
+	return lineApprover{reader: reader, stderr: stderr}
+}
+
+func (a lineApprover) Approve(ctx context.Context, req agent.ApprovalRequest) (agent.ApprovalDecision, error) {
+	fmt.Fprintf(a.stderr, "\nApprove tool call: %s\n", req.ToolName)
+	if req.Summary != "" {
+		fmt.Fprintf(a.stderr, "%s\n", req.Summary)
+	}
+	if req.Details != "" {
+		fmt.Fprintf(a.stderr, "%s\n", req.Details)
+	}
+	fmt.Fprint(a.stderr, "Approve? [y/N] ")
+	answer, err := a.reader.ReadString('\n')
+	if err != nil && err != io.EOF {
+		return agent.ApprovalDecision{}, err
+	}
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	return agent.ApprovalDecision{Allow: answer == "y" || answer == "yes"}, nil
+}
+
+func promptApprover(args cli.Args, stdin io.Reader, stderr io.Writer) agent.Approver {
+	if args.Approval != "on-request" {
+		return nil
+	}
+	return newLineApprover(bufio.NewReader(stdin), stderr)
+}
+
+func interactiveApprover(args cli.Args, reader *bufio.Reader, stderr io.Writer, terminal bool) agent.Approver {
+	switch args.Approval {
+	case "never":
+		return nil
+	case "on-request":
+		return newLineApprover(reader, stderr)
+	case "auto":
+		if terminal {
+			return newLineApprover(reader, stderr)
+		}
+	}
+	return nil
+}
+
+func shouldRunTUI(stdin io.Reader, stdout io.Writer, isTerm func(any) bool) bool {
+	return bothTerminals(stdin, stdout, isTerm)
+}
+
+func bothTerminals(stdin io.Reader, stdout io.Writer, isTerm func(any) bool) bool {
+	return isTerm(stdin) && isTerm(stdout)
+}
+
+func terminalChecker(options Options) func(any) bool {
+	if options.IsTerminal != nil {
+		return options.IsTerminal
+	}
+	return isTerminal
 }
 
 func isTerminal(value any) bool {

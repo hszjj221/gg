@@ -92,6 +92,25 @@ type ToolResult struct {
 	Usage   Usage          `json:"usage,omitempty"`
 }
 
+type ApprovalRequest struct {
+	ToolName  string          `json:"toolName"`
+	Summary   string          `json:"summary"`
+	Details   string          `json:"details,omitempty"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
+}
+
+type ApprovalDecision struct {
+	Allow bool `json:"allow"`
+}
+
+type Approver interface {
+	Approve(context.Context, ApprovalRequest) (ApprovalDecision, error)
+}
+
+type ApprovalDescriber interface {
+	ApprovalRequest(json.RawMessage) (ApprovalRequest, error)
+}
+
 type Tool interface {
 	Name() string
 	Definition() ToolDefinition

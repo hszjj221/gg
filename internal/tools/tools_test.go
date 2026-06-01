@@ -126,6 +126,32 @@ func TestWriteToolCreatesParentDirectoriesAndOverwrites(t *testing.T) {
 	}
 }
 
+func TestWriteToolApprovalRequestPreviewsCreateAndOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	tool := NewWriteTool(dir)
+
+	create, err := tool.ApprovalRequest(json.RawMessage(`{"path":"new.txt","content":"new content\n"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if create.ToolName != "write" || !strings.Contains(create.Summary, "create new.txt") || !strings.Contains(create.Details, "new content") {
+		t.Fatalf("unexpected create approval request: %+v", create)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "new.txt"), []byte("old content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	overwrite, err := tool.ApprovalRequest(json.RawMessage(`{"path":"new.txt","content":"new content\n"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"overwrite new.txt", "old content", "new content"} {
+		if !strings.Contains(overwrite.Summary+"\n"+overwrite.Details, want) {
+			t.Fatalf("overwrite approval missing %q: %+v", want, overwrite)
+		}
+	}
+}
+
 func TestEditToolRequiresUniqueOldText(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.go")
@@ -164,6 +190,39 @@ func TestEditToolAppliesMultipleReplacementsAgainstOriginalFile(t *testing.T) {
 	}
 }
 
+func TestEditToolApprovalRequestPreviewsReplacement(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(path, []byte("before\nkeep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewEditTool(dir)
+
+	req, err := tool.ApprovalRequest(json.RawMessage(`{"path":"file.txt","edits":[{"oldText":"before","newText":"after"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{"edit file.txt", "1 replacement", "before", "after"} {
+		if !strings.Contains(req.Summary+"\n"+req.Details, want) {
+			t.Fatalf("edit approval missing %q: %+v", want, req)
+		}
+	}
+}
+
+func TestEditToolApprovalRequestReportsReplacementFailure(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewEditTool(dir)
+
+	_, err := tool.ApprovalRequest(json.RawMessage(`{"path":"file.txt","edits":[{"oldText":"missing","newText":"after"}]}`))
+	if err == nil || !strings.Contains(err.Error(), `oldText "missing" must match exactly once`) {
+		t.Fatalf("expected clear replacement error, got %v", err)
+	}
+}
+
 func TestBashToolReportsExitCodeAndOutput(t *testing.T) {
 	dir := t.TempDir()
 	tool := NewBashTool(dir, BashOptions{DefaultTimeout: 5 * time.Second})
@@ -175,6 +234,25 @@ func TestBashToolReportsExitCodeAndOutput(t *testing.T) {
 	}
 	if !strings.Contains(result.Content[0].Text, "hello") || !strings.Contains(result.Content[0].Text, "exit code 7") {
 		t.Fatalf("unexpected result: %s", result.Content[0].Text)
+	}
+}
+
+func TestBashToolApprovalRequestDescribesCommand(t *testing.T) {
+	dir := t.TempDir()
+	tool := NewBashTool(dir, BashOptions{DefaultTimeout: 5 * time.Second})
+
+	req, err := tool.ApprovalRequest(json.RawMessage(`{"command":"go test ./...","timeout":7}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if req.ToolName != "bash" || !strings.Contains(req.Summary, "go test ./...") {
+		t.Fatalf("unexpected bash approval summary: %+v", req)
+	}
+	for _, want := range []string{"command: go test ./...", "cwd: " + dir, "timeout: 7s"} {
+		if !strings.Contains(req.Details, want) {
+			t.Fatalf("bash approval details missing %q:\n%s", want, req.Details)
+		}
 	}
 }
 

@@ -14,7 +14,7 @@ import (
 	"github.com/hszjj221/gg/internal/agent"
 )
 
-type SubmitFunc func(context.Context, string, func(string)) (SubmitResult, error)
+type SubmitFunc func(context.Context, string, func(string), agent.Approver) (SubmitResult, error)
 
 type SubmitResult struct {
 	Content   string
@@ -31,6 +31,7 @@ type Config struct {
 	CWD             string
 	ModelName       string
 	ShowUsage       bool
+	EnableApproval  bool
 	InitialMessages []Message
 	Submit          SubmitFunc
 	Input           io.Reader
@@ -38,10 +39,11 @@ type Config struct {
 }
 
 type Model struct {
-	cwd       string
-	modelName string
-	showUsage bool
-	submit    SubmitFunc
+	cwd            string
+	modelName      string
+	showUsage      bool
+	enableApproval bool
+	submit         SubmitFunc
 
 	messages []Message
 	input    textinput.Model
@@ -53,6 +55,7 @@ type Model struct {
 	cancelRequested bool
 	cancel          context.CancelFunc
 	updates         chan tea.Msg
+	approval        *pendingApproval
 	lastUsage       agent.Usage
 	hasUsage        bool
 	err             error
@@ -65,6 +68,21 @@ type submitDoneMsg struct {
 	err    error
 }
 
+type approvalRequestMsg struct {
+	request  agent.ApprovalRequest
+	response chan approvalResponse
+}
+
+type approvalResponse struct {
+	decision agent.ApprovalDecision
+	err      error
+}
+
+type pendingApproval struct {
+	request  agent.ApprovalRequest
+	response chan approvalResponse
+}
+
 func NewModel(config Config) Model {
 	input := textinput.New()
 	input.Prompt = "> "
@@ -72,15 +90,16 @@ func NewModel(config Config) Model {
 	input.Focus()
 
 	model := Model{
-		cwd:       config.CWD,
-		modelName: config.ModelName,
-		showUsage: config.ShowUsage,
-		submit:    config.Submit,
-		messages:  append([]Message(nil), config.InitialMessages...),
-		input:     input,
-		viewport:  viewport.New(80, 20),
-		width:     80,
-		height:    24,
+		cwd:            config.CWD,
+		modelName:      config.ModelName,
+		showUsage:      config.ShowUsage,
+		enableApproval: config.EnableApproval,
+		submit:         config.Submit,
+		messages:       append([]Message(nil), config.InitialMessages...),
+		input:          input,
+		viewport:       viewport.New(80, 20),
+		width:          80,
+		height:         24,
 	}
 	model.applyLayout()
 	model.refreshViewport()
@@ -111,6 +130,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cancelRequested = false
 		m.cancel = nil
 		m.updates = nil
+		m.approval = nil
 		m.lastUsage = msg.result.Usage
 		m.hasUsage = true
 		if msg.err != nil {
@@ -133,7 +153,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input.Focus()
 		m.refreshViewport()
 		return m, nil
+	case approvalRequestMsg:
+		m.approval = &pendingApproval{request: msg.request, response: msg.response}
+		m.refreshViewport()
+		return m, nil
 	case tea.KeyMsg:
+		if m.approval != nil {
+			switch msg.String() {
+			case "y", "Y":
+				return m.resolveApproval(agent.ApprovalDecision{Allow: true}, nil)
+			case "n", "N", "esc":
+				return m.resolveApproval(agent.ApprovalDecision{Allow: false}, nil)
+			case "ctrl+c":
+				if m.cancel != nil {
+					m.cancel()
+				}
+				m.cancelRequested = true
+				return m.resolveApproval(agent.ApprovalDecision{Allow: false}, context.Canceled)
+			case "enter":
+				return m, nil
+			}
+		}
 		if m.busy {
 			switch msg.String() {
 			case "ctrl+c", "esc":
@@ -168,7 +208,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) View() string {
 	m.refreshViewport()
-	return lipgloss.JoinVertical(lipgloss.Left, m.viewport.View(), m.input.View(), m.statusLine())
+	parts := []string{m.viewport.View()}
+	if m.approval != nil {
+		parts = append(parts, m.approvalPanel())
+	}
+	parts = append(parts, m.input.View(), m.statusLine())
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 func (m Model) startSubmit(prompt string) (Model, tea.Cmd) {
@@ -186,7 +231,16 @@ func (m Model) startSubmit(prompt string) (Model, tea.Cmd) {
 	m.input.SetValue("")
 	m.input.Blur()
 	m.refreshViewport()
-	return m, tea.Batch(startSubmitCmd(m.submit, ctx, prompt, updates), waitForUpdateCmd(updates))
+	return m, tea.Batch(startSubmitCmd(m.submit, ctx, prompt, updates, m.enableApproval), waitForUpdateCmd(updates))
+}
+
+func (m Model) resolveApproval(decision agent.ApprovalDecision, err error) (Model, tea.Cmd) {
+	pending := m.approval
+	m.approval = nil
+	if pending != nil {
+		pending.response <- approvalResponse{decision: decision, err: err}
+	}
+	return m, waitForUpdateCmd(m.updates)
 }
 
 func (m *Model) applyLayout() {
@@ -242,6 +296,8 @@ func (m Model) statusLine() string {
 	}
 	if m.cancelRequested {
 		state = "canceling"
+	} else if m.approval != nil {
+		state = "approval"
 	}
 	parts := []string{"gg", shortPath(m.cwd), m.modelName, state}
 	if m.showUsage && m.hasUsage {
@@ -253,13 +309,40 @@ func (m Model) statusLine() string {
 	return statusStyle.Width(max(1, m.width)).Render(strings.Join(parts, " | "))
 }
 
-func startSubmitCmd(submit SubmitFunc, ctx context.Context, prompt string, updates chan tea.Msg) tea.Cmd {
+func (m Model) approvalPanel() string {
+	if m.approval == nil {
+		return ""
+	}
+	req := m.approval.request
+	var b strings.Builder
+	b.WriteString("Approve tool call")
+	if req.ToolName != "" {
+		b.WriteString(": ")
+		b.WriteString(req.ToolName)
+	}
+	if req.Summary != "" {
+		b.WriteString("\n")
+		b.WriteString(req.Summary)
+	}
+	if req.Details != "" {
+		b.WriteString("\n")
+		b.WriteString(req.Details)
+	}
+	b.WriteString("\n[y] approve  [n/esc] deny")
+	return approvalStyle.Width(max(1, m.width)).Render(b.String())
+}
+
+func startSubmitCmd(submit SubmitFunc, ctx context.Context, prompt string, updates chan tea.Msg, enableApproval bool) tea.Cmd {
 	return func() tea.Msg {
 		go func() {
 			defer close(updates)
 			if submit == nil {
 				updates <- submitDoneMsg{err: fmt.Errorf("submit function is not configured")}
 				return
+			}
+			var approver agent.Approver
+			if enableApproval {
+				approver = tuiApprover{updates: updates}
 			}
 			result, err := submit(ctx, prompt, func(delta string) {
 				if delta == "" {
@@ -269,10 +352,29 @@ func startSubmitCmd(submit SubmitFunc, ctx context.Context, prompt string, updat
 				case updates <- streamDeltaMsg(delta):
 				case <-ctx.Done():
 				}
-			})
+			}, approver)
 			updates <- submitDoneMsg{result: result, err: err}
 		}()
 		return nil
+	}
+}
+
+type tuiApprover struct {
+	updates chan tea.Msg
+}
+
+func (a tuiApprover) Approve(ctx context.Context, req agent.ApprovalRequest) (agent.ApprovalDecision, error) {
+	response := make(chan approvalResponse, 1)
+	select {
+	case a.updates <- approvalRequestMsg{request: req, response: response}:
+	case <-ctx.Done():
+		return agent.ApprovalDecision{}, ctx.Err()
+	}
+	select {
+	case result := <-response:
+		return result.decision, result.err
+	case <-ctx.Done():
+		return agent.ApprovalDecision{}, ctx.Err()
 	}
 }
 
@@ -300,5 +402,6 @@ var (
 	userLabelStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
 	assistantLabelStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
 	mutedStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	approvalStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("236")).Padding(0, 1)
 	statusStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("238"))
 )

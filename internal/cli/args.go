@@ -16,6 +16,7 @@ type Args struct {
 	Last         bool
 	Usage        bool
 	NoSkills     bool
+	Approval     string
 	APIKey       string
 	BaseURL      string
 	Model        string
@@ -50,6 +51,7 @@ func Parse(argv []string) (Args, error) {
 	fs.BoolVar(&args.Last, "last", false, "resume the latest session")
 	fs.BoolVar(&args.Usage, "usage", false, "print token usage to stderr")
 	fs.BoolVar(&args.NoSkills, "no-skills", false, "disable .agents/skills discovery")
+	fs.StringVar(&args.Approval, "approval", "auto", "tool approval mode: auto, never, or on-request")
 	fs.StringVar(&args.APIKey, "api-key", "", "API key")
 	fs.StringVar(&args.BaseURL, "base-url", "", "OpenAI-compatible base URL")
 	fs.StringVar(&args.Model, "model", "", "model selection as provider:model")
@@ -65,7 +67,19 @@ func Parse(argv []string) (Args, error) {
 	if err := parseCommand(&args, fs.Args()); err != nil {
 		return Args{}, err
 	}
+	if err := validateApproval(args.Approval); err != nil {
+		return Args{}, err
+	}
 	return args, nil
+}
+
+func validateApproval(mode string) error {
+	switch mode {
+	case "auto", "never", "on-request":
+		return nil
+	default:
+		return fmt.Errorf("approval must be one of: auto, never, on-request")
+	}
 }
 
 func parseCommand(args *Args, rest []string) error {
@@ -114,6 +128,7 @@ Options:
   --last                   resume the latest session
   --usage                  print token usage to stderr
   --no-skills              disable .agents/skills discovery
+  --approval <mode>        tool approval mode: auto, never, on-request (default: auto)
   -h, --help               show help
   -v, --version            show version`)
 }

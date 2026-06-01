@@ -46,6 +46,29 @@ func (t BashTool) Definition() agent.ToolDefinition {
 	}
 }
 
+func (t BashTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, error) {
+	var input struct {
+		Command string `json:"command"`
+		Timeout int    `json:"timeout"`
+	}
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return agent.ApprovalRequest{}, fmt.Errorf("invalid bash arguments: %w", err)
+	}
+	if input.Command == "" {
+		return agent.ApprovalRequest{}, fmt.Errorf("command is required")
+	}
+	timeout := t.options.DefaultTimeout
+	if input.Timeout > 0 {
+		timeout = time.Duration(input.Timeout) * time.Second
+	}
+	return agent.ApprovalRequest{
+		ToolName:  "bash",
+		Summary:   "bash: " + input.Command,
+		Details:   fmt.Sprintf("command: %s\ncwd: %s\ntimeout: %s", input.Command, t.cwd, timeout),
+		Arguments: raw,
+	}, nil
+}
+
 func (t BashTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {
 	var input struct {
 		Command string `json:"command"`

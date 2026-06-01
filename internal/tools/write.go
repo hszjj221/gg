@@ -35,6 +35,35 @@ func (t WriteTool) Definition() agent.ToolDefinition {
 	}
 }
 
+func (t WriteTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, error) {
+	var input struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return agent.ApprovalRequest{}, fmt.Errorf("invalid write arguments: %w", err)
+	}
+	path, err := resolveInsideCWD(t.cwd, input.Path)
+	if err != nil {
+		return agent.ApprovalRequest{}, err
+	}
+	operation := "create"
+	before := ""
+	if data, err := os.ReadFile(path); err == nil {
+		operation = "overwrite"
+		before = string(data)
+	} else if !os.IsNotExist(err) {
+		return agent.ApprovalRequest{}, err
+	}
+	details := fmt.Sprintf("path: %s\noperation: %s\ncontent bytes: %d\n\n%s", input.Path, operation, len(input.Content), contentChangePreview(before, input.Content))
+	return agent.ApprovalRequest{
+		ToolName:  "write",
+		Summary:   fmt.Sprintf("write %s %s (%d bytes)", operation, input.Path, len(input.Content)),
+		Details:   details,
+		Arguments: raw,
+	}, nil
+}
+
 func (t WriteTool) Execute(_ context.Context, raw json.RawMessage) ToolResult {
 	var input struct {
 		Path    string `json:"path"`

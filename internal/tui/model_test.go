@@ -36,7 +36,7 @@ func TestEnterSubmitsPromptAndRecordsUsage(t *testing.T) {
 		CWD:       "/tmp/project",
 		ModelName: "openai:gpt-test",
 		ShowUsage: true,
-		Submit: func(ctx context.Context, prompt string, onDelta func(string)) (SubmitResult, error) {
+		Submit: func(ctx context.Context, prompt string, onDelta func(string), approver agent.Approver) (SubmitResult, error) {
 			prompts = append(prompts, prompt)
 			return SubmitResult{
 				Content:   "assistant reply",
@@ -86,7 +86,7 @@ func TestStreamingDeltaUpdatesPendingAssistantMessage(t *testing.T) {
 	model := NewModel(Config{
 		CWD:       "/tmp/project",
 		ModelName: "openai:gpt-test",
-		Submit: func(ctx context.Context, prompt string, onDelta func(string)) (SubmitResult, error) {
+		Submit: func(ctx context.Context, prompt string, onDelta func(string), approver agent.Approver) (SubmitResult, error) {
 			onDelta("he")
 			onDelta("llo")
 			return SubmitResult{Content: "hello"}, nil
@@ -107,7 +107,7 @@ func TestSubmitErrorLeavesModelIdleAndShowsError(t *testing.T) {
 	model := NewModel(Config{
 		CWD:       "/tmp/project",
 		ModelName: "openai:gpt-test",
-		Submit: func(ctx context.Context, prompt string, onDelta func(string)) (SubmitResult, error) {
+		Submit: func(ctx context.Context, prompt string, onDelta func(string), approver agent.Approver) (SubmitResult, error) {
 			return SubmitResult{}, errors.New("provider failed")
 		},
 	})
@@ -134,7 +134,7 @@ func TestBusyEnterDoesNotSubmitAgain(t *testing.T) {
 	model := NewModel(Config{
 		CWD:       "/tmp/project",
 		ModelName: "openai:gpt-test",
-		Submit: func(ctx context.Context, prompt string, onDelta func(string)) (SubmitResult, error) {
+		Submit: func(ctx context.Context, prompt string, onDelta func(string), approver agent.Approver) (SubmitResult, error) {
 			calls++
 			started <- struct{}{}
 			<-ctx.Done()
@@ -184,8 +184,83 @@ func TestResizeUpdatesLayout(t *testing.T) {
 	}
 }
 
+func TestApprovalRequestCanBeApproved(t *testing.T) {
+	model := NewModel(Config{
+		CWD:            "/tmp/project",
+		ModelName:      "openai:gpt-test",
+		EnableApproval: true,
+		Submit: func(ctx context.Context, prompt string, onDelta func(string), approver agent.Approver) (SubmitResult, error) {
+			decision, err := approver.Approve(ctx, agent.ApprovalRequest{
+				ToolName: "bash",
+				Summary:  "bash: go test ./...",
+				Details:  "command: go test ./...",
+			})
+			if err != nil {
+				return SubmitResult{}, err
+			}
+			if !decision.Allow {
+				return SubmitResult{Content: "denied"}, nil
+			}
+			return SubmitResult{Content: "approved"}, nil
+		},
+	})
+	model, _ = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 20})
+	model.input.SetValue("run tests")
+
+	model, cmd := updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	msg := nextMsg(t, cmd)
+	model, cmd = updateModel(t, model, msg)
+
+	if model.approval == nil || !strings.Contains(model.View(), "Approve tool call") || !strings.Contains(model.View(), "go test ./...") {
+		t.Fatalf("approval request not rendered:\n%s", model.View())
+	}
+
+	model, cmd = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	model = drainCommands(t, model, cmd)
+
+	if model.busy || model.approval != nil {
+		t.Fatalf("model should be idle after approving")
+	}
+	if got := model.messages[len(model.messages)-1].Content; got != "approved" {
+		t.Fatalf("unexpected approved content: %q", got)
+	}
+}
+
+func TestApprovalRequestCanBeDenied(t *testing.T) {
+	model := NewModel(Config{
+		CWD:            "/tmp/project",
+		ModelName:      "openai:gpt-test",
+		EnableApproval: true,
+		Submit: func(ctx context.Context, prompt string, onDelta func(string), approver agent.Approver) (SubmitResult, error) {
+			decision, err := approver.Approve(ctx, agent.ApprovalRequest{ToolName: "write", Summary: "write overwrite file.txt"})
+			if err != nil {
+				return SubmitResult{}, err
+			}
+			if decision.Allow {
+				return SubmitResult{Content: "approved"}, nil
+			}
+			return SubmitResult{Content: "denied"}, nil
+		},
+	})
+	model, _ = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 20})
+	model.input.SetValue("write file")
+
+	model, cmd := updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	msg := nextMsg(t, cmd)
+	model, cmd = updateModel(t, model, msg)
+	model, cmd = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	model = drainCommands(t, model, cmd)
+
+	if model.busy || model.approval != nil {
+		t.Fatalf("model should be idle after denying")
+	}
+	if got := model.messages[len(model.messages)-1].Content; got != "denied" {
+		t.Fatalf("unexpected denied content: %q", got)
+	}
+}
+
 func successSubmit(content string) SubmitFunc {
-	return func(ctx context.Context, prompt string, onDelta func(string)) (SubmitResult, error) {
+	return func(ctx context.Context, prompt string, onDelta func(string), approver agent.Approver) (SubmitResult, error) {
 		return SubmitResult{Content: content}, nil
 	}
 }

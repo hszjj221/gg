@@ -51,6 +51,43 @@ func (t EditTool) Definition() agent.ToolDefinition {
 	}
 }
 
+func (t EditTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, error) {
+	var input struct {
+		Path  string            `json:"path"`
+		Edits []editReplacement `json:"edits"`
+	}
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return agent.ApprovalRequest{}, fmt.Errorf("invalid edit arguments: %w", err)
+	}
+	if len(input.Edits) == 0 {
+		return agent.ApprovalRequest{}, fmt.Errorf("edits must contain at least one replacement")
+	}
+	path, err := resolveInsideCWD(t.cwd, input.Path)
+	if err != nil {
+		return agent.ApprovalRequest{}, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return agent.ApprovalRequest{}, err
+	}
+	original := string(data)
+	edits, err := locateEdits(original, input.Edits)
+	if err != nil {
+		return agent.ApprovalRequest{}, err
+	}
+	updated := applyLocatedEdits(original, edits)
+	replacementLabel := "replacements"
+	if len(edits) == 1 {
+		replacementLabel = "replacement"
+	}
+	return agent.ApprovalRequest{
+		ToolName:  "edit",
+		Summary:   fmt.Sprintf("edit %s (%d %s)", input.Path, len(edits), replacementLabel),
+		Details:   fmt.Sprintf("path: %s\nreplacements: %d\n\n%s", input.Path, len(edits), contentChangePreview(original, updated)),
+		Arguments: raw,
+	}, nil
+}
+
 func (t EditTool) Execute(_ context.Context, raw json.RawMessage) ToolResult {
 	var input struct {
 		Path  string            `json:"path"`

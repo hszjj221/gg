@@ -11,6 +11,7 @@ const defaultMaxTurns = 32
 
 type RunnerOptions struct {
 	MaxTurns int
+	Approver Approver
 }
 
 type Runner struct {
@@ -18,6 +19,7 @@ type Runner struct {
 	tools    map[string]Tool
 	defs     []ToolDefinition
 	maxTurns int
+	approver Approver
 
 	transcript []Message
 	usage      Usage
@@ -38,7 +40,7 @@ func NewRunnerWithOptions(provider Provider, tools []Tool, options RunnerOptions
 	if maxTurns <= 0 {
 		maxTurns = defaultMaxTurns
 	}
-	return &Runner{provider: provider, tools: toolMap, defs: defs, maxTurns: maxTurns}
+	return &Runner{provider: provider, tools: toolMap, defs: defs, maxTurns: maxTurns, approver: options.Approver}
 }
 
 func (r *Runner) Transcript() []Message {
@@ -102,7 +104,38 @@ func (r *Runner) executeToolCall(ctx context.Context, call ToolCall) ToolResult 
 			}},
 		}
 	}
+	if r.approver != nil {
+		if describer, ok := tool.(ApprovalDescriber); ok {
+			req, err := describer.ApprovalRequest(call.Arguments)
+			if err != nil {
+				return toolError(fmt.Errorf("approval request for tool %q failed: %w", call.Name, err))
+			}
+			if req.ToolName == "" {
+				req.ToolName = call.Name
+			}
+			if len(req.Arguments) == 0 {
+				req.Arguments = call.Arguments
+			}
+			decision, err := r.approver.Approve(ctx, req)
+			if err != nil {
+				return toolError(fmt.Errorf("approval failed for tool %q: %w", call.Name, err))
+			}
+			if !decision.Allow {
+				return toolError(fmt.Errorf("tool call %q denied by user", call.Name))
+			}
+		}
+	}
 	return tool.Execute(ctx, call.Arguments)
+}
+
+func toolError(err error) ToolResult {
+	return ToolResult{
+		IsError: true,
+		Content: []ContentBlock{{
+			Type: ContentText,
+			Text: err.Error(),
+		}},
+	}
 }
 
 func resultText(result ToolResult) string {

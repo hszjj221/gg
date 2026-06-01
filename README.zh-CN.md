@@ -62,6 +62,7 @@ gg --no-session -p "Explain this directory"
 gg --session .gg/session.jsonl -p "Continue from this file"
 gg --usage -p "Summarize this repository"
 gg --no-skills -p "Run without local skills"
+gg --approval on-request -p "Run tests and fix failures"
 gg -p "/skill:ca review and commit my changes"
 gg sessions list
 gg resume <id-or-path> "Continue from this session"
@@ -74,6 +75,13 @@ gg --continue "Resume the latest session"
 - TUI 会展示对话、单行 prompt 输入框、streaming 回复和状态栏。
 - 使用 `/model` 查看已配置模型，使用 `/model provider:model` 切换后续 turn 使用的 provider/model。
 - 当 stdin/stdout 不是终端时，`gg` 会回退到简单的按行交互模式，方便脚本和测试使用。
+
+工具审批：
+
+- `--approval auto` 是默认值。TUI 会在运行 `bash`、`edit` 或 `write` 前询问；一次性 prompt 和非终端运行保持原来的非交互行为。
+- `--approval on-request` 会在这些工具运行前始终询问，并要求真实终端。
+- `--approval never` 会关闭审批提示。
+- 拒绝工具调用时，会把 tool error 返回给模型，模型可以解释原因或选择其他路径。
 
 Provider/model 配置：
 
