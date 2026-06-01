@@ -22,6 +22,8 @@ type BashTool struct {
 	options BashOptions
 }
 
+const maxBashOutputBytes = 256 * 1024
+
 func NewBashTool(cwd string, options BashOptions) BashTool {
 	if options.DefaultTimeout == 0 {
 		options.DefaultTimeout = 2 * time.Minute
@@ -93,7 +95,7 @@ func (t BashTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {
 	}
 	cmd := exec.CommandContext(runCtx, shell, "-lc", input.Command)
 	cmd.Dir = t.cwd
-	var output bytes.Buffer
+	output := newLimitedOutputBuffer(maxBashOutputBytes)
 	cmd.Stdout = &output
 	cmd.Stderr = &output
 	err := cmd.Run()
@@ -109,4 +111,40 @@ func (t BashTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {
 		return errorResult(err)
 	}
 	return textResult(text)
+}
+
+type limitedOutputBuffer struct {
+	buf       bytes.Buffer
+	limit     int
+	truncated int
+}
+
+func newLimitedOutputBuffer(limit int) limitedOutputBuffer {
+	return limitedOutputBuffer{limit: limit}
+}
+
+func (b *limitedOutputBuffer) Write(p []byte) (int, error) {
+	if b.limit <= 0 {
+		b.truncated += len(p)
+		return len(p), nil
+	}
+	remaining := b.limit - b.buf.Len()
+	if remaining > 0 {
+		if remaining > len(p) {
+			remaining = len(p)
+		}
+		_, _ = b.buf.Write(p[:remaining])
+	}
+	if remaining < len(p) {
+		b.truncated += len(p) - remaining
+	}
+	return len(p), nil
+}
+
+func (b *limitedOutputBuffer) String() string {
+	text := b.buf.String()
+	if b.truncated == 0 {
+		return text
+	}
+	return text + fmt.Sprintf("\n... output truncated after %d bytes, omitted %d bytes ...", b.limit, b.truncated)
 }

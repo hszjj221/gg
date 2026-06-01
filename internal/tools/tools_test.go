@@ -322,6 +322,24 @@ func TestBashToolReportsExitCodeAndOutput(t *testing.T) {
 	}
 }
 
+func TestBashToolTruncatesLargeOutput(t *testing.T) {
+	dir := t.TempDir()
+	tool := NewBashTool(dir, BashOptions{DefaultTimeout: 5 * time.Second})
+
+	result := executeTool(t, tool, `{"command":"yes x | head -c 307200","timeout":5}`)
+
+	if result.IsError {
+		t.Fatalf("expected success, got error: %s", result.Content[0].Text)
+	}
+	text := result.Content[0].Text
+	if len(text) > 270*1024 {
+		t.Fatalf("bash output was not capped, got %d bytes", len(text))
+	}
+	if !strings.Contains(text, "output truncated") {
+		t.Fatalf("truncation marker missing from output")
+	}
+}
+
 func TestBashToolApprovalRequestDescribesCommand(t *testing.T) {
 	dir := t.TempDir()
 	tool := NewBashTool(dir, BashOptions{DefaultTimeout: 5 * time.Second})
