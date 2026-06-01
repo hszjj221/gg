@@ -15,6 +15,10 @@ const (
 	DefaultModel     = "gpt-4.1"
 	DefaultSelection = DefaultProvider + ":" + DefaultModel
 
+	DefaultMaxPromptTokens  = 24000
+	DefaultTailTurns        = 6
+	DefaultSummaryMaxTokens = 1200
+
 	ProviderTypeOpenAICompatible = "openai-compatible"
 )
 
@@ -34,6 +38,13 @@ type ProviderConfig struct {
 	Models  []string `json:"models"`
 }
 
+type ContextConfig struct {
+	MaxPromptTokens  int  `json:"maxPromptTokens"`
+	TailTurns        int  `json:"tailTurns"`
+	SummaryMaxTokens int  `json:"summaryMaxTokens"`
+	AutoCompact      bool `json:"autoCompact"`
+}
+
 type Config struct {
 	APIKey       string
 	BaseURL      string
@@ -42,6 +53,7 @@ type Config struct {
 	ProviderType string
 	Selection    string
 	Providers    map[string]ProviderConfig
+	Context      ContextConfig
 	SessionDir   string
 	CWD          string
 
@@ -52,6 +64,14 @@ type Config struct {
 type fileConfig struct {
 	Default   string                    `json:"default"`
 	Providers map[string]ProviderConfig `json:"providers"`
+	Context   contextFileConfig         `json:"context"`
+}
+
+type contextFileConfig struct {
+	MaxPromptTokens  *int  `json:"maxPromptTokens"`
+	TailTurns        *int  `json:"tailTurns"`
+	SummaryMaxTokens *int  `json:"summaryMaxTokens"`
+	AutoCompact      *bool `json:"autoCompact"`
 }
 
 func Resolve(options Options) (Config, error) {
@@ -73,9 +93,14 @@ func Resolve(options Options) (Config, error) {
 	if err := validateProviders(cfgFile.Providers); err != nil {
 		return Config{}, err
 	}
+	contextConfig, err := resolveContextConfig(cfgFile.Context)
+	if err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
 		Providers:       cfgFile.Providers,
+		Context:         contextConfig,
 		SessionDir:      sessionDir,
 		CWD:             cwd,
 		apiKeyOverride:  options.APIKey,
@@ -165,6 +190,37 @@ func legacyConfig() fileConfig {
 			},
 		},
 	}
+}
+
+func resolveContextConfig(file contextFileConfig) (ContextConfig, error) {
+	cfg := ContextConfig{
+		MaxPromptTokens:  DefaultMaxPromptTokens,
+		TailTurns:        DefaultTailTurns,
+		SummaryMaxTokens: DefaultSummaryMaxTokens,
+		AutoCompact:      true,
+	}
+	if file.MaxPromptTokens != nil {
+		cfg.MaxPromptTokens = *file.MaxPromptTokens
+	}
+	if file.TailTurns != nil {
+		cfg.TailTurns = *file.TailTurns
+	}
+	if file.SummaryMaxTokens != nil {
+		cfg.SummaryMaxTokens = *file.SummaryMaxTokens
+	}
+	if file.AutoCompact != nil {
+		cfg.AutoCompact = *file.AutoCompact
+	}
+	if cfg.MaxPromptTokens <= 0 {
+		return ContextConfig{}, fmt.Errorf("context.maxPromptTokens must be greater than 0")
+	}
+	if cfg.TailTurns < 1 {
+		return ContextConfig{}, fmt.Errorf("context.tailTurns must be at least 1")
+	}
+	if cfg.SummaryMaxTokens <= 0 {
+		return ContextConfig{}, fmt.Errorf("context.summaryMaxTokens must be greater than 0")
+	}
+	return cfg, nil
 }
 
 func validateProviders(providers map[string]ProviderConfig) error {

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -60,6 +61,38 @@ func (p *appToolProvider) Complete(ctx context.Context, req agent.Request, onEve
 	}
 	return agent.AssistantMessage{
 		Message:    agent.Message{Role: agent.RoleAssistant, Content: "done", ContentBlocks: []agent.ContentBlock{{Type: agent.ContentText, Text: "done"}}},
+		StopReason: agent.StopReasonEndTurn,
+	}, nil
+}
+
+type appContextProvider struct {
+	requests []agent.Request
+	summary  string
+	usage    agent.Usage
+	err      error
+}
+
+func (p *appContextProvider) Complete(ctx context.Context, req agent.Request, onEvent func(agent.Event)) (agent.AssistantMessage, error) {
+	p.requests = append(p.requests, req)
+	if len(req.Tools) == 0 {
+		if p.err != nil {
+			return agent.AssistantMessage{}, p.err
+		}
+		content := p.summary
+		if content == "" {
+			content = "compressed summary"
+		}
+		return agent.AssistantMessage{
+			Message:    agent.Message{Role: agent.RoleAssistant, Content: content, ContentBlocks: []agent.ContentBlock{{Type: agent.ContentText, Text: content}}},
+			StopReason: agent.StopReasonEndTurn,
+			Usage:      p.usage,
+		}, nil
+	}
+	if onEvent != nil {
+		onEvent(agent.Event{Type: agent.EventTextDelta, Text: "final"})
+	}
+	return agent.AssistantMessage{
+		Message:    agent.Message{Role: agent.RoleAssistant, Content: "final", ContentBlocks: []agent.ContentBlock{{Type: agent.ContentText, Text: "final"}}},
 		StopReason: agent.StopReasonEndTurn,
 	}, nil
 }
@@ -233,6 +266,7 @@ func TestTurnExecutorForwardsToolEvents(t *testing.T) {
 		func(config.Config) agent.Provider { return provider },
 		nil,
 		nil,
+		nil,
 		skills.Set{},
 		true,
 	)
@@ -256,6 +290,263 @@ func TestTurnExecutorForwardsToolEvents(t *testing.T) {
 	}
 	if events[2].Type != agent.EventTextDelta || events[2].Text != "done" {
 		t.Fatalf("missing final text delta: %+v", events)
+	}
+}
+
+func TestTurnExecutorDoesNotCompactWhenUnderBudget(t *testing.T) {
+	dir := t.TempDir()
+	provider := &appContextProvider{}
+	cfg := config.Config{
+		CWD:       dir,
+		Selection: "openai:gpt-4.1",
+		Context:   config.ContextConfig{MaxPromptTokens: 10000, TailTurns: 1, SummaryMaxTokens: 100, AutoCompact: true},
+	}
+	executor := newTurnExecutor(
+		cfg,
+		func(config.Config) agent.Provider { return provider },
+		nil,
+		[]agent.Message{{Role: agent.RoleUser, Content: "short history"}},
+		nil,
+		skills.Set{},
+		true,
+	)
+
+	if _, err := executor.Run(context.Background(), "new task", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(provider.requests) != 1 {
+		t.Fatalf("expected only main request, got %d", len(provider.requests))
+	}
+	if len(provider.requests[0].Tools) == 0 {
+		t.Fatalf("main request should include tools")
+	}
+}
+
+func TestTurnExecutorAutoCompactsWhenOverBudget(t *testing.T) {
+	dir := t.TempDir()
+	sessionPath := filepath.Join(dir, "session.jsonl")
+	store, err := session.NewStore(sessionPath, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := []agent.Message{
+		{Role: agent.RoleUser, Content: strings.Repeat("old user ", 40)},
+		{Role: agent.RoleAssistant, Content: strings.Repeat("old assistant ", 40)},
+		{Role: agent.RoleUser, Content: "recent user"},
+		{Role: agent.RoleAssistant, Content: "recent assistant"},
+	}
+	for _, message := range history {
+		if err := store.AppendMessage(message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	provider := &appContextProvider{summary: "old discussion summary", usage: agent.Usage{PromptTokens: 5, CompletionTokens: 2, TotalTokens: 7}}
+	cfg := config.Config{
+		CWD:       dir,
+		Selection: "openai:gpt-4.1",
+		Context:   config.ContextConfig{MaxPromptTokens: 1, TailTurns: 1, SummaryMaxTokens: 100, AutoCompact: true},
+	}
+	executor := newTurnExecutor(
+		cfg,
+		func(config.Config) agent.Provider { return provider },
+		store,
+		history,
+		nil,
+		skills.Set{},
+		true,
+	)
+
+	result, err := executor.Run(context.Background(), "new task", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.Usage.TotalTokens != 7 {
+		t.Fatalf("summary usage should be included: %+v", result.Usage)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("expected summary and main requests, got %d", len(provider.requests))
+	}
+	if len(provider.requests[0].Tools) != 0 {
+		t.Fatalf("summary request should not include tools")
+	}
+	mainMessages := provider.requests[1].Messages
+	if !containsMessage(mainMessages, "old discussion summary") {
+		t.Fatalf("main request missing summary: %+v", mainMessages)
+	}
+	if containsMessage(mainMessages, "old assistant") {
+		t.Fatalf("main request should not include compacted old text: %+v", mainMessages)
+	}
+	if !containsMessage(mainMessages, "recent user") || !containsMessage(mainMessages, "new task") {
+		t.Fatalf("main request missing tail/current prompt: %+v", mainMessages)
+	}
+	loaded, err := session.Load(sessionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.LastSummary == nil || loaded.LastSummary.Summary != "old discussion summary" || loaded.LastSummary.ThroughMessageCount != 2 {
+		t.Fatalf("summary not persisted: %+v", loaded.LastSummary)
+	}
+	if len(loaded.Usages) != 1 || loaded.Usages[0].Usage.TotalTokens != 7 {
+		t.Fatalf("summary usage not persisted with run usage: %+v", loaded.Usages)
+	}
+}
+
+func TestCompactCommandWritesSummaryWithoutAppendingMessages(t *testing.T) {
+	dir := t.TempDir()
+	sessionPath := filepath.Join(dir, "session.jsonl")
+	store, err := session.NewStore(sessionPath, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := []agent.Message{
+		{Role: agent.RoleUser, Content: "old user"},
+		{Role: agent.RoleAssistant, Content: "old assistant"},
+		{Role: agent.RoleUser, Content: "recent user"},
+		{Role: agent.RoleAssistant, Content: "recent assistant"},
+	}
+	for _, message := range history {
+		if err := store.AppendMessage(message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	provider := &appContextProvider{summary: "manual summary", usage: agent.Usage{PromptTokens: 3, CompletionTokens: 1, TotalTokens: 4}}
+	cfg := config.Config{
+		CWD:       dir,
+		Selection: "openai:gpt-4.1",
+		Context:   config.ContextConfig{MaxPromptTokens: 1000, TailTurns: 1, SummaryMaxTokens: 100, AutoCompact: true},
+	}
+	executor := newTurnExecutor(
+		cfg,
+		func(config.Config) agent.Provider { return provider },
+		store,
+		history,
+		nil,
+		skills.Set{},
+		true,
+	)
+
+	result, err := executor.Run(context.Background(), "/compact", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(result.Content, "context compacted: summarized 2 messages, kept 1 turns") {
+		t.Fatalf("unexpected compact result: %q", result.Content)
+	}
+	loaded, err := session.Load(sessionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Messages) != 4 {
+		t.Fatalf("/compact should not append chat messages: %+v", loaded.Messages)
+	}
+	if loaded.LastSummary == nil || loaded.LastSummary.Summary != "manual summary" || loaded.LastSummary.ThroughMessageCount != 2 {
+		t.Fatalf("summary not persisted: %+v", loaded.LastSummary)
+	}
+	if len(loaded.Usages) != 1 || loaded.Usages[0].Usage.TotalTokens != 4 {
+		t.Fatalf("manual compact usage not persisted: %+v", loaded.Usages)
+	}
+}
+
+func TestAutoCompactProviderErrorStopsMainRequest(t *testing.T) {
+	dir := t.TempDir()
+	provider := &appContextProvider{err: errors.New("summarizer down")}
+	cfg := config.Config{
+		CWD:       dir,
+		Selection: "openai:gpt-4.1",
+		Context:   config.ContextConfig{MaxPromptTokens: 1, TailTurns: 1, SummaryMaxTokens: 100, AutoCompact: true},
+	}
+	executor := newTurnExecutor(
+		cfg,
+		func(config.Config) agent.Provider { return provider },
+		nil,
+		[]agent.Message{
+			{Role: agent.RoleUser, Content: strings.Repeat("old ", 50)},
+			{Role: agent.RoleAssistant, Content: strings.Repeat("assistant ", 50)},
+			{Role: agent.RoleUser, Content: "recent"},
+		},
+		nil,
+		skills.Set{},
+		true,
+	)
+
+	_, err := executor.Run(context.Background(), "new task", nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "context compaction failed") {
+		t.Fatalf("expected compaction error, got %v", err)
+	}
+	if len(provider.requests) != 1 || len(provider.requests[0].Tools) != 0 {
+		t.Fatalf("main request should not run after compaction error: %+v", provider.requests)
+	}
+}
+
+func TestContextCommandDoesNotCallProvider(t *testing.T) {
+	dir := t.TempDir()
+	providerCalled := false
+	cfg := config.Config{
+		CWD:       dir,
+		Selection: "openai:gpt-4.1",
+		Context:   config.ContextConfig{MaxPromptTokens: 1000, TailTurns: 2, SummaryMaxTokens: 100, AutoCompact: true},
+	}
+	executor := newTurnExecutor(
+		cfg,
+		func(config.Config) agent.Provider {
+			providerCalled = true
+			return &appContextProvider{}
+		},
+		nil,
+		[]agent.Message{{Role: agent.RoleUser, Content: "hello"}},
+		&session.SummaryEntry{Summary: "prior summary", ThroughMessageCount: 1},
+		skills.Set{},
+		true,
+	)
+
+	result, err := executor.Run(context.Background(), "/context", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if providerCalled {
+		t.Fatalf("/context should not call provider")
+	}
+	if !strings.Contains(result.Content, "maxPromptTokens=1000") || !strings.Contains(result.Content, "summary=true") || !strings.Contains(result.Content, "tailTurns=2") {
+		t.Fatalf("unexpected context output: %q", result.Content)
+	}
+}
+
+func TestRunContinueUsesLatestSummary(t *testing.T) {
+	dir := t.TempDir()
+	sessionDir := filepath.Join(dir, "sessions")
+	sessionPath := filepath.Join(session.CWDDir(sessionDir, dir), "session.jsonl")
+	store, err := session.NewStore(sessionPath, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage(agent.Message{Role: agent.RoleUser, Content: "old user"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendSummary("persisted summary", 1); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	provider := &appFakeProvider{}
+
+	code := Run(context.Background(), []string{"--continue", "--no-skills", "--session-dir", sessionDir, "next"}, Options{
+		CWD:     dir,
+		HomeDir: filepath.Join(dir, "home"),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			return provider
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	if len(provider.requests) != 1 || !containsMessage(provider.requests[0].Messages, "persisted summary") {
+		t.Fatalf("resume request missing persisted summary: %+v", provider.requests)
 	}
 }
 
@@ -532,6 +823,15 @@ func writeAppSkill(t *testing.T, dir string, content string) {
 	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func containsMessage(messages []agent.Message, text string) bool {
+	for _, message := range messages {
+		if strings.Contains(message.Content, text) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRunContinueLoadsLatestSession(t *testing.T) {

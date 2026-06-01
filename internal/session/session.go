@@ -48,13 +48,24 @@ type ModelEntry struct {
 	Selection string  `json:"selection"`
 }
 
+type SummaryEntry struct {
+	Type                string  `json:"type"`
+	ID                  string  `json:"id"`
+	ParentID            *string `json:"parentId"`
+	Timestamp           string  `json:"timestamp"`
+	Summary             string  `json:"summary"`
+	ThroughMessageCount int     `json:"throughMessageCount"`
+}
+
 type Loaded struct {
-	Header    Header
-	Entries   []MessageEntry
-	Usages    []UsageEntry
-	Models    []ModelEntry
-	LastModel *ModelEntry
-	Messages  []agent.Message
+	Header      Header
+	Entries     []MessageEntry
+	Usages      []UsageEntry
+	Models      []ModelEntry
+	Summaries   []SummaryEntry
+	LastModel   *ModelEntry
+	LastSummary *SummaryEntry
+	Messages    []agent.Message
 }
 
 type Store struct {
@@ -178,6 +189,26 @@ func (s *Store) AppendModel(provider, model string) error {
 	return writeJSONLine(file, entry)
 }
 
+func (s *Store) AppendSummary(summary string, throughMessageCount int) error {
+	if s == nil {
+		return nil
+	}
+	entry := SummaryEntry{
+		Type:                "summary",
+		ID:                  newID(),
+		ParentID:            s.lastID,
+		Timestamp:           time.Now().UTC().Format(time.RFC3339Nano),
+		Summary:             summary,
+		ThroughMessageCount: throughMessageCount,
+	}
+	file, err := os.OpenFile(s.path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return writeJSONLine(file, entry)
+}
+
 func Load(path string) (Loaded, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -228,6 +259,14 @@ func Load(path string) (Loaded, error) {
 			loaded.Models = append(loaded.Models, entry)
 			last := entry
 			loaded.LastModel = &last
+		case "summary":
+			var entry SummaryEntry
+			if err := json.Unmarshal([]byte(line), &entry); err != nil {
+				return Loaded{}, err
+			}
+			loaded.Summaries = append(loaded.Summaries, entry)
+			last := entry
+			loaded.LastSummary = &last
 		default:
 			return Loaded{}, fmt.Errorf("unknown session entry type %q", probe.Type)
 		}

@@ -92,6 +92,12 @@ Provider/model configuration:
 ```json
 {
   "default": "openai:gpt-4.1",
+  "context": {
+    "maxPromptTokens": 24000,
+    "tailTurns": 6,
+    "summaryMaxTokens": 1200,
+    "autoCompact": true
+  },
   "providers": {
     "openai": {
       "type": "openai-compatible",
@@ -125,6 +131,14 @@ Session management:
 - `gg sessions list` lists sessions for the current working directory.
 - `gg resume <id-or-path>` resumes a session by displayed ID, JSONL filename stem, filename, or path.
 - `gg --continue` and `gg --last` resume the latest session for the current working directory.
+
+Context management:
+
+- `gg` estimates prompt size and automatically compacts long sessions when `context.autoCompact` is enabled.
+- Compaction stores a JSONL `summary` entry and keeps recent turns verbatim; original session messages are not deleted or rewritten.
+- Resumed sessions use the latest summary plus recent unsummarized turns.
+- `/compact` manually writes a new summary, and `/context` shows the current estimated prompt size and budget.
+- Token estimation is approximate; v1 does not use a model-specific tokenizer.
 
 Token usage:
 

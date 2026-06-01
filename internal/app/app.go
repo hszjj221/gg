@@ -14,6 +14,7 @@ import (
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/cli"
 	"github.com/hszjj221/gg/internal/config"
+	"github.com/hszjj221/gg/internal/contextmgr"
 	"github.com/hszjj221/gg/internal/provider/openai"
 	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/skills"
@@ -105,7 +106,7 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	}
 
 	modelRecorded := loaded.LastModel != nil && loaded.LastModel.Selection == cfg.Selection
-	executor := newTurnExecutor(cfg, providerFactory, sessionStore, loaded.Messages, skillSet, modelRecorded)
+	executor := newTurnExecutor(cfg, providerFactory, sessionStore, loaded.Messages, loaded.LastSummary, skillSet, modelRecorded)
 
 	if parsed.Prompt != "" {
 		return runPrompt(ctx, executor, parsed.Prompt, stdout, stderr, false, parsed.Usage, promptApprover(parsed, stdin, stderr))
@@ -177,25 +178,27 @@ type turnExecutor struct {
 	providerFactory agentProviderFactory
 	store           *session.Store
 	history         []agent.Message
+	summary         *session.SummaryEntry
 	skillSet        skills.Set
 	modelRecorded   bool
 }
 
 type agentProviderFactory func(config.Config) agent.Provider
 
-func newTurnExecutor(cfg config.Config, providerFactory agentProviderFactory, store *session.Store, history []agent.Message, skillSet skills.Set, modelRecorded bool) *turnExecutor {
+func newTurnExecutor(cfg config.Config, providerFactory agentProviderFactory, store *session.Store, history []agent.Message, summary *session.SummaryEntry, skillSet skills.Set, modelRecorded bool) *turnExecutor {
 	return &turnExecutor{
 		cfg:             cfg,
 		providerFactory: providerFactory,
 		store:           store,
 		history:         append([]agent.Message(nil), history...),
+		summary:         cloneSummaryEntry(summary),
 		skillSet:        skillSet,
 		modelRecorded:   modelRecorded,
 	}
 }
 
 func (e *turnExecutor) Run(ctx context.Context, prompt string, onEvent func(agent.Event), approver agent.Approver) (turnResult, error) {
-	if result, ok, err := e.handleModelCommand(prompt); ok || err != nil {
+	if result, ok, err := e.handleControlCommand(ctx, prompt); ok || err != nil {
 		return result, err
 	}
 	preparedPrompt, err := preparePrompt(prompt, e.skillSet)
@@ -207,25 +210,61 @@ func (e *turnExecutor) Run(ctx context.Context, prompt string, onEvent func(agen
 	}
 	systemMessages := skillSystemMessages(e.skillSet)
 	user := agent.Message{Role: agent.RoleUser, Content: preparedPrompt, Timestamp: time.Now().UnixMilli()}
-	messages := make([]agent.Message, 0, len(systemMessages)+len(e.history)+1)
-	messages = append(messages, systemMessages...)
-	messages = append(messages, e.history...)
-	messages = append(messages, user)
 	provider := e.providerFactory(e.cfg)
+	summaryUsage := agent.Usage{}
+	build := e.buildContext(systemMessages, user)
+	if e.cfg.Context.AutoCompact && build.PromptTokens > e.cfg.Context.MaxPromptTokens {
+		compact, err := e.compactHistory(ctx, provider)
+		if err != nil {
+			return turnResult{}, err
+		}
+		summaryUsage = summaryUsage.Add(compact.usage)
+		build = e.buildContext(systemMessages, user)
+	}
 	runner := agent.NewRunnerWithOptions(provider, defaultTools(e.cfg.CWD, provider, e.skillSet.ReadRoots()), agent.RunnerOptions{Approver: approver})
-	reply, err := runner.Run(ctx, messages, onEvent)
+	reply, err := runner.Run(ctx, build.Messages, onEvent)
 	if err != nil {
 		return turnResult{}, err
 	}
-	if err := appendNewMessages(e.store, runner.Transcript(), len(systemMessages)+len(e.history)); err != nil {
+	newMessages := runner.Transcript()[len(build.Messages)-1:]
+	if err := appendNewMessages(e.store, newMessages, 0); err != nil {
 		return turnResult{}, err
 	}
-	usage := runner.Usage()
+	usage := summaryUsage.Add(runner.Usage())
 	if err := appendUsage(e.store, usage); err != nil {
 		return turnResult{}, err
 	}
-	e.history = stripSystemMessages(runner.Transcript())
+	e.history = append(e.history, stripSystemMessages(newMessages)...)
 	return turnResult{Content: reply.Content, Usage: usage, ModelName: e.cfg.Selection}, nil
+}
+
+func (e *turnExecutor) handleControlCommand(ctx context.Context, prompt string) (turnResult, bool, error) {
+	if result, ok, err := e.handleModelCommand(prompt); ok || err != nil {
+		return result, ok, err
+	}
+	if ok, err := parseNoArgCommand(prompt, "/compact"); ok || err != nil {
+		if err != nil {
+			return turnResult{}, true, err
+		}
+		if err := e.ensureModelRecorded(); err != nil {
+			return turnResult{}, true, err
+		}
+		compact, err := e.compactHistory(ctx, e.providerFactory(e.cfg))
+		if err != nil {
+			return turnResult{}, true, err
+		}
+		if err := appendUsage(e.store, compact.usage); err != nil {
+			return turnResult{}, true, err
+		}
+		return turnResult{Content: compact.message, Usage: compact.usage, ModelName: e.cfg.Selection}, true, nil
+	}
+	if ok, err := parseNoArgCommand(prompt, "/context"); ok || err != nil {
+		if err != nil {
+			return turnResult{}, true, err
+		}
+		return turnResult{Content: e.contextStatus(), ModelName: e.cfg.Selection}, true, nil
+	}
+	return turnResult{}, false, nil
 }
 
 func (e *turnExecutor) handleModelCommand(prompt string) (turnResult, bool, error) {
@@ -278,6 +317,74 @@ func (e *turnExecutor) modelListText() string {
 		fmt.Fprintf(&b, "\n- %s", selection)
 	}
 	return b.String()
+}
+
+type compactResult struct {
+	message string
+	usage   agent.Usage
+}
+
+func (e *turnExecutor) buildContext(systemMessages []agent.Message, user agent.Message) contextmgr.BuildResult {
+	return contextmgr.Build(contextmgr.BuildInput{
+		System:  systemMessages,
+		History: e.history,
+		Current: user,
+		Summary: e.summaryState(),
+		Config:  e.cfg.Context,
+	})
+}
+
+func (e *turnExecutor) summaryState() contextmgr.SummaryState {
+	if e.summary == nil {
+		return contextmgr.SummaryState{}
+	}
+	through := e.summary.ThroughMessageCount
+	if through < 0 || through > len(e.history) {
+		through = 0
+	}
+	return contextmgr.SummaryState{Text: e.summary.Summary, ThroughMessageCount: through}
+}
+
+func (e *turnExecutor) compactHistory(ctx context.Context, provider agent.Provider) (compactResult, error) {
+	messages, through, keptTurns := contextmgr.SummarizePrefix(e.history, e.summaryState(), e.cfg.Context.TailTurns)
+	if len(messages) == 0 {
+		return compactResult{message: fmt.Sprintf("context compacted: summarized 0 messages, kept %d turns", keptTurns)}, nil
+	}
+	prompt := contextmgr.FormatSummaryPrompt(e.summaryState().Text, messages, e.cfg.Context.SummaryMaxTokens)
+	reply, err := provider.Complete(ctx, agent.Request{Messages: []agent.Message{
+		{Role: agent.RoleSystem, Content: "You compact conversation history for a coding agent."},
+		{Role: agent.RoleUser, Content: prompt},
+	}}, nil)
+	if err != nil {
+		return compactResult{}, fmt.Errorf("context compaction failed: %w", err)
+	}
+	summary := strings.TrimSpace(reply.Content)
+	if summary == "" {
+		return compactResult{}, fmt.Errorf("context compaction returned empty summary")
+	}
+	if e.store != nil {
+		if err := e.store.AppendSummary(summary, through); err != nil {
+			return compactResult{}, err
+		}
+	}
+	e.summary = &session.SummaryEntry{Summary: summary, ThroughMessageCount: through}
+	return compactResult{
+		message: fmt.Sprintf("context compacted: summarized %d messages, kept %d turns", len(messages), keptTurns),
+		usage:   reply.Usage,
+	}, nil
+}
+
+func (e *turnExecutor) contextStatus() string {
+	build := e.buildContext(skillSystemMessages(e.skillSet), agent.Message{Role: agent.RoleUser})
+	hasSummary := e.summary != nil && strings.TrimSpace(e.summary.Summary) != ""
+	return fmt.Sprintf(
+		"context: promptTokens=%d maxPromptTokens=%d tailTurns=%d summary=%t autoCompact=%t",
+		build.PromptTokens,
+		e.cfg.Context.MaxPromptTokens,
+		e.cfg.Context.TailTurns,
+		hasSummary,
+		e.cfg.Context.AutoCompact,
+	)
 }
 
 func defaultTools(cwd string, provider agent.Provider, readRoots []string) []agent.Tool {
@@ -456,6 +563,17 @@ func parseModelCommand(prompt string) (arg string, ok bool, err error) {
 	return fields[1], true, nil
 }
 
+func parseNoArgCommand(prompt, command string) (bool, error) {
+	fields := strings.Fields(strings.TrimSpace(prompt))
+	if len(fields) == 0 || fields[0] != command {
+		return false, nil
+	}
+	if len(fields) > 1 {
+		return true, fmt.Errorf("usage: %s", command)
+	}
+	return true, nil
+}
+
 func parseSkillCommand(prompt string) (name, task string, ok bool) {
 	trimmed := strings.TrimSpace(prompt)
 	fields := strings.Fields(trimmed)
@@ -474,6 +592,14 @@ func stripSystemMessages(messages []agent.Message) []agent.Message {
 		}
 	}
 	return out
+}
+
+func cloneSummaryEntry(entry *session.SummaryEntry) *session.SummaryEntry {
+	if entry == nil {
+		return nil
+	}
+	clone := *entry
+	return &clone
 }
 
 func printUsage(stderr io.Writer, usage agent.Usage) {

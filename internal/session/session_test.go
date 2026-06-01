@@ -133,6 +133,40 @@ func TestStoreWritesAndLoadsModelEntries(t *testing.T) {
 	}
 }
 
+func TestStoreWritesAndLoadsSummaryEntries(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(filepath.Join(dir, "session.jsonl"), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage(agent.Message{Role: agent.RoleUser, Content: "one"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendSummary("summary one", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendMessage(agent.Message{Role: agent.RoleAssistant, Content: "two"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendSummary("summary two", 2); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := Load(store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Messages) != 2 {
+		t.Fatalf("summary entries should not be loaded as messages: %+v", loaded.Messages)
+	}
+	if len(loaded.Summaries) != 2 {
+		t.Fatalf("expected two summary entries, got %d", len(loaded.Summaries))
+	}
+	if loaded.LastSummary == nil || loaded.LastSummary.Summary != "summary two" || loaded.LastSummary.ThroughMessageCount != 2 {
+		t.Fatalf("last summary not recorded: %+v", loaded.LastSummary)
+	}
+}
+
 func TestListForCWDReturnsNewestFirst(t *testing.T) {
 	dir := t.TempDir()
 	cwd := filepath.Join(dir, "project")

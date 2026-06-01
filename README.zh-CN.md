@@ -92,6 +92,12 @@ Provider/model 配置：
 ```json
 {
   "default": "openai:gpt-4.1",
+  "context": {
+    "maxPromptTokens": 24000,
+    "tailTurns": 6,
+    "summaryMaxTokens": 1200,
+    "autoCompact": true
+  },
   "providers": {
     "openai": {
       "type": "openai-compatible",
@@ -125,6 +131,14 @@ v1 只支持 `openai-compatible` provider。不支持远端拉取模型列表；
 - `gg sessions list` 会列出当前工作目录的会话。
 - `gg resume <id-or-path>` 可以通过显示的 ID、JSONL 文件名（不含 `.jsonl` 后缀）、文件名或路径恢复会话。
 - `gg --continue` 和 `gg --last` 会恢复当前工作目录的最新会话。
+
+上下文管理：
+
+- `gg` 会估算 prompt 大小，并在 `context.autoCompact` 启用时自动压缩长会话。
+- 压缩会写入 JSONL `summary` entry，并保留最近若干轮原文；原始 session 消息不会被删除或重写。
+- 恢复会话时会使用最近 summary 加上尚未压缩的近期 turn。
+- `/compact` 可以手动写入新 summary，`/context` 会展示当前估算 prompt 大小和预算。
+- token 估算是近似值；v1 不使用具体模型的 tokenizer。
 
 Token 消耗：
 
