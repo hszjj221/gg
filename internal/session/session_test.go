@@ -74,6 +74,29 @@ func TestStoreLoadsMessagesAndMaintainsParentChain(t *testing.T) {
 	}
 }
 
+func TestStoreLoadsMessagesLargerThanScannerTokenLimit(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(filepath.Join(dir, "session.jsonl"), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	large := strings.Repeat("x", 128*1024)
+	if err := store.AppendMessage(agent.Message{Role: agent.RoleTool, Content: large}); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := Load(store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(loaded.Messages))
+	}
+	if loaded.Messages[0].Content != large {
+		t.Fatalf("large message content was not loaded correctly")
+	}
+}
+
 func TestStoreWritesAndLoadsUsageEntries(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewStore(filepath.Join(dir, "session.jsonl"), dir)

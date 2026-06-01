@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -217,11 +218,21 @@ func Load(path string) (Loaded, error) {
 	defer file.Close()
 
 	var loaded Loaded
-	scanner := bufio.NewScanner(file)
+	reader := bufio.NewReader(file)
 	lineNo := 0
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	for {
+		raw, readErr := reader.ReadString('\n')
+		if readErr != nil && readErr != io.EOF {
+			return Loaded{}, readErr
+		}
+		if raw == "" && readErr == io.EOF {
+			break
+		}
+		line := strings.TrimSpace(raw)
 		if line == "" {
+			if readErr == io.EOF {
+				break
+			}
 			continue
 		}
 		lineNo++
@@ -270,9 +281,9 @@ func Load(path string) (Loaded, error) {
 		default:
 			return Loaded{}, fmt.Errorf("unknown session entry type %q", probe.Type)
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return Loaded{}, err
+		if readErr == io.EOF {
+			break
+		}
 	}
 	if loaded.Header.Type != "session" {
 		return Loaded{}, fmt.Errorf("missing session header")
