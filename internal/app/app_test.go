@@ -11,6 +11,7 @@ import (
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/session"
+	"github.com/hszjj221/gg/internal/skills"
 )
 
 type appFakeProvider struct {
@@ -218,6 +219,43 @@ func TestRunPrintModeAutoApprovalDoesNotPrompt(t *testing.T) {
 	}
 	if strings.Contains(stderr.String(), "Approve tool call") {
 		t.Fatalf("auto print mode should not prompt: %q", stderr.String())
+	}
+	if strings.Contains(stdout.String(), "tool ") || strings.Contains(stderr.String(), "tool ") {
+		t.Fatalf("print mode should not render tool logs: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestTurnExecutorForwardsToolEvents(t *testing.T) {
+	dir := t.TempDir()
+	provider := &appToolProvider{command: "printf ok"}
+	executor := newTurnExecutor(
+		config.Config{CWD: dir, Selection: "openai:gpt-4.1"},
+		func(config.Config) agent.Provider { return provider },
+		nil,
+		nil,
+		skills.Set{},
+		true,
+	)
+	var events []agent.Event
+
+	_, err := executor.Run(context.Background(), "run command", func(event agent.Event) {
+		events = append(events, event)
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(events) < 3 {
+		t.Fatalf("expected text and tool events, got %+v", events)
+	}
+	if events[0].Type != agent.EventToolCallStart || events[0].ToolName != "bash" {
+		t.Fatalf("missing tool start event: %+v", events)
+	}
+	if events[1].Type != agent.EventToolCallFinish || events[1].ToolName != "bash" || events[1].IsError {
+		t.Fatalf("missing tool finish event: %+v", events)
+	}
+	if events[2].Type != agent.EventTextDelta || events[2].Text != "done" {
+		t.Fatalf("missing final text delta: %+v", events)
 	}
 }
 

@@ -136,6 +136,53 @@ func TestRunnerExecutesToolCallsAndContinues(t *testing.T) {
 	}
 }
 
+func TestRunnerEmitsToolStartAndFinishEvents(t *testing.T) {
+	provider := &fakeProvider{responses: []AssistantMessage{
+		toolUseMessage("call-1", "read", `{"path":"README.md"}`),
+		{Message: Message{Role: RoleAssistant, Content: "done"}, StopReason: StopReasonEndTurn},
+	}}
+	runner := NewRunner(provider, []Tool{fakeTool{name: "read"}})
+	var events []Event
+
+	_, err := runner.Run(context.Background(), []Message{{Role: RoleUser, Content: "read"}}, func(event Event) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("expected start and finish events, got %+v", events)
+	}
+	start, finish := events[0], events[1]
+	if start.Type != EventToolCallStart || start.ToolCallID != "call-1" || start.ToolName != "read" || !strings.Contains(start.Summary, "read") {
+		t.Fatalf("unexpected start event: %+v", start)
+	}
+	if finish.Type != EventToolCallFinish || finish.ToolCallID != "call-1" || finish.ToolName != "read" || finish.IsError || !strings.Contains(finish.Details, `{"ok":true}`) {
+		t.Fatalf("unexpected finish event: %+v", finish)
+	}
+}
+
+func TestRunnerEmitsToolErrorEvents(t *testing.T) {
+	provider := &fakeProvider{responses: []AssistantMessage{
+		toolUseMessage("call-1", "missing", `{}`),
+		{Message: Message{Role: RoleAssistant, Content: "done"}, StopReason: StopReasonEndTurn},
+	}}
+	runner := NewRunner(provider, nil)
+	var events []Event
+
+	_, err := runner.Run(context.Background(), []Message{{Role: RoleUser, Content: "use missing"}}, func(event Event) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(events) != 2 || events[1].Type != EventToolCallFinish || !events[1].IsError || !strings.Contains(events[1].Details, `unknown tool "missing"`) {
+		t.Fatalf("unexpected tool error events: %+v", events)
+	}
+}
+
 func TestRunnerHonorsMaxTurnsOption(t *testing.T) {
 	provider := &fakeProvider{responses: []AssistantMessage{
 		{
@@ -220,6 +267,27 @@ func TestRunnerApprovesDescribedToolBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestRunnerUsesApprovalDescriptionForToolStartEvent(t *testing.T) {
+	provider := &fakeProvider{responses: []AssistantMessage{
+		toolUseMessage("call-1", "bash", `{"command":"printf ok"}`),
+		{Message: Message{Role: RoleAssistant, Content: "done"}, StopReason: StopReasonEndTurn},
+	}}
+	tool := &fakeApprovalTool{name: "bash"}
+	runner := NewRunnerWithOptions(provider, []Tool{tool}, RunnerOptions{Approver: &fakeApprover{allow: true}})
+	var events []Event
+
+	_, err := runner.Run(context.Background(), []Message{{Role: RoleUser, Content: "run"}}, func(event Event) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(events) < 1 || events[0].Type != EventToolCallStart || events[0].Summary != "run bash" || events[0].Details != `{"command":"printf ok"}` {
+		t.Fatalf("approval description not used for start event: %+v", events)
+	}
+}
+
 func TestRunnerDeniesDescribedToolWithoutExecution(t *testing.T) {
 	provider := &fakeProvider{responses: []AssistantMessage{
 		toolUseMessage("call-1", "bash", `{"command":"printf ok"}`),
@@ -240,6 +308,27 @@ func TestRunnerDeniesDescribedToolWithoutExecution(t *testing.T) {
 	last := second.Messages[len(second.Messages)-1]
 	if last.Role != RoleTool || !strings.Contains(last.Content, `tool call "bash" denied by user`) {
 		t.Fatalf("denied result not sent to model: %+v", last)
+	}
+}
+
+func TestRunnerEmitsDeniedToolFinishEvent(t *testing.T) {
+	provider := &fakeProvider{responses: []AssistantMessage{
+		toolUseMessage("call-1", "bash", `{"command":"printf ok"}`),
+		{Message: Message{Role: RoleAssistant, Content: "blocked"}, StopReason: StopReasonEndTurn},
+	}}
+	tool := &fakeApprovalTool{name: "bash"}
+	runner := NewRunnerWithOptions(provider, []Tool{tool}, RunnerOptions{Approver: &fakeApprover{allow: false}})
+	var events []Event
+
+	_, err := runner.Run(context.Background(), []Message{{Role: RoleUser, Content: "run"}}, func(event Event) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(events) != 2 || events[1].Type != EventToolCallFinish || !events[1].IsError || !strings.Contains(events[1].Details, `tool call "bash" denied by user`) {
+		t.Fatalf("unexpected denied events: %+v", events)
 	}
 }
 

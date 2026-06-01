@@ -31,7 +31,9 @@ const (
 type EventType string
 
 const (
-	EventTextDelta EventType = "text_delta"
+	EventTextDelta      EventType = "text_delta"
+	EventToolCallStart  EventType = "tool_call_start"
+	EventToolCallFinish EventType = "tool_call_finish"
 )
 
 type Usage struct {
@@ -123,8 +125,13 @@ type Request struct {
 }
 
 type Event struct {
-	Type EventType `json:"type"`
-	Text string    `json:"text,omitempty"`
+	Type       EventType `json:"type"`
+	Text       string    `json:"text,omitempty"`
+	ToolCallID string    `json:"toolCallId,omitempty"`
+	ToolName   string    `json:"toolName,omitempty"`
+	Summary    string    `json:"summary,omitempty"`
+	Details    string    `json:"details,omitempty"`
+	IsError    bool      `json:"isError,omitempty"`
 }
 
 type Provider interface {

@@ -15,7 +15,7 @@ English | [简体中文](README.zh-CN.md)
 - Codex-style local skills from `.agents/skills`
 - Built-in coding tools: `read`, `list`, `grep`, `bash`, `edit`, `write`
 - Synchronous read-only `subagent` tool for focused codebase research
-- Single binary Go CLI with a Bubble Tea-powered TUI
+- Single binary Go CLI with a Bubble Tea-powered TUI and inline tool call logs
 
 ## Install
 
@@ -73,7 +73,9 @@ Interactive mode:
 
 - Running `gg` in a terminal starts the TUI chat interface.
 - The TUI shows the conversation, a single-line prompt input, streaming replies, and a status bar.
+- The TUI also shows compact inline logs for tool calls such as `read`, `bash`, `edit`, `write`, and `subagent`.
 - Use `/model` to list configured models and `/model provider:model` to switch the provider/model used by later turns.
+- Tool logs are only a TUI view feature; they do not change the JSONL session format or one-shot/line interactive output.
 - When stdin/stdout are not terminals, `gg` falls back to the simple line-based interactive mode for scripts and tests.
 
 Tool approval:

@@ -132,6 +132,7 @@ func runPrompt(
 	approver agent.Approver,
 ) int {
 	var onDelta func(string)
+	var onEvent func(agent.Event)
 	var streamed strings.Builder
 	if stream {
 		onDelta = func(text string) {
@@ -139,7 +140,14 @@ func runPrompt(
 			fmt.Fprint(stdout, text)
 		}
 	}
-	result, err := executor.Run(ctx, prompt, onDelta, approver)
+	if onDelta != nil {
+		onEvent = func(event agent.Event) {
+			if event.Type == agent.EventTextDelta {
+				onDelta(event.Text)
+			}
+		}
+	}
+	result, err := executor.Run(ctx, prompt, onEvent, approver)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -186,7 +194,7 @@ func newTurnExecutor(cfg config.Config, providerFactory agentProviderFactory, st
 	}
 }
 
-func (e *turnExecutor) Run(ctx context.Context, prompt string, onDelta func(string), approver agent.Approver) (turnResult, error) {
+func (e *turnExecutor) Run(ctx context.Context, prompt string, onEvent func(agent.Event), approver agent.Approver) (turnResult, error) {
 	if result, ok, err := e.handleModelCommand(prompt); ok || err != nil {
 		return result, err
 	}
@@ -203,14 +211,6 @@ func (e *turnExecutor) Run(ctx context.Context, prompt string, onDelta func(stri
 	messages = append(messages, systemMessages...)
 	messages = append(messages, e.history...)
 	messages = append(messages, user)
-	var onEvent func(agent.Event)
-	if onDelta != nil {
-		onEvent = func(event agent.Event) {
-			if event.Type == agent.EventTextDelta {
-				onDelta(event.Text)
-			}
-		}
-	}
 	provider := e.providerFactory(e.cfg)
 	runner := agent.NewRunnerWithOptions(provider, defaultTools(e.cfg.CWD, provider, e.skillSet.ReadRoots()), agent.RunnerOptions{Approver: approver})
 	reply, err := runner.Run(ctx, messages, onEvent)
@@ -380,8 +380,8 @@ func runTUI(
 		InitialMessages: displayMessages(executor.history),
 		Input:           stdin,
 		Output:          stdout,
-		Submit: func(ctx context.Context, prompt string, onDelta func(string), approver agent.Approver) (tui.SubmitResult, error) {
-			result, err := executor.Run(ctx, prompt, onDelta, approver)
+		Submit: func(ctx context.Context, prompt string, onEvent func(agent.Event), approver agent.Approver) (tui.SubmitResult, error) {
+			result, err := executor.Run(ctx, prompt, onEvent, approver)
 			return tui.SubmitResult{Content: result.Content, Usage: result.Usage, ModelName: result.ModelName}, err
 		},
 	})

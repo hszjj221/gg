@@ -15,7 +15,7 @@
 - 从 `.agents/skills` 加载 Codex 风格本地 skills
 - 内置代码工具：`read`、`list`、`grep`、`bash`、`edit`、`write`
 - 用于聚焦代码库调研的同步只读 `subagent` 工具
-- 带 Bubble Tea TUI 的单二进制 Go CLI
+- 带 Bubble Tea TUI 和内联工具调用日志的单二进制 Go CLI
 
 ## Install
 
@@ -73,7 +73,9 @@ gg --continue "Resume the latest session"
 
 - 在终端中运行 `gg` 会启动 TUI chat 界面。
 - TUI 会展示对话、单行 prompt 输入框、streaming 回复和状态栏。
+- TUI 还会以内联紧凑日志展示 `read`、`bash`、`edit`、`write`、`subagent` 等工具调用。
 - 使用 `/model` 查看已配置模型，使用 `/model provider:model` 切换后续 turn 使用的 provider/model。
+- 工具日志只是 TUI 视图能力；不会改变 JSONL session 格式，也不会影响一次性 prompt 或按行交互输出。
 - 当 stdin/stdout 不是终端时，`gg` 会回退到简单的按行交互模式，方便脚本和测试使用。
 
 工具审批：

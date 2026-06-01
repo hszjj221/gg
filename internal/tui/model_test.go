@@ -36,7 +36,7 @@ func TestEnterSubmitsPromptAndRecordsUsage(t *testing.T) {
 		CWD:       "/tmp/project",
 		ModelName: "openai:gpt-test",
 		ShowUsage: true,
-		Submit: func(ctx context.Context, prompt string, onDelta func(string), approver agent.Approver) (SubmitResult, error) {
+		Submit: func(ctx context.Context, prompt string, onEvent func(agent.Event), approver agent.Approver) (SubmitResult, error) {
 			prompts = append(prompts, prompt)
 			return SubmitResult{
 				Content:   "assistant reply",
@@ -86,9 +86,9 @@ func TestStreamingDeltaUpdatesPendingAssistantMessage(t *testing.T) {
 	model := NewModel(Config{
 		CWD:       "/tmp/project",
 		ModelName: "openai:gpt-test",
-		Submit: func(ctx context.Context, prompt string, onDelta func(string), approver agent.Approver) (SubmitResult, error) {
-			onDelta("he")
-			onDelta("llo")
+		Submit: func(ctx context.Context, prompt string, onEvent func(agent.Event), approver agent.Approver) (SubmitResult, error) {
+			onEvent(agent.Event{Type: agent.EventTextDelta, Text: "he"})
+			onEvent(agent.Event{Type: agent.EventTextDelta, Text: "llo"})
 			return SubmitResult{Content: "hello"}, nil
 		},
 	})
@@ -103,11 +103,136 @@ func TestStreamingDeltaUpdatesPendingAssistantMessage(t *testing.T) {
 	}
 }
 
+func TestToolEventsRenderInlineLogAndThenAssistant(t *testing.T) {
+	model := NewModel(Config{
+		CWD:       "/tmp/project",
+		ModelName: "openai:gpt-test",
+		Submit: func(ctx context.Context, prompt string, onEvent func(agent.Event), approver agent.Approver) (SubmitResult, error) {
+			onEvent(agent.Event{Type: agent.EventToolCallStart, ToolCallID: "call-1", ToolName: "read", Summary: "read README.md"})
+			onEvent(agent.Event{Type: agent.EventToolCallFinish, ToolCallID: "call-1", ToolName: "read", Summary: "read README.md", Details: "line 1: gg"})
+			onEvent(agent.Event{Type: agent.EventTextDelta, Text: "answer"})
+			return SubmitResult{Content: "answer"}, nil
+		},
+	})
+	model, _ = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 20})
+	model.input.SetValue("inspect file")
+
+	model, cmd := updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = drainCommands(t, model, cmd)
+
+	if got := len(model.messages); got != 3 {
+		t.Fatalf("expected user, tool, assistant messages, got %d: %+v", got, model.messages)
+	}
+	if model.messages[1].Role != agent.RoleTool || model.messages[1].ToolStatus != "done" {
+		t.Fatalf("tool log not updated: %+v", model.messages[1])
+	}
+	if got := model.messages[2].Content; got != "answer" {
+		t.Fatalf("assistant message after tool log = %q", got)
+	}
+	view := model.View()
+	for _, want := range []string{"tool read done", "read README.md", "line 1: gg", "answer"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestToolFinishUpdatesSameLog(t *testing.T) {
+	model := NewModel(Config{
+		CWD:       "/tmp/project",
+		ModelName: "openai:gpt-test",
+		Submit: func(ctx context.Context, prompt string, onEvent func(agent.Event), approver agent.Approver) (SubmitResult, error) {
+			onEvent(agent.Event{Type: agent.EventToolCallStart, ToolCallID: "call-1", ToolName: "grep", Summary: "grep TODO"})
+			onEvent(agent.Event{Type: agent.EventToolCallFinish, ToolCallID: "call-1", ToolName: "grep", Summary: "grep TODO", Details: "found 2 matches"})
+			return SubmitResult{Content: "done"}, nil
+		},
+	})
+	model, _ = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 20})
+	model.input.SetValue("search")
+
+	model, cmd := updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = drainCommands(t, model, cmd)
+
+	toolLogs := 0
+	for _, message := range model.messages {
+		if message.Role == agent.RoleTool {
+			toolLogs++
+			if message.ToolStatus != "done" || !strings.Contains(message.Content, "found 2 matches") {
+				t.Fatalf("unexpected tool log: %+v", message)
+			}
+		}
+	}
+	if toolLogs != 1 {
+		t.Fatalf("expected one tool log, got %d: %+v", toolLogs, model.messages)
+	}
+}
+
+func TestToolErrorAndDeniedStatuses(t *testing.T) {
+	tests := []struct {
+		name    string
+		details string
+		want    string
+	}{
+		{name: "error", details: "exit status 1", want: "error"},
+		{name: "permission denied", details: "open file.txt: permission denied", want: "error"},
+		{name: "denied", details: `tool call "bash" denied by user`, want: "denied"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := NewModel(Config{
+				CWD:       "/tmp/project",
+				ModelName: "openai:gpt-test",
+				Submit: func(ctx context.Context, prompt string, onEvent func(agent.Event), approver agent.Approver) (SubmitResult, error) {
+					onEvent(agent.Event{Type: agent.EventToolCallStart, ToolCallID: "call-1", ToolName: "bash", Summary: "bash: false"})
+					onEvent(agent.Event{Type: agent.EventToolCallFinish, ToolCallID: "call-1", ToolName: "bash", Summary: "bash: false", Details: tt.details, IsError: true})
+					return SubmitResult{Content: "handled"}, nil
+				},
+			})
+			model, _ = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 20})
+			model.input.SetValue("run")
+
+			model, cmd := updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+			model = drainCommands(t, model, cmd)
+
+			if got := model.messages[1].ToolStatus; got != tt.want {
+				t.Fatalf("tool status = %q, want %q", got, tt.want)
+			}
+			if !strings.Contains(model.View(), "tool bash "+tt.want) {
+				t.Fatalf("status not rendered:\n%s", model.View())
+			}
+		})
+	}
+}
+
+func TestToolLogTruncatesLongDetails(t *testing.T) {
+	longDetails := strings.Repeat("x", toolLogPreviewLimit+100)
+	model := NewModel(Config{
+		CWD:       "/tmp/project",
+		ModelName: "openai:gpt-test",
+		Submit: func(ctx context.Context, prompt string, onEvent func(agent.Event), approver agent.Approver) (SubmitResult, error) {
+			onEvent(agent.Event{Type: agent.EventToolCallStart, ToolCallID: "call-1", ToolName: "subagent", Summary: "subagent investigate", Details: longDetails})
+			return SubmitResult{}, nil
+		},
+	})
+	model, _ = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 20})
+	model.input.SetValue("delegate")
+
+	model, cmd := updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = drainCommands(t, model, cmd)
+
+	if got := len([]rune(model.messages[1].Content)); got != toolLogPreviewLimit+3 {
+		t.Fatalf("tool log length = %d, want %d", got, toolLogPreviewLimit+3)
+	}
+	if !strings.HasSuffix(model.messages[1].Content, "...") {
+		t.Fatalf("tool log was not truncated: %q", model.messages[1].Content)
+	}
+}
+
 func TestSubmitErrorLeavesModelIdleAndShowsError(t *testing.T) {
 	model := NewModel(Config{
 		CWD:       "/tmp/project",
 		ModelName: "openai:gpt-test",
-		Submit: func(ctx context.Context, prompt string, onDelta func(string), approver agent.Approver) (SubmitResult, error) {
+		Submit: func(ctx context.Context, prompt string, onEvent func(agent.Event), approver agent.Approver) (SubmitResult, error) {
 			return SubmitResult{}, errors.New("provider failed")
 		},
 	})
@@ -134,7 +259,7 @@ func TestBusyEnterDoesNotSubmitAgain(t *testing.T) {
 	model := NewModel(Config{
 		CWD:       "/tmp/project",
 		ModelName: "openai:gpt-test",
-		Submit: func(ctx context.Context, prompt string, onDelta func(string), approver agent.Approver) (SubmitResult, error) {
+		Submit: func(ctx context.Context, prompt string, onEvent func(agent.Event), approver agent.Approver) (SubmitResult, error) {
 			calls++
 			started <- struct{}{}
 			<-ctx.Done()
@@ -189,7 +314,7 @@ func TestApprovalRequestCanBeApproved(t *testing.T) {
 		CWD:            "/tmp/project",
 		ModelName:      "openai:gpt-test",
 		EnableApproval: true,
-		Submit: func(ctx context.Context, prompt string, onDelta func(string), approver agent.Approver) (SubmitResult, error) {
+		Submit: func(ctx context.Context, prompt string, onEvent func(agent.Event), approver agent.Approver) (SubmitResult, error) {
 			decision, err := approver.Approve(ctx, agent.ApprovalRequest{
 				ToolName: "bash",
 				Summary:  "bash: go test ./...",
@@ -231,7 +356,7 @@ func TestApprovalRequestCanBeDenied(t *testing.T) {
 		CWD:            "/tmp/project",
 		ModelName:      "openai:gpt-test",
 		EnableApproval: true,
-		Submit: func(ctx context.Context, prompt string, onDelta func(string), approver agent.Approver) (SubmitResult, error) {
+		Submit: func(ctx context.Context, prompt string, onEvent func(agent.Event), approver agent.Approver) (SubmitResult, error) {
 			decision, err := approver.Approve(ctx, agent.ApprovalRequest{ToolName: "write", Summary: "write overwrite file.txt"})
 			if err != nil {
 				return SubmitResult{}, err
@@ -260,7 +385,7 @@ func TestApprovalRequestCanBeDenied(t *testing.T) {
 }
 
 func successSubmit(content string) SubmitFunc {
-	return func(ctx context.Context, prompt string, onDelta func(string), approver agent.Approver) (SubmitResult, error) {
+	return func(ctx context.Context, prompt string, onEvent func(agent.Event), approver agent.Approver) (SubmitResult, error) {
 		return SubmitResult{Content: content}, nil
 	}
 }

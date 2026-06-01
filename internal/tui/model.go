@@ -14,7 +14,7 @@ import (
 	"github.com/hszjj221/gg/internal/agent"
 )
 
-type SubmitFunc func(context.Context, string, func(string), agent.Approver) (SubmitResult, error)
+type SubmitFunc func(context.Context, string, func(agent.Event), agent.Approver) (SubmitResult, error)
 
 type SubmitResult struct {
 	Content   string
@@ -23,8 +23,11 @@ type SubmitResult struct {
 }
 
 type Message struct {
-	Role    agent.Role
-	Content string
+	Role       agent.Role
+	Content    string
+	ToolCallID string
+	ToolName   string
+	ToolStatus string
 }
 
 type Config struct {
@@ -61,7 +64,7 @@ type Model struct {
 	err             error
 }
 
-type streamDeltaMsg string
+type agentEventMsg agent.Event
 
 type submitDoneMsg struct {
 	result SubmitResult
@@ -118,11 +121,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyLayout()
 		m.refreshViewport()
 		return m, nil
-	case streamDeltaMsg:
-		if len(m.messages) == 0 || m.messages[len(m.messages)-1].Role != agent.RoleAssistant {
-			m.messages = append(m.messages, Message{Role: agent.RoleAssistant})
-		}
-		m.messages[len(m.messages)-1].Content += string(msg)
+	case agentEventMsg:
+		m.handleAgentEvent(agent.Event(msg))
 		m.refreshViewport()
 		return m, waitForUpdateCmd(m.updates)
 	case submitDoneMsg:
@@ -143,11 +143,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.result.ModelName != "" {
 				m.modelName = msg.result.ModelName
 			}
-			if len(m.messages) == 0 || m.messages[len(m.messages)-1].Role != agent.RoleAssistant {
-				m.messages = append(m.messages, Message{Role: agent.RoleAssistant})
-			}
 			if msg.result.Content != "" {
+				if len(m.messages) == 0 || m.messages[len(m.messages)-1].Role != agent.RoleAssistant {
+					m.messages = append(m.messages, Message{Role: agent.RoleAssistant})
+				}
 				m.messages[len(m.messages)-1].Content = msg.result.Content
+			} else {
+				m.removeEmptyPendingAssistant()
 			}
 		}
 		m.input.Focus()
@@ -234,6 +236,75 @@ func (m Model) startSubmit(prompt string) (Model, tea.Cmd) {
 	return m, tea.Batch(startSubmitCmd(m.submit, ctx, prompt, updates, m.enableApproval), waitForUpdateCmd(updates))
 }
 
+func (m *Model) handleAgentEvent(event agent.Event) {
+	switch event.Type {
+	case agent.EventTextDelta:
+		m.appendAssistantDelta(event.Text)
+	case agent.EventToolCallStart:
+		m.startToolLog(event)
+	case agent.EventToolCallFinish:
+		m.finishToolLog(event)
+	}
+}
+
+func (m *Model) appendAssistantDelta(text string) {
+	if text == "" {
+		return
+	}
+	if len(m.messages) == 0 || m.messages[len(m.messages)-1].Role != agent.RoleAssistant {
+		m.messages = append(m.messages, Message{Role: agent.RoleAssistant})
+	}
+	m.messages[len(m.messages)-1].Content += text
+}
+
+func (m *Model) startToolLog(event agent.Event) {
+	m.removeEmptyPendingAssistant()
+	m.messages = append(m.messages, Message{
+		Role:       agent.RoleTool,
+		Content:    toolEventContent(event),
+		ToolCallID: event.ToolCallID,
+		ToolName:   event.ToolName,
+		ToolStatus: "running",
+	})
+}
+
+func (m *Model) finishToolLog(event agent.Event) {
+	status := "done"
+	if event.IsError {
+		status = "error"
+		if strings.Contains(strings.ToLower(event.Details), "denied by user") {
+			status = "denied"
+		}
+	}
+	content := toolEventContent(event)
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if m.messages[i].Role == agent.RoleTool && m.messages[i].ToolCallID == event.ToolCallID {
+			m.messages[i].ToolName = event.ToolName
+			m.messages[i].ToolStatus = status
+			m.messages[i].Content = content
+			return
+		}
+	}
+	m.removeEmptyPendingAssistant()
+	m.messages = append(m.messages, Message{
+		Role:       agent.RoleTool,
+		Content:    content,
+		ToolCallID: event.ToolCallID,
+		ToolName:   event.ToolName,
+		ToolStatus: status,
+	})
+}
+
+func (m *Model) removeEmptyPendingAssistant() {
+	if len(m.messages) == 0 {
+		return
+	}
+	last := m.messages[len(m.messages)-1]
+	if last.Role == agent.RoleAssistant && last.Content == "" {
+		m.messages = m.messages[:len(m.messages)-1]
+	}
+}
+
 func (m Model) resolveApproval(decision agent.ApprovalDecision, err error) (Model, tea.Cmd) {
 	pending := m.approval
 	m.approval = nil
@@ -274,9 +345,13 @@ func (m Model) renderMessages() string {
 		}
 		label := "gg"
 		style := assistantLabelStyle
-		if message.Role == agent.RoleUser {
+		switch message.Role {
+		case agent.RoleUser:
 			label = "you"
 			style = userLabelStyle
+		case agent.RoleTool:
+			label = toolLabel(message)
+			style = toolLabelStyle
 		}
 		b.WriteString(style.Render(label))
 		b.WriteString("\n")
@@ -284,9 +359,50 @@ func (m Model) renderMessages() string {
 		if content == "" && message.Role == agent.RoleAssistant && m.busy {
 			content = "..."
 		}
+		if message.Role == agent.RoleTool {
+			content = toolBodyStyle.Render(content)
+		}
 		b.WriteString(content)
 	}
 	return b.String()
+}
+
+func toolLabel(message Message) string {
+	parts := []string{"tool"}
+	if message.ToolName != "" {
+		parts = append(parts, message.ToolName)
+	}
+	if message.ToolStatus != "" {
+		parts = append(parts, message.ToolStatus)
+	}
+	return strings.Join(parts, " ")
+}
+
+func toolEventContent(event agent.Event) string {
+	var parts []string
+	summary := strings.TrimSpace(event.Summary)
+	details := strings.TrimSpace(event.Details)
+	if summary != "" {
+		parts = append(parts, summary)
+	}
+	if details != "" && details != summary {
+		parts = append(parts, details)
+	}
+	if len(parts) == 0 {
+		parts = append(parts, event.ToolName)
+	}
+	return truncateText(strings.Join(parts, "\n"), toolLogPreviewLimit)
+}
+
+func truncateText(text string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit]) + "..."
 }
 
 func (m Model) statusLine() string {
@@ -344,12 +460,12 @@ func startSubmitCmd(submit SubmitFunc, ctx context.Context, prompt string, updat
 			if enableApproval {
 				approver = tuiApprover{updates: updates}
 			}
-			result, err := submit(ctx, prompt, func(delta string) {
-				if delta == "" {
+			result, err := submit(ctx, prompt, func(event agent.Event) {
+				if event.Type == agent.EventTextDelta && event.Text == "" {
 					return
 				}
 				select {
-				case updates <- streamDeltaMsg(delta):
+				case updates <- agentEventMsg(event):
 				case <-ctx.Done():
 				}
 			}, approver)
@@ -401,7 +517,11 @@ func shortPath(path string) string {
 var (
 	userLabelStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
 	assistantLabelStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
+	toolLabelStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	toolBodyStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	mutedStyle          = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	approvalStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("236")).Padding(0, 1)
 	statusStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("238"))
 )
+
+const toolLogPreviewLimit = 600

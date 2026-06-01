@@ -72,7 +72,7 @@ func (r *Runner) Run(ctx context.Context, messages []Message, onEvent func(Event
 		}
 
 		for _, call := range reply.ToolCalls {
-			result := r.executeToolCall(ctx, call)
+			result := r.executeToolCall(ctx, call, onEvent)
 			r.usage = r.usage.Add(result.Usage)
 			content := resultText(result)
 			toolMessage := Message{
@@ -93,23 +93,26 @@ func (r *Runner) Run(ctx context.Context, messages []Message, onEvent func(Event
 	return AssistantMessage{}, fmt.Errorf("agent exceeded %d turns", r.maxTurns)
 }
 
-func (r *Runner) executeToolCall(ctx context.Context, call ToolCall) ToolResult {
+func (r *Runner) executeToolCall(ctx context.Context, call ToolCall, onEvent func(Event)) ToolResult {
 	tool, ok := r.tools[call.Name]
 	if !ok {
-		return ToolResult{
-			IsError: true,
-			Content: []ContentBlock{{
-				Type: ContentText,
-				Text: fmt.Sprintf("unknown tool %q", call.Name),
-			}},
-		}
+		summary, details := fallbackToolSummary(call)
+		emitToolEvent(onEvent, Event{Type: EventToolCallStart, ToolCallID: call.ID, ToolName: call.Name, Summary: summary, Details: details})
+		result := toolError(fmt.Errorf("unknown tool %q", call.Name))
+		emitToolFinish(onEvent, call, summary, result)
+		return result
+	}
+	req, reqErr := describeToolCall(tool, call)
+	summary := req.Summary
+	details := req.Details
+	emitToolEvent(onEvent, Event{Type: EventToolCallStart, ToolCallID: call.ID, ToolName: call.Name, Summary: summary, Details: details})
+	if reqErr != nil {
+		result := toolError(fmt.Errorf("approval request for tool %q failed: %w", call.Name, reqErr))
+		emitToolFinish(onEvent, call, summary, result)
+		return result
 	}
 	if r.approver != nil {
-		if describer, ok := tool.(ApprovalDescriber); ok {
-			req, err := describer.ApprovalRequest(call.Arguments)
-			if err != nil {
-				return toolError(fmt.Errorf("approval request for tool %q failed: %w", call.Name, err))
-			}
+		if _, ok := tool.(ApprovalDescriber); ok {
 			if req.ToolName == "" {
 				req.ToolName = call.Name
 			}
@@ -118,14 +121,20 @@ func (r *Runner) executeToolCall(ctx context.Context, call ToolCall) ToolResult 
 			}
 			decision, err := r.approver.Approve(ctx, req)
 			if err != nil {
-				return toolError(fmt.Errorf("approval failed for tool %q: %w", call.Name, err))
+				result := toolError(fmt.Errorf("approval failed for tool %q: %w", call.Name, err))
+				emitToolFinish(onEvent, call, summary, result)
+				return result
 			}
 			if !decision.Allow {
-				return toolError(fmt.Errorf("tool call %q denied by user", call.Name))
+				result := toolError(fmt.Errorf("tool call %q denied by user", call.Name))
+				emitToolFinish(onEvent, call, summary, result)
+				return result
 			}
 		}
 	}
-	return tool.Execute(ctx, call.Arguments)
+	result := tool.Execute(ctx, call.Arguments)
+	emitToolFinish(onEvent, call, summary, result)
+	return result
 }
 
 func toolError(err error) ToolResult {
@@ -136,6 +145,56 @@ func toolError(err error) ToolResult {
 			Text: err.Error(),
 		}},
 	}
+}
+
+func describeToolCall(tool Tool, call ToolCall) (ApprovalRequest, error) {
+	if describer, ok := tool.(ApprovalDescriber); ok {
+		req, err := describer.ApprovalRequest(call.Arguments)
+		if req.ToolName == "" {
+			req.ToolName = call.Name
+		}
+		if req.Summary == "" {
+			req.Summary, req.Details = fallbackToolSummary(call)
+		}
+		if len(req.Arguments) == 0 {
+			req.Arguments = call.Arguments
+		}
+		return req, err
+	}
+	summary, details := fallbackToolSummary(call)
+	return ApprovalRequest{ToolName: call.Name, Summary: summary, Details: details, Arguments: call.Arguments}, nil
+}
+
+func fallbackToolSummary(call ToolCall) (string, string) {
+	details := strings.TrimSpace(string(call.Arguments))
+	if details == "" {
+		return call.Name, ""
+	}
+	return call.Name + " " + truncate(details, 120), details
+}
+
+func emitToolFinish(onEvent func(Event), call ToolCall, summary string, result ToolResult) {
+	emitToolEvent(onEvent, Event{
+		Type:       EventToolCallFinish,
+		ToolCallID: call.ID,
+		ToolName:   call.Name,
+		Summary:    summary,
+		Details:    resultText(result),
+		IsError:    result.IsError,
+	})
+}
+
+func emitToolEvent(onEvent func(Event), event Event) {
+	if onEvent != nil {
+		onEvent(event)
+	}
+}
+
+func truncate(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	return text[:limit] + "..."
 }
 
 func resultText(result ToolResult) string {
