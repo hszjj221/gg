@@ -13,6 +13,7 @@ English | [简体中文](README.zh-CN.md)
 - JSONL session storage with list and resume commands
 - Optional token usage reporting with `--usage`
 - Codex-style local skills from `.agents/skills`
+- Simple Markdown memory from `~/.gg/memory.md`
 - Built-in coding tools: `read`, `list`, `grep`, `bash`, `edit`, `write`
 - Synchronous read-only `subagent` tool for focused codebase research
 - Single binary Go CLI with a Bubble Tea-powered TUI and inline tool call logs
@@ -62,8 +63,10 @@ gg --no-session -p "Explain this directory"
 gg --session .gg/session.jsonl -p "Continue from this file"
 gg --usage -p "Summarize this repository"
 gg --no-skills -p "Run without local skills"
+gg --no-memory -p "Run without long-term memory"
 gg --approval on-request -p "Run tests and fix failures"
 gg -p "/skill:ca review and commit my changes"
+gg -p "/memory add Prefer concise answers with file references."
 gg sessions list
 gg resume <id-or-path> "Continue from this session"
 gg --continue "Resume the latest session"
@@ -98,6 +101,10 @@ Provider/model configuration:
     "summaryMaxTokens": 1200,
     "autoCompact": true
   },
+  "memory": {
+    "enabled": true,
+    "maxPromptTokens": 1200
+  },
   "providers": {
     "openai": {
       "type": "openai-compatible",
@@ -121,6 +128,7 @@ Selection uses `provider:model`:
 - API key: selected provider `apiKey`; `--api-key` overrides it. If no config file exists, legacy `OPENAI_API_KEY` is used.
 - Base URL: selected provider `baseURL`; `--base-url` overrides it. If no config file exists, legacy `OPENAI_BASE_URL` then `https://api.openai.com/v1` are used.
 - Session directory: `--session-dir`, then `GG_SESSION_DIR`, then `~/.gg/sessions`
+- Memory: `memory.enabled` in config; `--no-memory` disables it for one run.
 
 Only `openai-compatible` providers are supported in v1. Remote model discovery is not implemented; list allowed model names in `models`.
 
@@ -139,6 +147,16 @@ Context management:
 - Resumed sessions use the latest summary plus recent unsummarized turns.
 - `/compact` manually writes a new summary, and `/context` shows the current estimated prompt size and budget.
 - Token estimation is approximate; v1 does not use a model-specific tokenizer.
+
+Memory:
+
+- `gg` reads `~/.gg/memory.md` by default and injects it as temporary system context for normal prompts.
+- Memory is a single Markdown file. It is not written to sessions and is re-read on each turn.
+- When memory is enabled, the model can call `memory_add` to append durable preferences or stable facts to `~/.gg/memory.md`.
+- `memory_add` writes immediately and does not use the tool approval prompt.
+- `/memory` shows memory status, `/memory add <text>` appends a Markdown bullet, and `/memory show` prints the file.
+- `memory.maxPromptTokens` limits how much memory is injected; the file itself is never truncated.
+- Use `/memory show` or a text editor to review memory. Use `memory.enabled=false` or `--no-memory` to disable memory and hide `memory_add`.
 
 Token usage:
 
@@ -211,6 +229,8 @@ go fmt ./...
 `gg` can execute shell commands and edit files when the model uses the built-in tools. Run it only in workspaces where you are comfortable granting those capabilities.
 
 `~/.gg/config.json` may contain cleartext API keys. Keep it out of repositories and backups you do not control.
+
+`~/.gg/memory.md` is sent to the selected provider when memory is enabled. The model can also append to this file through `memory_add` without approval. Do not ask the agent to remember secrets, tokens, passwords, or sensitive personal data.
 
 Please report vulnerabilities privately. See [SECURITY.md](SECURITY.md).
 

@@ -16,6 +16,7 @@ type Args struct {
 	Last         bool
 	Usage        bool
 	NoSkills     bool
+	NoMemory     bool
 	Approval     string
 	APIKey       string
 	BaseURL      string
@@ -51,6 +52,7 @@ func Parse(argv []string) (Args, error) {
 	fs.BoolVar(&args.Last, "last", false, "resume the latest session")
 	fs.BoolVar(&args.Usage, "usage", false, "print token usage to stderr")
 	fs.BoolVar(&args.NoSkills, "no-skills", false, "disable .agents/skills discovery")
+	fs.BoolVar(&args.NoMemory, "no-memory", false, "disable ~/.gg/memory.md")
 	fs.StringVar(&args.Approval, "approval", "auto", "tool approval mode: auto, never, or on-request")
 	fs.StringVar(&args.APIKey, "api-key", "", "API key")
 	fs.StringVar(&args.BaseURL, "base-url", "", "OpenAI-compatible base URL")
@@ -128,6 +130,7 @@ Options:
   --last                   resume the latest session
   --usage                  print token usage to stderr
   --no-skills              disable .agents/skills discovery
+  --no-memory              disable ~/.gg/memory.md
   --approval <mode>        tool approval mode: auto, never, on-request (default: auto)
   -h, --help               show help
   -v, --version            show version`)

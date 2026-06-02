@@ -30,6 +30,9 @@ func TestResolveMissingConfigUsesLegacyOpenAIProvider(t *testing.T) {
 	if cfg.Context.MaxPromptTokens != 24000 || cfg.Context.TailTurns != 6 || cfg.Context.SummaryMaxTokens != 1200 || !cfg.Context.AutoCompact {
 		t.Fatalf("unexpected default context config: %+v", cfg.Context)
 	}
+	if !cfg.Memory.Enabled || cfg.Memory.MaxPromptTokens != 1200 || cfg.MemoryPath != filepath.Join(home, ".gg", "memory.md") {
+		t.Fatalf("unexpected default memory config: %+v path=%q", cfg.Memory, cfg.MemoryPath)
+	}
 }
 
 func TestResolveReadsProviderConfigAndCLIModelOverride(t *testing.T) {
@@ -95,6 +98,57 @@ func TestResolveReadsContextConfig(t *testing.T) {
 
 	if cfg.Context.MaxPromptTokens != 1000 || cfg.Context.TailTurns != 3 || cfg.Context.SummaryMaxTokens != 400 || cfg.Context.AutoCompact {
 		t.Fatalf("context config not applied: %+v", cfg.Context)
+	}
+}
+
+func TestResolveReadsMemoryConfigAndCLIDisable(t *testing.T) {
+	home := t.TempDir()
+	writeConfig(t, home, `{
+  "default": "openai:gpt-4.1",
+  "memory": {
+    "enabled": true,
+    "maxPromptTokens": 500
+  },
+  "providers": {
+    "openai": {
+      "type": "openai-compatible",
+      "baseURL": "https://api.openai.com/v1",
+      "apiKey": "openai-key",
+      "models": ["gpt-4.1"]
+    }
+  }
+}`)
+
+	cfg, err := Resolve(Options{HomeDir: home, NoMemory: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.Memory.Enabled || cfg.Memory.MaxPromptTokens != 500 {
+		t.Fatalf("memory config not applied: %+v", cfg.Memory)
+	}
+}
+
+func TestResolveRejectsInvalidMemoryConfig(t *testing.T) {
+	home := t.TempDir()
+	writeConfig(t, home, `{
+  "default": "openai:gpt-4.1",
+  "memory": {
+    "maxPromptTokens": 0
+  },
+  "providers": {
+    "openai": {
+      "type": "openai-compatible",
+      "baseURL": "https://api.openai.com/v1",
+      "apiKey": "openai-key",
+      "models": ["gpt-4.1"]
+    }
+  }
+}`)
+
+	_, err := Resolve(Options{HomeDir: home})
+	if err == nil || !strings.Contains(err.Error(), "memory.maxPromptTokens") {
+		t.Fatalf("expected memory maxPromptTokens error, got %v", err)
 	}
 }
 

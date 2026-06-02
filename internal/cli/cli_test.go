@@ -81,6 +81,17 @@ func TestParseNoSkillsFlag(t *testing.T) {
 	}
 }
 
+func TestParseNoMemoryFlag(t *testing.T) {
+	args, err := Parse([]string{"--no-memory", "-p", "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !args.NoMemory || !args.Print || args.Prompt != "hello" {
+		t.Fatalf("unexpected args: %+v", args)
+	}
+}
+
 func TestParseApprovalFlag(t *testing.T) {
 	args, err := Parse([]string{"--approval", "on-request", "-p", "hello"})
 	if err != nil {
@@ -102,7 +113,7 @@ func TestParseRejectsInvalidApprovalFlag(t *testing.T) {
 func TestHelpTextMentionsTUIInteractiveMode(t *testing.T) {
 	help := HelpText()
 
-	if !strings.Contains(help, "gg\n") || !strings.Contains(help, "TUI interactive mode") || !strings.Contains(help, "provider:model") || !strings.Contains(help, "--approval") {
+	if !strings.Contains(help, "gg\n") || !strings.Contains(help, "TUI interactive mode") || !strings.Contains(help, "provider:model") || !strings.Contains(help, "--approval") || !strings.Contains(help, "--no-memory") {
 		t.Fatalf("help text should mention TUI interactive mode:\n%s", help)
 	}
 }

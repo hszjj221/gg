@@ -18,6 +18,7 @@ const (
 	DefaultMaxPromptTokens  = 24000
 	DefaultTailTurns        = 6
 	DefaultSummaryMaxTokens = 1200
+	DefaultMemoryMaxTokens  = 1200
 
 	ProviderTypeOpenAICompatible = "openai-compatible"
 )
@@ -29,6 +30,7 @@ type Options struct {
 	SessionDir string
 	CWD        string
 	HomeDir    string
+	NoMemory   bool
 }
 
 type ProviderConfig struct {
@@ -45,6 +47,11 @@ type ContextConfig struct {
 	AutoCompact      bool `json:"autoCompact"`
 }
 
+type MemoryConfig struct {
+	Enabled         bool `json:"enabled"`
+	MaxPromptTokens int  `json:"maxPromptTokens"`
+}
+
 type Config struct {
 	APIKey       string
 	BaseURL      string
@@ -54,6 +61,8 @@ type Config struct {
 	Selection    string
 	Providers    map[string]ProviderConfig
 	Context      ContextConfig
+	Memory       MemoryConfig
+	MemoryPath   string
 	SessionDir   string
 	CWD          string
 
@@ -65,6 +74,7 @@ type fileConfig struct {
 	Default   string                    `json:"default"`
 	Providers map[string]ProviderConfig `json:"providers"`
 	Context   contextFileConfig         `json:"context"`
+	Memory    memoryFileConfig          `json:"memory"`
 }
 
 type contextFileConfig struct {
@@ -72,6 +82,11 @@ type contextFileConfig struct {
 	TailTurns        *int  `json:"tailTurns"`
 	SummaryMaxTokens *int  `json:"summaryMaxTokens"`
 	AutoCompact      *bool `json:"autoCompact"`
+}
+
+type memoryFileConfig struct {
+	Enabled         *bool `json:"enabled"`
+	MaxPromptTokens *int  `json:"maxPromptTokens"`
 }
 
 func Resolve(options Options) (Config, error) {
@@ -97,10 +112,16 @@ func Resolve(options Options) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	memoryConfig, err := resolveMemoryConfig(cfgFile.Memory, options.NoMemory)
+	if err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
 		Providers:       cfgFile.Providers,
 		Context:         contextConfig,
+		Memory:          memoryConfig,
+		MemoryPath:      filepath.Join(home, ".gg", "memory.md"),
 		SessionDir:      sessionDir,
 		CWD:             cwd,
 		apiKeyOverride:  options.APIKey,
@@ -219,6 +240,26 @@ func resolveContextConfig(file contextFileConfig) (ContextConfig, error) {
 	}
 	if cfg.SummaryMaxTokens <= 0 {
 		return ContextConfig{}, fmt.Errorf("context.summaryMaxTokens must be greater than 0")
+	}
+	return cfg, nil
+}
+
+func resolveMemoryConfig(file memoryFileConfig, disabledByCLI bool) (MemoryConfig, error) {
+	cfg := MemoryConfig{
+		Enabled:         true,
+		MaxPromptTokens: DefaultMemoryMaxTokens,
+	}
+	if file.Enabled != nil {
+		cfg.Enabled = *file.Enabled
+	}
+	if file.MaxPromptTokens != nil {
+		cfg.MaxPromptTokens = *file.MaxPromptTokens
+	}
+	if disabledByCLI {
+		cfg.Enabled = false
+	}
+	if cfg.MaxPromptTokens <= 0 {
+		return MemoryConfig{}, fmt.Errorf("memory.maxPromptTokens must be greater than 0")
 	}
 	return cfg, nil
 }

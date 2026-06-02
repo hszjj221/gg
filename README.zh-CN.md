@@ -13,6 +13,7 @@
 - 支持列出和恢复命令的 JSONL 会话存储
 - 通过 `--usage` 可选展示 token 消耗
 - 从 `.agents/skills` 加载 Codex 风格本地 skills
+- 从 `~/.gg/memory.md` 加载简单 Markdown memory
 - 内置代码工具：`read`、`list`、`grep`、`bash`、`edit`、`write`
 - 用于聚焦代码库调研的同步只读 `subagent` 工具
 - 带 Bubble Tea TUI 和内联工具调用日志的单二进制 Go CLI
@@ -62,8 +63,10 @@ gg --no-session -p "Explain this directory"
 gg --session .gg/session.jsonl -p "Continue from this file"
 gg --usage -p "Summarize this repository"
 gg --no-skills -p "Run without local skills"
+gg --no-memory -p "Run without long-term memory"
 gg --approval on-request -p "Run tests and fix failures"
 gg -p "/skill:ca review and commit my changes"
+gg -p "/memory add Prefer concise answers with file references."
 gg sessions list
 gg resume <id-or-path> "Continue from this session"
 gg --continue "Resume the latest session"
@@ -98,6 +101,10 @@ Provider/model 配置：
     "summaryMaxTokens": 1200,
     "autoCompact": true
   },
+  "memory": {
+    "enabled": true,
+    "maxPromptTokens": 1200
+  },
   "providers": {
     "openai": {
       "type": "openai-compatible",
@@ -121,6 +128,7 @@ Provider/model 配置：
 - API key：当前 provider 的 `apiKey`；`--api-key` 可以覆盖它。没有配置文件时，沿用 legacy `OPENAI_API_KEY`。
 - Base URL：当前 provider 的 `baseURL`；`--base-url` 可以覆盖它。没有配置文件时，沿用 legacy `OPENAI_BASE_URL`，最后是 `https://api.openai.com/v1`。
 - Session directory：`--session-dir`，然后是 `GG_SESSION_DIR`，最后是 `~/.gg/sessions`
+- Memory：配置里的 `memory.enabled`；`--no-memory` 可单次关闭。
 
 v1 只支持 `openai-compatible` provider。不支持远端拉取模型列表；请在 `models` 里显式列出可选模型。
 
@@ -139,6 +147,16 @@ v1 只支持 `openai-compatible` provider。不支持远端拉取模型列表；
 - 恢复会话时会使用最近 summary 加上尚未压缩的近期 turn。
 - `/compact` 可以手动写入新 summary，`/context` 会展示当前估算 prompt 大小和预算。
 - token 估算是近似值；v1 不使用具体模型的 tokenizer。
+
+Memory：
+
+- `gg` 默认读取 `~/.gg/memory.md`，并把它作为临时 system context 注入普通 prompt。
+- Memory 是单个 Markdown 文件，不会写入 session，并且每个 turn 都会重新读取。
+- 启用 memory 时，模型可以调用 `memory_add` 把长期偏好或稳定事实追加到 `~/.gg/memory.md`。
+- `memory_add` 会立即写入，并且不走工具审批提示。
+- `/memory` 展示 memory 状态，`/memory add <text>` 会追加 Markdown bullet，`/memory show` 会输出文件内容。
+- `memory.maxPromptTokens` 限制注入的 memory 大小；原文件不会被截断。
+- 使用 `/memory show` 或文本编辑器检查 memory。使用 `memory.enabled=false` 或 `--no-memory` 可以关闭 memory 并隐藏 `memory_add`。
 
 Token 消耗：
 
@@ -211,6 +229,8 @@ go fmt ./...
 当模型使用内置工具时，`gg` 可以执行 shell 命令并编辑文件。请只在你愿意授予这些能力的工作区中运行它。
 
 `~/.gg/config.json` 可能包含明文 API key。不要把它提交到仓库，也不要放进不受控的备份。
+
+启用 memory 时，`~/.gg/memory.md` 会发送给当前选中的 provider。模型也可以通过 `memory_add` 不经审批地追加这个文件。不要要求 agent 记住密钥、token、密码或敏感个人信息。
 
 请私下报告安全漏洞。参见 [SECURITY.md](SECURITY.md)。
 

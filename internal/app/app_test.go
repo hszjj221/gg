@@ -65,6 +65,35 @@ func (p *appToolProvider) Complete(ctx context.Context, req agent.Request, onEve
 	}, nil
 }
 
+type appMemoryToolProvider struct {
+	requests []agent.Request
+	content  string
+}
+
+func (p *appMemoryToolProvider) Complete(ctx context.Context, req agent.Request, onEvent func(agent.Event)) (agent.AssistantMessage, error) {
+	p.requests = append(p.requests, req)
+	if len(p.requests) == 1 {
+		return agent.AssistantMessage{
+			Message: agent.Message{
+				Role: agent.RoleAssistant,
+				ToolCalls: []agent.ToolCall{{
+					ID:        "call-1",
+					Name:      "memory_add",
+					Arguments: []byte(`{"content":` + strconv.Quote(p.content) + `}`),
+				}},
+			},
+			StopReason: agent.StopReasonToolUse,
+		}, nil
+	}
+	if onEvent != nil {
+		onEvent(agent.Event{Type: agent.EventTextDelta, Text: "remembered"})
+	}
+	return agent.AssistantMessage{
+		Message:    agent.Message{Role: agent.RoleAssistant, Content: "remembered", ContentBlocks: []agent.ContentBlock{{Type: agent.ContentText, Text: "remembered"}}},
+		StopReason: agent.StopReasonEndTurn,
+	}, nil
+}
+
 type appContextProvider struct {
 	requests []agent.Request
 	summary  string
@@ -225,6 +254,129 @@ func TestRunPrintModeIncludesSubagentTool(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("subagent tool missing from request tools: %+v", provider.requests[0].Tools)
+	}
+}
+
+func TestRunPrintModeIncludesMemoryAddToolWhenMemoryEnabled(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr strings.Builder
+	provider := &appFakeProvider{}
+
+	code := Run(context.Background(), []string{"-p", "--api-key", "key", "--no-session", "say hi"}, Options{
+		CWD:     dir,
+		HomeDir: filepath.Join(dir, "home"),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			return provider
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	if !hasTool(provider.requests[0].Tools, "memory_add") {
+		t.Fatalf("memory_add tool missing from request tools: %+v", provider.requests[0].Tools)
+	}
+}
+
+func TestRunPrintModeHidesMemoryAddToolWhenNoMemory(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr strings.Builder
+	provider := &appFakeProvider{}
+
+	code := Run(context.Background(), []string{"-p", "--no-memory", "--api-key", "key", "--no-session", "say hi"}, Options{
+		CWD:     dir,
+		HomeDir: filepath.Join(dir, "home"),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			return provider
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	if hasTool(provider.requests[0].Tools, "memory_add") {
+		t.Fatalf("memory_add should not be exposed with --no-memory: %+v", provider.requests[0].Tools)
+	}
+}
+
+func TestRunPrintModeHidesMemoryAddToolWhenMemoryDisabledInConfig(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	writeAppConfig(t, home, `{
+  "default": "openai:gpt-4.1",
+  "memory": {
+    "enabled": false
+  },
+  "providers": {
+    "openai": {
+      "type": "openai-compatible",
+      "baseURL": "https://api.openai.com/v1",
+      "apiKey": "openai-key",
+      "models": ["gpt-4.1"]
+    }
+  }
+}`)
+	var stdout, stderr strings.Builder
+	provider := &appFakeProvider{}
+
+	code := Run(context.Background(), []string{"-p", "--no-session", "say hi"}, Options{
+		CWD:     dir,
+		HomeDir: home,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			return provider
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	if hasTool(provider.requests[0].Tools, "memory_add") {
+		t.Fatalf("memory_add should not be exposed when memory is disabled: %+v", provider.requests[0].Tools)
+	}
+}
+
+func TestRunMemoryAddToolWritesMemoryFileAndSessionMessages(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	sessionPath := filepath.Join(dir, "session.jsonl")
+	var stdout, stderr strings.Builder
+	provider := &appMemoryToolProvider{content: "User prefers concise Go code reviews."}
+
+	code := Run(context.Background(), []string{"-p", "--session", sessionPath, "remember my preference"}, Options{
+		CWD:     dir,
+		HomeDir: home,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			return provider
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	content, err := os.ReadFile(filepath.Join(home, ".gg", "memory.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "- User prefers concise Go code reviews.") {
+		t.Fatalf("memory file missing tool-written content:\n%s", content)
+	}
+	loaded, err := session.Load(sessionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Messages) != 4 {
+		t.Fatalf("expected user, assistant tool call, tool result, final assistant messages, got %+v", loaded.Messages)
+	}
+	if loaded.Messages[2].Role != agent.RoleTool || loaded.Messages[2].ToolName != "memory_add" || !strings.Contains(loaded.Messages[2].Content, "memory added") {
+		t.Fatalf("memory_add tool result not recorded as normal tool message: %+v", loaded.Messages)
 	}
 }
 
@@ -741,6 +893,102 @@ description: Review local changes.
 	}
 }
 
+func TestRunInjectsMemorySystemMessage(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	writeAppMemory(t, home, "# gg Memory\n\n- Prefer concise Chinese replies.\n")
+	var stdout, stderr strings.Builder
+	provider := &appFakeProvider{}
+
+	code := Run(context.Background(), []string{"-p", "--no-skills", "--api-key", "key", "--no-session", "check this"}, Options{
+		CWD:     dir,
+		HomeDir: home,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			return provider
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	messages := provider.requests[0].Messages
+	if len(messages) != 2 || messages[0].Role != agent.RoleSystem || messages[1].Role != agent.RoleUser {
+		t.Fatalf("expected memory system and user messages, got %+v", messages)
+	}
+	if !strings.Contains(messages[0].Content, "User memory from ~/.gg/memory.md") || !strings.Contains(messages[0].Content, "Prefer concise Chinese replies") {
+		t.Fatalf("memory system message missing content:\n%s", messages[0].Content)
+	}
+}
+
+func TestRunNoMemoryDoesNotInjectMemorySystemMessage(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	writeAppMemory(t, home, "# gg Memory\n\n- Prefer concise Chinese replies.\n")
+	var stdout, stderr strings.Builder
+	provider := &appFakeProvider{}
+
+	code := Run(context.Background(), []string{"-p", "--no-skills", "--no-memory", "--api-key", "key", "--no-session", "check this"}, Options{
+		CWD:     dir,
+		HomeDir: home,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			return provider
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	messages := provider.requests[0].Messages
+	if len(messages) != 1 || messages[0].Role != agent.RoleUser || messages[0].Content != "check this" {
+		t.Fatalf("--no-memory should leave only user prompt, got %+v", messages)
+	}
+}
+
+func TestRunMemoryDisabledConfigDoesNotInjectMemorySystemMessage(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	writeAppConfig(t, home, `{
+  "default": "openai:gpt-4.1",
+  "memory": {
+    "enabled": false,
+    "maxPromptTokens": 1200
+  },
+  "providers": {
+    "openai": {
+      "type": "openai-compatible",
+      "baseURL": "https://api.openai.com/v1",
+      "apiKey": "openai-key",
+      "models": ["gpt-4.1"]
+    }
+  }
+}`)
+	writeAppMemory(t, home, "# gg Memory\n\n- Prefer concise Chinese replies.\n")
+	var stdout, stderr strings.Builder
+	provider := &appFakeProvider{}
+
+	code := Run(context.Background(), []string{"-p", "--no-skills", "--no-session", "check this"}, Options{
+		CWD:     dir,
+		HomeDir: home,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			return provider
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	messages := provider.requests[0].Messages
+	if len(messages) != 1 || messages[0].Role != agent.RoleUser {
+		t.Fatalf("disabled memory should not inject system message, got %+v", messages)
+	}
+}
+
 func TestRunSkillCommandInjectsFullSkillMarkdown(t *testing.T) {
 	dir := t.TempDir()
 	skillContent := `---
@@ -808,6 +1056,175 @@ func TestRunSkillCommandMissingSkillDoesNotCallProvider(t *testing.T) {
 	}
 }
 
+func TestMemoryCommandShowsStatusWithoutCallingProviderOrWritingMessages(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	sessionPath := filepath.Join(dir, "session.jsonl")
+	writeAppMemory(t, home, "# gg Memory\n\n- Remember this.\n")
+	var stdout, stderr strings.Builder
+	providerCalled := false
+
+	code := Run(context.Background(), []string{"-p", "--session", sessionPath, "/memory"}, Options{
+		CWD:     dir,
+		HomeDir: home,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			providerCalled = true
+			return &appFakeProvider{}
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	if providerCalled {
+		t.Fatalf("provider should not be called for /memory")
+	}
+	if !strings.Contains(stdout.String(), "memory: enabled=true") || !strings.Contains(stdout.String(), "memory.md") {
+		t.Fatalf("unexpected memory status: %q", stdout.String())
+	}
+	loaded, err := session.Load(sessionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Messages) != 0 {
+		t.Fatalf("/memory should not write messages: %+v", loaded.Messages)
+	}
+}
+
+func TestMemoryAddCommandWritesMarkdownWithoutCallingProvider(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	sessionPath := filepath.Join(dir, "session.jsonl")
+	var stdout, stderr strings.Builder
+	providerCalled := false
+
+	code := Run(context.Background(), []string{"-p", "--session", sessionPath, "/memory", "add", "Always keep changes scoped."}, Options{
+		CWD:     dir,
+		HomeDir: home,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			providerCalled = true
+			return &appFakeProvider{}
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	if providerCalled {
+		t.Fatalf("provider should not be called for /memory add")
+	}
+	if !strings.Contains(stdout.String(), "memory added") {
+		t.Fatalf("unexpected memory add output: %q", stdout.String())
+	}
+	content, err := os.ReadFile(filepath.Join(home, ".gg", "memory.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), "- Always keep changes scoped.") {
+		t.Fatalf("memory file missing added text:\n%s", content)
+	}
+	loaded, err := session.Load(sessionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Messages) != 0 {
+		t.Fatalf("/memory add should not write messages: %+v", loaded.Messages)
+	}
+}
+
+func TestMemoryShowCommandReadsMarkdownWithoutCallingProvider(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	writeAppMemory(t, home, "# gg Memory\n\n- Prefer tests.\n")
+	var stdout, stderr strings.Builder
+	providerCalled := false
+
+	code := Run(context.Background(), []string{"-p", "--no-session", "/memory", "show"}, Options{
+		CWD:     dir,
+		HomeDir: home,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			providerCalled = true
+			return &appFakeProvider{}
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	if providerCalled {
+		t.Fatalf("provider should not be called for /memory show")
+	}
+	if !strings.Contains(stdout.String(), "# gg Memory") || !strings.Contains(stdout.String(), "Prefer tests") {
+		t.Fatalf("unexpected memory show output: %q", stdout.String())
+	}
+}
+
+func TestMemoryCommandDisabledDoesNotCallProvider(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	var stdout, stderr strings.Builder
+	providerCalled := false
+
+	code := Run(context.Background(), []string{"-p", "--no-memory", "--no-session", "/memory", "show"}, Options{
+		CWD:     dir,
+		HomeDir: home,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			providerCalled = true
+			return &appFakeProvider{}
+		},
+	})
+
+	if code == 0 {
+		t.Fatalf("expected disabled memory show to fail")
+	}
+	if providerCalled {
+		t.Fatalf("provider should not be called for disabled /memory show")
+	}
+	if !strings.Contains(stderr.String(), "memory is disabled") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
+func TestMemoryCommandDisabledDoesNotReadMemoryFile(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	memoryPath := filepath.Join(home, ".gg", "memory.md")
+	if err := os.MkdirAll(memoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	providerCalled := false
+
+	code := Run(context.Background(), []string{"-p", "--no-memory", "--no-session", "/memory"}, Options{
+		CWD:     dir,
+		HomeDir: home,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			providerCalled = true
+			return &appFakeProvider{}
+		},
+	})
+
+	if code == 0 {
+		t.Fatalf("expected disabled memory status to fail")
+	}
+	if providerCalled {
+		t.Fatalf("provider should not be called for disabled /memory")
+	}
+	if !strings.Contains(stderr.String(), "memory is disabled") {
+		t.Fatalf("disabled /memory should not read memory path, got stderr: %q", stderr.String())
+	}
+}
+
 func TestRunSessionsListPrintsSessionsWithoutProvider(t *testing.T) {
 	dir := t.TempDir()
 	sessionDir := filepath.Join(dir, "sessions")
@@ -854,9 +1271,29 @@ func writeAppSkill(t *testing.T, dir string, content string) {
 	}
 }
 
+func writeAppMemory(t *testing.T, home, content string) {
+	t.Helper()
+	dir := filepath.Join(home, ".gg")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "memory.md"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func containsMessage(messages []agent.Message, text string) bool {
 	for _, message := range messages {
 		if strings.Contains(message.Content, text) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasTool(tools []agent.ToolDefinition, name string) bool {
+	for _, tool := range tools {
+		if tool.Name == name {
 			return true
 		}
 	}

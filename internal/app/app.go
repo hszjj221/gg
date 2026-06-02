@@ -15,6 +15,7 @@ import (
 	"github.com/hszjj221/gg/internal/cli"
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/contextmgr"
+	"github.com/hszjj221/gg/internal/memory"
 	"github.com/hszjj221/gg/internal/provider/openai"
 	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/skills"
@@ -64,6 +65,7 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		SessionDir: parsed.SessionDir,
 		CWD:        options.CWD,
 		HomeDir:    options.HomeDir,
+		NoMemory:   parsed.NoMemory,
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -208,7 +210,10 @@ func (e *turnExecutor) Run(ctx context.Context, prompt string, onEvent func(agen
 	if err := e.ensureModelRecorded(); err != nil {
 		return turnResult{}, err
 	}
-	systemMessages := skillSystemMessages(e.skillSet)
+	systemMessages, err := e.systemMessages()
+	if err != nil {
+		return turnResult{}, err
+	}
 	user := agent.Message{Role: agent.RoleUser, Content: preparedPrompt, Timestamp: time.Now().UnixMilli()}
 	provider := e.providerFactory(e.cfg)
 	summaryUsage := agent.Usage{}
@@ -221,7 +226,7 @@ func (e *turnExecutor) Run(ctx context.Context, prompt string, onEvent func(agen
 		summaryUsage = summaryUsage.Add(compact.usage)
 		build = e.buildContext(systemMessages, user)
 	}
-	runner := agent.NewRunnerWithOptions(provider, defaultTools(e.cfg.CWD, provider, e.skillSet.ReadRoots()), agent.RunnerOptions{Approver: approver})
+	runner := agent.NewRunnerWithOptions(provider, defaultTools(e.cfg, provider, e.skillSet.ReadRoots()), agent.RunnerOptions{Approver: approver})
 	reply, err := runner.Run(ctx, build.Messages, onEvent)
 	if err != nil {
 		return turnResult{}, err
@@ -240,6 +245,9 @@ func (e *turnExecutor) Run(ctx context.Context, prompt string, onEvent func(agen
 
 func (e *turnExecutor) handleControlCommand(ctx context.Context, prompt string) (turnResult, bool, error) {
 	if result, ok, err := e.handleModelCommand(prompt); ok || err != nil {
+		return result, ok, err
+	}
+	if result, ok, err := e.handleMemoryCommand(prompt); ok || err != nil {
 		return result, ok, err
 	}
 	if ok, err := parseNoArgCommand(prompt, "/compact"); ok || err != nil {
@@ -319,6 +327,32 @@ func (e *turnExecutor) modelListText() string {
 	return b.String()
 }
 
+func (e *turnExecutor) handleMemoryCommand(prompt string) (turnResult, bool, error) {
+	command, arg, ok, err := parseMemoryCommand(prompt)
+	if !ok || err != nil {
+		return turnResult{}, ok, err
+	}
+	if !e.cfg.Memory.Enabled {
+		return turnResult{}, true, fmt.Errorf("memory is disabled")
+	}
+	if command == "" {
+		status, err := memory.Status(e.cfg.MemoryPath, e.cfg.Memory.MaxPromptTokens, e.cfg.Memory.Enabled)
+		return turnResult{Content: status, ModelName: e.cfg.Selection}, true, err
+	}
+	switch command {
+	case "add":
+		if err := memory.Append(e.cfg.MemoryPath, arg); err != nil {
+			return turnResult{}, true, err
+		}
+		return turnResult{Content: "memory added", ModelName: e.cfg.Selection}, true, nil
+	case "show":
+		content, err := memory.Show(e.cfg.MemoryPath)
+		return turnResult{Content: content, ModelName: e.cfg.Selection}, true, err
+	default:
+		return turnResult{}, true, fmt.Errorf("usage: /memory [add <text>|show]")
+	}
+}
+
 type compactResult struct {
 	message string
 	usage   agent.Usage
@@ -387,16 +421,37 @@ func (e *turnExecutor) contextStatus() string {
 	)
 }
 
-func defaultTools(cwd string, provider agent.Provider, readRoots []string) []agent.Tool {
-	return []agent.Tool{
-		tools.NewReadToolWithOptions(cwd, tools.ReadOptions{ExtraRoots: readRoots}),
-		tools.NewListTool(cwd),
-		tools.NewGrepTool(cwd),
-		tools.NewBashTool(cwd, tools.BashOptions{}),
-		tools.NewEditTool(cwd),
-		tools.NewWriteTool(cwd),
-		tools.NewSubagentTool(cwd, provider, tools.SubagentOptions{}),
+func (e *turnExecutor) systemMessages() ([]agent.Message, error) {
+	messages := skillSystemMessages(e.skillSet)
+	if !e.cfg.Memory.Enabled {
+		return messages, nil
 	}
+	snapshot, err := memory.Load(e.cfg.MemoryPath, e.cfg.Memory.MaxPromptTokens)
+	if err != nil {
+		return nil, err
+	}
+	prompt := memory.SystemPrompt(snapshot)
+	if prompt == "" {
+		return messages, nil
+	}
+	messages = append(messages, agent.Message{Role: agent.RoleSystem, Content: prompt, Timestamp: time.Now().UnixMilli()})
+	return messages, nil
+}
+
+func defaultTools(cfg config.Config, provider agent.Provider, readRoots []string) []agent.Tool {
+	toolset := []agent.Tool{
+		tools.NewReadToolWithOptions(cfg.CWD, tools.ReadOptions{ExtraRoots: readRoots}),
+		tools.NewListTool(cfg.CWD),
+		tools.NewGrepTool(cfg.CWD),
+		tools.NewBashTool(cfg.CWD, tools.BashOptions{}),
+		tools.NewEditTool(cfg.CWD),
+		tools.NewWriteTool(cfg.CWD),
+		tools.NewSubagentTool(cfg.CWD, provider, tools.SubagentOptions{}),
+	}
+	if cfg.Memory.Enabled {
+		toolset = append(toolset, tools.NewMemoryAddTool(cfg.MemoryPath))
+	}
+	return toolset
 }
 
 func validateSessionArgs(args cli.Args) error {
@@ -572,6 +627,35 @@ func parseNoArgCommand(prompt, command string) (bool, error) {
 		return true, fmt.Errorf("usage: %s", command)
 	}
 	return true, nil
+}
+
+func parseMemoryCommand(prompt string) (command, arg string, ok bool, err error) {
+	trimmed := strings.TrimSpace(prompt)
+	fields := strings.Fields(trimmed)
+	if len(fields) == 0 || fields[0] != "/memory" {
+		return "", "", false, nil
+	}
+	if len(fields) == 1 {
+		return "", "", true, nil
+	}
+	command = fields[1]
+	rest := strings.TrimSpace(strings.TrimPrefix(trimmed, fields[0]))
+	afterCommand := strings.TrimSpace(strings.TrimPrefix(rest, command))
+	switch command {
+	case "add":
+		arg = afterCommand
+		if arg == "" {
+			return "", "", true, fmt.Errorf("usage: /memory add <text>")
+		}
+		return command, arg, true, nil
+	case "show":
+		if len(fields) != 2 {
+			return "", "", true, fmt.Errorf("usage: /memory show")
+		}
+		return command, "", true, nil
+	default:
+		return command, afterCommand, true, nil
+	}
 }
 
 func parseSkillCommand(prompt string) (name, task string, ok bool) {
