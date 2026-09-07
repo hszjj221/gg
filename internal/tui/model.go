@@ -31,6 +31,8 @@ type Message struct {
 }
 
 type Config struct {
+	Context         context.Context
+	Queue           *agent.MessageQueue
 	CWD             string
 	ModelName       string
 	ShowUsage       bool
@@ -42,6 +44,8 @@ type Config struct {
 }
 
 type Model struct {
+	ctx            context.Context
+	queue          *agent.MessageQueue
 	cwd            string
 	modelName      string
 	showUsage      bool
@@ -87,12 +91,20 @@ type pendingApproval struct {
 }
 
 func NewModel(config Config) Model {
+	if config.Context == nil {
+		config.Context = context.Background()
+	}
+	if config.Queue == nil {
+		config.Queue = &agent.MessageQueue{}
+	}
 	input := textinput.New()
 	input.Prompt = "> "
 	input.Placeholder = "Ask gg..."
 	input.Focus()
 
 	model := Model{
+		ctx:            config.Context,
+		queue:          config.Queue,
 		cwd:            config.CWD,
 		modelName:      config.ModelName,
 		showUsage:      config.ShowUsage,
@@ -126,6 +138,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, waitForUpdateCmd(m.updates)
 	case submitDoneMsg:
+		if m.cancel != nil {
+			m.cancel()
+		}
 		m.busy = false
 		m.cancelRequested = false
 		m.cancel = nil
@@ -154,12 +169,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.input.Focus()
 		m.refreshViewport()
+		if msg.err != nil {
+			var pending []string
+			for text := m.queue.PopNext(); text != ""; text = m.queue.PopNext() {
+				pending = append(pending, text)
+			}
+			if m.input.Value() != "" {
+				pending = append(pending, m.input.Value())
+			}
+			m.input.SetValue(strings.Join(pending, "\n"))
+		} else if next := m.queue.PopNext(); next != "" {
+			draft := m.input.Value()
+			updated, cmd := m.startSubmit(next)
+			updated.input.SetValue(draft)
+			return updated, cmd
+		}
 		return m, nil
 	case approvalRequestMsg:
 		m.approval = &pendingApproval{request: msg.request, response: msg.response}
 		m.refreshViewport()
 		return m, nil
 	case tea.KeyMsg:
+		if msg.String() == "pgup" || msg.String() == "pgdown" {
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		}
 		if m.approval != nil {
 			switch msg.String() {
 			case "y", "Y":
@@ -184,7 +219,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.cancelRequested = true
 				return m, nil
-			case "enter":
+			case "enter", "alt+enter":
+				prompt := strings.TrimSpace(m.input.Value())
+				if prompt != "" && !m.cancelRequested {
+					m.queue.Add(prompt, msg.String() == "alt+enter")
+					m.input.SetValue("")
+				}
 				return m, nil
 			}
 		} else {
@@ -202,14 +242,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
-	if !m.busy {
+	if m.approval == nil {
 		m.input, cmd = m.input.Update(msg)
 	}
 	return m, cmd
 }
 
 func (m Model) View() string {
-	m.refreshViewport()
 	parts := []string{m.viewport.View()}
 	if m.approval != nil {
 		parts = append(parts, m.approvalPanel())
@@ -219,7 +258,7 @@ func (m Model) View() string {
 }
 
 func (m Model) startSubmit(prompt string) (Model, tea.Cmd) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(m.ctx)
 	updates := make(chan tea.Msg, 32)
 	m.busy = true
 	m.cancelRequested = false
@@ -231,13 +270,16 @@ func (m Model) startSubmit(prompt string) (Model, tea.Cmd) {
 		Message{Role: agent.RoleAssistant},
 	)
 	m.input.SetValue("")
-	m.input.Blur()
+	m.input.Focus()
 	m.refreshViewport()
-	return m, tea.Batch(startSubmitCmd(m.submit, ctx, prompt, updates, m.enableApproval), waitForUpdateCmd(updates))
+	return m, tea.Batch(startSubmitCmd(m.submit, m.ctx, ctx, prompt, updates, m.enableApproval), waitForUpdateCmd(updates))
 }
 
 func (m *Model) handleAgentEvent(event agent.Event) {
 	switch event.Type {
+	case agent.EventUserMessage:
+		m.removeEmptyPendingAssistant()
+		m.messages = append(m.messages, Message{Role: agent.RoleUser, Content: event.Text})
 	case agent.EventTextDelta:
 		m.appendAssistantDelta(event.Text)
 	case agent.EventToolCallStart:
@@ -330,8 +372,11 @@ func (m *Model) applyLayout() {
 }
 
 func (m *Model) refreshViewport() {
+	follow := m.viewport.AtBottom()
 	m.viewport.SetContent(m.renderMessages())
-	m.viewport.GotoBottom()
+	if follow {
+		m.viewport.GotoBottom()
+	}
 }
 
 func (m Model) renderMessages() string {
@@ -416,6 +461,12 @@ func (m Model) statusLine() string {
 		state = "approval"
 	}
 	parts := []string{"gg", shortPath(m.cwd), m.modelName, state}
+	if count := m.queue.Len(); count > 0 {
+		parts = append(parts, fmt.Sprintf("queued: %d", count))
+	}
+	if m.busy && m.approval == nil {
+		parts = append(parts, "Enter: steer | Alt+Enter: follow-up")
+	}
 	if m.showUsage && m.hasUsage {
 		parts = append(parts, fmt.Sprintf("tokens: prompt=%d completion=%d total=%d", m.lastUsage.PromptTokens, m.lastUsage.CompletionTokens, m.lastUsage.TotalTokens))
 	}
@@ -448,7 +499,7 @@ func (m Model) approvalPanel() string {
 	return approvalStyle.Width(max(1, m.width)).Render(b.String())
 }
 
-func startSubmitCmd(submit SubmitFunc, ctx context.Context, prompt string, updates chan tea.Msg, enableApproval bool) tea.Cmd {
+func startSubmitCmd(submit SubmitFunc, parent, ctx context.Context, prompt string, updates chan tea.Msg, enableApproval bool) tea.Cmd {
 	return func() tea.Msg {
 		go func() {
 			defer close(updates)
@@ -469,7 +520,10 @@ func startSubmitCmd(submit SubmitFunc, ctx context.Context, prompt string, updat
 				case <-ctx.Done():
 				}
 			}, approver)
-			updates <- submitDoneMsg{result: result, err: err}
+			select {
+			case updates <- submitDoneMsg{result: result, err: err}:
+			case <-parent.Done():
+			}
 		}()
 		return nil
 	}

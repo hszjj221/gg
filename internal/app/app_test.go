@@ -483,8 +483,8 @@ func TestTurnExecutorAutoCompactsWhenOverBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	history := []agent.Message{
-		{Role: agent.RoleUser, Content: strings.Repeat("old user ", 40)},
-		{Role: agent.RoleAssistant, Content: strings.Repeat("old assistant ", 40)},
+		{Role: agent.RoleUser, Content: strings.Repeat("old user ", 180)},
+		{Role: agent.RoleAssistant, Content: strings.Repeat("old assistant ", 180)},
 		{Role: agent.RoleUser, Content: "recent user"},
 		{Role: agent.RoleAssistant, Content: "recent assistant"},
 	}
@@ -497,7 +497,7 @@ func TestTurnExecutorAutoCompactsWhenOverBudget(t *testing.T) {
 	cfg := config.Config{
 		CWD:       dir,
 		Selection: "openai:gpt-4.1",
-		Context:   config.ContextConfig{MaxPromptTokens: 1, TailTurns: 1, SummaryMaxTokens: 100, AutoCompact: true},
+		Context:   config.ContextConfig{MaxPromptTokens: 1600, TailTurns: 1, SummaryMaxTokens: 100, AutoCompact: true},
 	}
 	executor := newTurnExecutor(
 		cfg,
@@ -608,15 +608,15 @@ func TestAutoCompactProviderErrorStopsMainRequest(t *testing.T) {
 	cfg := config.Config{
 		CWD:       dir,
 		Selection: "openai:gpt-4.1",
-		Context:   config.ContextConfig{MaxPromptTokens: 1, TailTurns: 1, SummaryMaxTokens: 100, AutoCompact: true},
+		Context:   config.ContextConfig{MaxPromptTokens: 1600, TailTurns: 1, SummaryMaxTokens: 100, AutoCompact: true},
 	}
 	executor := newTurnExecutor(
 		cfg,
 		func(config.Config) agent.Provider { return provider },
 		nil,
 		[]agent.Message{
-			{Role: agent.RoleUser, Content: strings.Repeat("old ", 50)},
-			{Role: agent.RoleAssistant, Content: strings.Repeat("assistant ", 50)},
+			{Role: agent.RoleUser, Content: strings.Repeat("old ", 300)},
+			{Role: agent.RoleAssistant, Content: strings.Repeat("assistant ", 300)},
 			{Role: agent.RoleUser, Content: "recent"},
 		},
 		nil,
@@ -854,15 +854,15 @@ description: Review local changes.
 	if len(messages) < 2 || messages[0].Role != agent.RoleSystem {
 		t.Fatalf("expected system message first: %+v", messages)
 	}
-	if got := messages[0].Content; !strings.Contains(got, "<available_skills>") || !strings.Contains(got, "<name>review</name>") {
+	if got := messages[1].Content; !strings.Contains(got, "<available_skills>") || !strings.Contains(got, "<name>review</name>") {
 		t.Fatalf("system message missing skill list:\n%s", got)
 	}
-	if got := messages[1].Content; got != "check this" {
+	if got := messages[len(messages)-1].Content; got != "check this" {
 		t.Fatalf("unexpected user prompt: %q", got)
 	}
 }
 
-func TestRunNoSkillsDoesNotInjectSystemMessage(t *testing.T) {
+func TestRunNoSkillsKeepsBaseInstructions(t *testing.T) {
 	dir := t.TempDir()
 	writeAppSkill(t, filepath.Join(dir, ".agents", "skills", "review"), `---
 name: review
@@ -888,8 +888,8 @@ description: Review local changes.
 		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
 	}
 	messages := provider.requests[0].Messages
-	if len(messages) != 1 || messages[0].Role != agent.RoleUser || messages[0].Content != "check this" {
-		t.Fatalf("--no-skills should leave only user prompt, got %+v", messages)
+	if len(messages) != 2 || messages[0].Role != agent.RoleSystem || messages[1].Role != agent.RoleUser || messages[1].Content != "check this" {
+		t.Fatalf("--no-skills should keep base instructions and user prompt, got %+v", messages)
 	}
 }
 
@@ -914,10 +914,10 @@ func TestRunInjectsMemorySystemMessage(t *testing.T) {
 		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
 	}
 	messages := provider.requests[0].Messages
-	if len(messages) != 2 || messages[0].Role != agent.RoleSystem || messages[1].Role != agent.RoleUser {
+	if len(messages) != 3 || messages[0].Role != agent.RoleSystem || messages[1].Role != agent.RoleSystem || messages[2].Role != agent.RoleUser {
 		t.Fatalf("expected memory system and user messages, got %+v", messages)
 	}
-	if !strings.Contains(messages[0].Content, "User memory from ~/.gg/memory.md") || !strings.Contains(messages[0].Content, "Prefer concise Chinese replies") {
+	if !strings.Contains(messages[1].Content, "User memory from ~/.gg/memory.md") || !strings.Contains(messages[1].Content, "Prefer concise Chinese replies") {
 		t.Fatalf("memory system message missing content:\n%s", messages[0].Content)
 	}
 }
@@ -943,8 +943,8 @@ func TestRunNoMemoryDoesNotInjectMemorySystemMessage(t *testing.T) {
 		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
 	}
 	messages := provider.requests[0].Messages
-	if len(messages) != 1 || messages[0].Role != agent.RoleUser || messages[0].Content != "check this" {
-		t.Fatalf("--no-memory should leave only user prompt, got %+v", messages)
+	if len(messages) != 2 || messages[0].Role != agent.RoleSystem || messages[1].Role != agent.RoleUser || messages[1].Content != "check this" {
+		t.Fatalf("--no-memory should keep base instructions and user prompt, got %+v", messages)
 	}
 }
 
@@ -984,8 +984,8 @@ func TestRunMemoryDisabledConfigDoesNotInjectMemorySystemMessage(t *testing.T) {
 		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
 	}
 	messages := provider.requests[0].Messages
-	if len(messages) != 1 || messages[0].Role != agent.RoleUser {
-		t.Fatalf("disabled memory should not inject system message, got %+v", messages)
+	if len(messages) != 2 || messages[0].Role != agent.RoleSystem || messages[1].Role != agent.RoleUser {
+		t.Fatalf("disabled memory should keep only base instructions, got %+v", messages)
 	}
 }
 
@@ -1331,7 +1331,7 @@ func TestRunContinueLoadsLatestSession(t *testing.T) {
 		t.Fatalf("expected one request, got %d", len(provider.requests))
 	}
 	messages := provider.requests[0].Messages
-	if len(messages) != 2 || messages[0].Content != "previous" || messages[1].Content != "next" {
+	if len(messages) != 3 || messages[1].Content != "previous" || messages[2].Content != "next" {
 		t.Fatalf("latest session was not loaded: %+v", messages)
 	}
 }

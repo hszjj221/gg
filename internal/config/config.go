@@ -16,6 +16,7 @@ const (
 	DefaultSelection = DefaultProvider + ":" + DefaultModel
 
 	DefaultMaxPromptTokens  = 24000
+	DefaultMaxOutputTokens  = 4096
 	DefaultTailTurns        = 6
 	DefaultSummaryMaxTokens = 1200
 	DefaultMemoryMaxTokens  = 1200
@@ -24,13 +25,14 @@ const (
 )
 
 type Options struct {
-	APIKey     string
-	BaseURL    string
-	Model      string
-	SessionDir string
-	CWD        string
-	HomeDir    string
-	NoMemory   bool
+	APIKey         string
+	BaseURL        string
+	Model          string
+	SessionDir     string
+	CWD            string
+	HomeDir        string
+	NoMemory       bool
+	NoContextFiles bool
 }
 
 type ProviderConfig struct {
@@ -42,6 +44,7 @@ type ProviderConfig struct {
 
 type ContextConfig struct {
 	MaxPromptTokens  int  `json:"maxPromptTokens"`
+	MaxOutputTokens  int  `json:"maxOutputTokens"`
 	TailTurns        int  `json:"tailTurns"`
 	SummaryMaxTokens int  `json:"summaryMaxTokens"`
 	AutoCompact      bool `json:"autoCompact"`
@@ -53,18 +56,19 @@ type MemoryConfig struct {
 }
 
 type Config struct {
-	APIKey       string
-	BaseURL      string
-	Model        string
-	Provider     string
-	ProviderType string
-	Selection    string
-	Providers    map[string]ProviderConfig
-	Context      ContextConfig
-	Memory       MemoryConfig
-	MemoryPath   string
-	SessionDir   string
-	CWD          string
+	APIKey         string
+	BaseURL        string
+	Model          string
+	Provider       string
+	ProviderType   string
+	Selection      string
+	Providers      map[string]ProviderConfig
+	Context        ContextConfig
+	Memory         MemoryConfig
+	MemoryPath     string
+	SessionDir     string
+	CWD            string
+	NoContextFiles bool
 
 	apiKeyOverride  string
 	baseURLOverride string
@@ -79,6 +83,7 @@ type fileConfig struct {
 
 type contextFileConfig struct {
 	MaxPromptTokens  *int  `json:"maxPromptTokens"`
+	MaxOutputTokens  *int  `json:"maxOutputTokens"`
 	TailTurns        *int  `json:"tailTurns"`
 	SummaryMaxTokens *int  `json:"summaryMaxTokens"`
 	AutoCompact      *bool `json:"autoCompact"`
@@ -124,6 +129,7 @@ func Resolve(options Options) (Config, error) {
 		MemoryPath:      filepath.Join(home, ".gg", "memory.md"),
 		SessionDir:      sessionDir,
 		CWD:             cwd,
+		NoContextFiles:  options.NoContextFiles,
 		apiKeyOverride:  options.APIKey,
 		baseURLOverride: options.BaseURL,
 	}
@@ -216,12 +222,19 @@ func legacyConfig() fileConfig {
 func resolveContextConfig(file contextFileConfig) (ContextConfig, error) {
 	cfg := ContextConfig{
 		MaxPromptTokens:  DefaultMaxPromptTokens,
+		MaxOutputTokens:  DefaultMaxOutputTokens,
 		TailTurns:        DefaultTailTurns,
 		SummaryMaxTokens: DefaultSummaryMaxTokens,
 		AutoCompact:      true,
 	}
 	if file.MaxPromptTokens != nil {
 		cfg.MaxPromptTokens = *file.MaxPromptTokens
+	}
+	if file.MaxOutputTokens != nil {
+		cfg.MaxOutputTokens = *file.MaxOutputTokens
+	}
+	if cfg.MaxOutputTokens <= 0 {
+		return ContextConfig{}, fmt.Errorf("context.maxOutputTokens must be greater than 0")
 	}
 	if file.TailTurns != nil {
 		cfg.TailTurns = *file.TailTurns

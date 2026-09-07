@@ -88,7 +88,10 @@ func (t EditTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, e
 	}, nil
 }
 
-func (t EditTool) Execute(_ context.Context, raw json.RawMessage) ToolResult {
+func (t EditTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {
+	if err := ctx.Err(); err != nil {
+		return errorResult(err)
+	}
 	var input struct {
 		Path  string            `json:"path"`
 		Edits []editReplacement `json:"edits"`
@@ -113,7 +116,7 @@ func (t EditTool) Execute(_ context.Context, raw json.RawMessage) ToolResult {
 		return errorResult(err)
 	}
 	updated := applyLocatedEdits(original, edits)
-	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+	if err := writeFileAtomic(ctx, path, []byte(updated)); err != nil {
 		return errorResult(err)
 	}
 	return textResult(fmt.Sprintf("applied %d edit(s) to %s", len(edits), input.Path))
@@ -128,19 +131,27 @@ type locatedEdit struct {
 
 func locateEdits(original string, replacements []editReplacement) ([]locatedEdit, error) {
 	edits := make([]locatedEdit, 0, len(replacements))
+	normalized := normalizeNewlines(original)
 	for _, repl := range replacements {
+		repl.OldText = normalizeNewlines(repl.OldText)
 		if repl.OldText == "" {
 			return nil, fmt.Errorf("oldText must not be empty")
 		}
-		if count := strings.Count(original, repl.OldText); count != 1 {
+		if count := strings.Count(normalized, repl.OldText); count != 1 {
 			return nil, fmt.Errorf("oldText %q must match exactly once, matched %d times", repl.OldText, count)
 		}
-		start := strings.Index(original, repl.OldText)
+		index := strings.Index(normalized, repl.OldText)
+		start := originalOffset(original, index)
+		end := originalOffset(original, index+len(repl.OldText))
+		newText := normalizeNewlines(repl.NewText)
+		if strings.Contains(original[start:end], "\r\n") || (strings.Contains(original, "\r\n") && !strings.Contains(strings.ReplaceAll(original, "\r\n", ""), "\n")) {
+			newText = strings.ReplaceAll(newText, "\n", "\r\n")
+		}
 		edits = append(edits, locatedEdit{
 			start: start,
-			end:   start + len(repl.OldText),
+			end:   end,
 			old:   repl.OldText,
-			new:   repl.NewText,
+			new:   newText,
 		})
 	}
 	sort.Slice(edits, func(i, j int) bool { return edits[i].start < edits[j].start })
@@ -150,6 +161,17 @@ func locateEdits(original string, replacements []editReplacement) ([]locatedEdit
 		}
 	}
 	return edits, nil
+}
+
+func originalOffset(text string, normalizedOffset int) int {
+	i := 0
+	for n := 0; n < normalizedOffset; n++ {
+		if text[i] == '\r' && i+1 < len(text) && text[i+1] == '\n' {
+			i++
+		}
+		i++
+	}
+	return i
 }
 
 func applyLocatedEdits(original string, edits []locatedEdit) string {

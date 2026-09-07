@@ -11,6 +11,9 @@
 - 支持 tool calling 的 OpenAI-compatible streaming provider
 - 对临时模型调用失败自动重试
 - 支持列出和恢复命令的 JSONL 会话存储
+- 增量保存会话，支持中断恢复
+- 运行中补充要求和排队后续任务
+- 从 `AGENTS.md` 加载项目规则
 - 通过 `--usage` 可选展示 token 消耗
 - 从 `.agents/skills` 加载 Codex 风格本地 skills
 - 从 `~/.gg/memory.md` 加载简单 Markdown memory
@@ -76,6 +79,9 @@ gg --continue "Resume the latest session"
 
 - 在终端中运行 `gg` 会启动 TUI chat 界面。
 - TUI 会展示对话、单行 prompt 输入框、streaming 回复和状态栏。
+- 运行中按 Enter 可补充要求，在下一次模型调用前交付；Alt+Enter 可排队后续任务，当前任务成功后执行。斜杠命令请使用后续任务队列。
+- Escape 或 Ctrl+C 取消当前执行；取消或失败后，尚未交付的排队消息会恢复到输入框。
+- Page Up / Page Down 可翻阅历史，流式输出不会打断对旧消息的阅读。
 - TUI 还会以内联紧凑日志展示 `read`、`bash`、`edit`、`write`、`subagent` 等工具调用。
 - 使用 `/model` 查看已配置模型，使用 `/model provider:model` 切换后续 turn 使用的 provider/model。
 - 工具日志只是 TUI 视图能力；不会改变 JSONL session 格式，也不会影响一次性 prompt 或按行交互输出。
@@ -97,6 +103,7 @@ Provider/model 配置：
   "default": "openai:gpt-4.1",
   "context": {
     "maxPromptTokens": 24000,
+    "maxOutputTokens": 4096,
     "tailTurns": 6,
     "summaryMaxTokens": 1200,
     "autoCompact": true
@@ -132,17 +139,35 @@ Provider/model 配置：
 
 v1 只支持 `openai-compatible` provider。不支持远端拉取模型列表；请在 `models` 里显式列出可选模型。
 
-模型调用遇到网络错误、限流或 5xx 响应等临时失败时会自动重试。`gg` 不会 fallback 到其他 provider 或模型；如果所有重试都失败，会继续走现有 CLI 或 TUI 错误展示路径。
+流式输出开始前遇到网络错误、限流或 5xx 响应等临时失败时会自动重试。流中断、工具参数不完整或输出达到长度限制会明确报错，保留部分回复，不会盲目重试已经输出的内容。输出长度使用 `max_tokens`；服务明确要求 `max_completion_tokens` 时会自动切换参数重试。`gg` 不会 fallback 到其他 provider 或模型；如果所有重试都失败，会继续走现有 CLI 或 TUI 错误展示路径。
+
+项目规则：
+
+- 每轮都会注入基础编码指令和当前工作目录。
+- 依次读取 `~/.gg/AGENTS.md`、各级父目录及当前目录的 `AGENTS.md`；每个用户回合重新读取，每个文件上限 32 KiB。
+- `--no-context-files` 可关闭 `AGENTS.md` 加载，基础指令仍保留。
+
+工具输出与文件：
+
+- `read` 从指定行开始返回最多 2,000 行或 50 KiB，支持读取大文件深处的内容。
+- `edit` 统一匹配 LF / CRLF 文本，保留未修改部分和文件权限，并使用原子写入。
+- `bash` 保留输出最后 50 KiB；被截断时，完整日志保存到 `.gg/outputs/`，并返回可继续读取的路径。日志保留到手动删除。
+- Unix 系统取消或超时会终止 shell 进程组；其他平台会限制等待继承输出管道的时间。
 
 会话管理：
 
 - `gg sessions list` 会列出当前工作目录的会话。
 - `gg resume <id-or-path>` 可以通过显示的 ID、JSONL 文件名（不含 `.jsonl` 后缀）、文件名或路径恢复会话。
 - `gg --continue` 和 `gg --last` 会恢复当前工作目录的最新会话。
+- 用户输入、完整模型消息、每个工具结果分别即时保存；模型调用失败时仍保留已完成操作和部分回复。
+- 恢复会话时可修复末尾未写完的 JSONL 记录；缺失的工具结果会标记为未知，由模型检查当前状态后再决定是否重试。
 
 上下文管理：
 
-- `gg` 会估算 prompt 大小，并在 `context.autoCompact` 启用时自动压缩长会话。
+- 每次模型请求前都会检查消息和工具定义的估算大小，包括同一任务中连续工具调用之间的请求。
+- 启用 `context.autoCompact` 时，先总结旧内容，再按 token 预算保留近期历史；不会拆开工具调用与结果，也不会直接丢弃未总结的要求。
+- 摘要请求也受输入预算限制，必要时分批处理；仍无法满足预算时返回明确错误。
+- `context.maxOutputTokens` 限制普通回复长度，默认 4096；`context.summaryMaxTokens` 限制摘要回复长度。输入和输出预算之和应适配所用模型的上下文窗口。
 - 压缩会写入 JSONL `summary` entry，并保留最近若干轮原文；原始 session 消息不会被删除或重写。
 - 恢复会话时会使用最近 summary 加上尚未压缩的近期 turn。
 - `/compact` 可以手动写入新 summary，`/context` 会展示当前估算 prompt 大小和预算。
@@ -210,6 +235,8 @@ gg -p "Use a subagent to inspect how sessions are stored, then summarize the flo
 ```
 
 ## Development
+
+Runner 提供 `BeforeRequest`、`OnMessage`、`DrainMessages` 钩子，分别用于准备上下文、持久化消息和交付运行中补充要求，执行循环不依赖 TUI。
 
 运行测试套件：
 

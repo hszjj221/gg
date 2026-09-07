@@ -64,7 +64,10 @@ func (t WriteTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, 
 	}, nil
 }
 
-func (t WriteTool) Execute(_ context.Context, raw json.RawMessage) ToolResult {
+func (t WriteTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {
+	if err := ctx.Err(); err != nil {
+		return errorResult(err)
+	}
 	var input struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
@@ -79,7 +82,7 @@ func (t WriteTool) Execute(_ context.Context, raw json.RawMessage) ToolResult {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return errorResult(err)
 	}
-	if err := os.WriteFile(path, []byte(input.Content), 0o644); err != nil {
+	if err := writeFileAtomic(ctx, path, []byte(input.Content)); err != nil {
 		return errorResult(err)
 	}
 	return textResult(fmt.Sprintf("wrote %d bytes to %s", len(input.Content), input.Path))

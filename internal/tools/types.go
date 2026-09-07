@@ -10,7 +10,7 @@ const ContentText = agent.ContentText
 
 const (
 	defaultMaxReadLines = 2000
-	defaultMaxReadBytes = 256 * 1024
+	defaultMaxReadBytes = 50 * 1024
 )
 
 func textResult(text string) ToolResult {

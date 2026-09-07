@@ -3,6 +3,7 @@ package app
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -59,13 +60,14 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	}
 
 	cfg, err := config.Resolve(config.Options{
-		APIKey:     parsed.APIKey,
-		BaseURL:    parsed.BaseURL,
-		Model:      parsed.Model,
-		SessionDir: parsed.SessionDir,
-		CWD:        options.CWD,
-		HomeDir:    options.HomeDir,
-		NoMemory:   parsed.NoMemory,
+		APIKey:         parsed.APIKey,
+		BaseURL:        parsed.BaseURL,
+		Model:          parsed.Model,
+		SessionDir:     parsed.SessionDir,
+		CWD:            options.CWD,
+		HomeDir:        options.HomeDir,
+		NoMemory:       parsed.NoMemory,
+		NoContextFiles: parsed.NoContextFiles,
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -183,6 +185,7 @@ type turnExecutor struct {
 	summary         *session.SummaryEntry
 	skillSet        skills.Set
 	modelRecorded   bool
+	queue           *agent.MessageQueue
 }
 
 type agentProviderFactory func(config.Config) agent.Provider
@@ -214,33 +217,29 @@ func (e *turnExecutor) Run(ctx context.Context, prompt string, onEvent func(agen
 	if err != nil {
 		return turnResult{}, err
 	}
+	if err := e.recoverPendingTools(); err != nil {
+		return turnResult{}, err
+	}
 	user := agent.Message{Role: agent.RoleUser, Content: preparedPrompt, Timestamp: time.Now().UnixMilli()}
+	if err := e.persistMessage(user); err != nil {
+		return turnResult{}, err
+	}
 	provider := e.providerFactory(e.cfg)
 	summaryUsage := agent.Usage{}
-	build := e.buildContext(systemMessages, user)
-	if e.cfg.Context.AutoCompact && build.PromptTokens > e.cfg.Context.MaxPromptTokens {
-		compact, err := e.compactHistory(ctx, provider)
-		if err != nil {
-			return turnResult{}, err
-		}
-		summaryUsage = summaryUsage.Add(compact.usage)
-		build = e.buildContext(systemMessages, user)
-	}
-	runner := agent.NewRunnerWithOptions(provider, defaultTools(e.cfg, provider, e.skillSet.ReadRoots()), agent.RunnerOptions{Approver: approver})
-	reply, err := runner.Run(ctx, build.Messages, onEvent)
-	if err != nil {
-		return turnResult{}, err
-	}
-	newMessages := runner.Transcript()[len(build.Messages)-1:]
-	if err := appendNewMessages(e.store, newMessages, 0); err != nil {
-		return turnResult{}, err
-	}
+	runner := agent.NewRunnerWithOptions(provider, defaultTools(e.cfg, provider, e.skillSet.ReadRoots()), agent.RunnerOptions{
+		Approver:      approver,
+		OnMessage:     e.persistMessage,
+		DrainMessages: e.queue.DrainSteering,
+		BeforeRequest: func(ctx context.Context, req agent.Request) (agent.Request, error) {
+			prepared, usage, err := e.prepareRequest(ctx, provider, systemMessages, req)
+			summaryUsage = summaryUsage.Add(usage)
+			return prepared, err
+		},
+	})
+	reply, runErr := runner.Run(ctx, nil, onEvent)
 	usage := summaryUsage.Add(runner.Usage())
-	if err := appendUsage(e.store, usage); err != nil {
-		return turnResult{}, err
-	}
-	e.history = append(e.history, stripSystemMessages(newMessages)...)
-	return turnResult{Content: reply.Content, Usage: usage, ModelName: e.cfg.Selection}, nil
+	persistErr := appendUsage(e.store, runner.Usage())
+	return turnResult{Content: reply.Content, Usage: usage, ModelName: e.cfg.Selection}, errors.Join(runErr, persistErr)
 }
 
 func (e *turnExecutor) handleControlCommand(ctx context.Context, prompt string) (turnResult, bool, error) {
@@ -259,9 +258,6 @@ func (e *turnExecutor) handleControlCommand(ctx context.Context, prompt string) 
 		}
 		compact, err := e.compactHistory(ctx, e.providerFactory(e.cfg))
 		if err != nil {
-			return turnResult{}, true, err
-		}
-		if err := appendUsage(e.store, compact.usage); err != nil {
 			return turnResult{}, true, err
 		}
 		return turnResult{Content: compact.message, Usage: compact.usage, ModelName: e.cfg.Selection}, true, nil
@@ -380,49 +376,38 @@ func (e *turnExecutor) summaryState() contextmgr.SummaryState {
 }
 
 func (e *turnExecutor) compactHistory(ctx context.Context, provider agent.Provider) (compactResult, error) {
-	messages, through, keptTurns := contextmgr.SummarizePrefix(e.history, e.summaryState(), e.cfg.Context.TailTurns)
-	if len(messages) == 0 {
-		return compactResult{message: fmt.Sprintf("context compacted: summarized 0 messages, kept %d turns", keptTurns)}, nil
-	}
-	prompt := contextmgr.FormatSummaryPrompt(e.summaryState().Text, messages, e.cfg.Context.SummaryMaxTokens)
-	reply, err := provider.Complete(ctx, agent.Request{Messages: []agent.Message{
-		{Role: agent.RoleSystem, Content: "You compact conversation history for a coding agent."},
-		{Role: agent.RoleUser, Content: prompt},
-	}}, nil)
-	if err != nil {
-		return compactResult{}, fmt.Errorf("context compaction failed: %w", err)
-	}
-	summary := strings.TrimSpace(reply.Content)
-	if summary == "" {
-		return compactResult{}, fmt.Errorf("context compaction returned empty summary")
-	}
-	if e.store != nil {
-		if err := e.store.AppendSummary(summary, through); err != nil {
-			return compactResult{}, err
-		}
-	}
-	e.summary = &session.SummaryEntry{Summary: summary, ThroughMessageCount: through}
-	return compactResult{
-		message: fmt.Sprintf("context compacted: summarized %d messages, kept %d turns", len(messages), keptTurns),
-		usage:   reply.Usage,
-	}, nil
+	_, through, _ := contextmgr.SummarizePrefix(e.history, e.summaryState(), e.cfg.Context.TailTurns)
+	return e.compactThrough(ctx, provider, through)
 }
 
 func (e *turnExecutor) contextStatus() string {
-	build := e.buildContext(skillSystemMessages(e.skillSet), agent.Message{Role: agent.RoleUser})
+	system, err := e.systemMessages()
+	if err != nil {
+		return "context: " + err.Error()
+	}
+	build := e.buildContext(system, agent.Message{})
+	var defs []agent.ToolDefinition
+	for _, tool := range defaultTools(e.cfg, nil, e.skillSet.ReadRoots()) {
+		defs = append(defs, tool.Definition())
+	}
 	hasSummary := e.summary != nil && strings.TrimSpace(e.summary.Summary) != ""
 	return fmt.Sprintf(
-		"context: promptTokens=%d maxPromptTokens=%d tailTurns=%d summary=%t autoCompact=%t",
-		build.PromptTokens,
+		"context: promptTokens=%d maxPromptTokens=%d tailTurns=%d summary=%t autoCompact=%t maxOutputTokens=%d",
+		build.PromptTokens+contextmgr.EstimateTools(defs),
 		e.cfg.Context.MaxPromptTokens,
 		e.cfg.Context.TailTurns,
 		hasSummary,
 		e.cfg.Context.AutoCompact,
+		e.cfg.Context.MaxOutputTokens,
 	)
 }
 
 func (e *turnExecutor) systemMessages() ([]agent.Message, error) {
-	messages := skillSystemMessages(e.skillSet)
+	messages, err := e.instructionMessages()
+	if err != nil {
+		return nil, err
+	}
+	messages = append(messages, skillSystemMessages(e.skillSet)...)
 	if !e.cfg.Memory.Enabled {
 		return messages, nil
 	}
@@ -534,7 +519,9 @@ func runTUI(
 	showUsage bool,
 	enableApproval bool,
 ) int {
+	executor.queue = &agent.MessageQueue{}
 	err := tui.Run(ctx, tui.Config{
+		Queue:           executor.queue,
 		CWD:             cfg.CWD,
 		ModelName:       cfg.Selection,
 		ShowUsage:       showUsage,
@@ -552,18 +539,6 @@ func runTUI(
 		return 1
 	}
 	return 0
-}
-
-func appendNewMessages(store *session.Store, transcript []agent.Message, skip int) error {
-	if store == nil {
-		return nil
-	}
-	for _, msg := range transcript[skip:] {
-		if err := store.AppendMessage(msg); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func appendUsage(store *session.Store, usage agent.Usage) error {

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"strings"
 )
 
 type Role string
@@ -23,9 +24,11 @@ const (
 type StopReason string
 
 const (
-	StopReasonEndTurn StopReason = "end_turn"
-	StopReasonToolUse StopReason = "tool_use"
-	StopReasonError   StopReason = "error"
+	StopReasonEndTurn   StopReason = "end_turn"
+	StopReasonToolUse   StopReason = "tool_use"
+	StopReasonError     StopReason = "error"
+	StopReasonMaxTokens StopReason = "max_tokens"
+	StopReasonCanceled  StopReason = "canceled"
 )
 
 type EventType string
@@ -34,6 +37,7 @@ const (
 	EventTextDelta      EventType = "text_delta"
 	EventToolCallStart  EventType = "tool_call_start"
 	EventToolCallFinish EventType = "tool_call_finish"
+	EventUserMessage    EventType = "user_message"
 )
 
 type Usage struct {
@@ -73,6 +77,26 @@ type Message struct {
 	ToolCallID    string         `json:"toolCallId,omitempty"`
 	ToolName      string         `json:"toolName,omitempty"`
 	Timestamp     int64          `json:"timestamp,omitempty"`
+	StopReason    StopReason     `json:"stopReason,omitempty"`
+	Error         string         `json:"error,omitempty"`
+}
+
+// Content and ContentBlocks may mirror each other in older sessions.
+func MessageText(message Message) string {
+	text := message.Content
+	var parts []string
+	if text == "" {
+		for _, block := range message.ContentBlocks {
+			if block.Type == ContentText {
+				parts = append(parts, block.Text)
+			}
+		}
+		text = strings.Join(parts, "\n")
+	}
+	if message.Role == RoleAssistant && message.Error != "" {
+		text += "\n[Response incomplete: " + message.Error + "]"
+	}
+	return text
 }
 
 type AssistantMessage struct {
@@ -120,8 +144,9 @@ type Tool interface {
 }
 
 type Request struct {
-	Messages []Message        `json:"messages"`
-	Tools    []ToolDefinition `json:"tools,omitempty"`
+	Messages        []Message        `json:"messages"`
+	Tools           []ToolDefinition `json:"tools,omitempty"`
+	MaxOutputTokens int              `json:"maxOutputTokens,omitempty"`
 }
 
 type Event struct {

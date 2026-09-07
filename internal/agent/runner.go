@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -12,14 +13,23 @@ const defaultMaxTurns = 32
 type RunnerOptions struct {
 	MaxTurns int
 	Approver Approver
+	// BeforeRequest may rebuild the model context without rewriting the transcript.
+	BeforeRequest func(context.Context, Request) (Request, error)
+	// OnMessage runs before executing any tools requested by the message.
+	// Returning an error stops execution, for example when persistence fails.
+	OnMessage     func(Message) error
+	DrainMessages func() []Message
 }
 
 type Runner struct {
-	provider Provider
-	tools    map[string]Tool
-	defs     []ToolDefinition
-	maxTurns int
-	approver Approver
+	provider      Provider
+	tools         map[string]Tool
+	defs          []ToolDefinition
+	maxTurns      int
+	approver      Approver
+	beforeRequest func(context.Context, Request) (Request, error)
+	onMessage     func(Message) error
+	drainMessages func() []Message
 
 	transcript []Message
 	usage      Usage
@@ -40,7 +50,7 @@ func NewRunnerWithOptions(provider Provider, tools []Tool, options RunnerOptions
 	if maxTurns <= 0 {
 		maxTurns = defaultMaxTurns
 	}
-	return &Runner{provider: provider, tools: toolMap, defs: defs, maxTurns: maxTurns, approver: options.Approver}
+	return &Runner{provider: provider, tools: toolMap, defs: defs, maxTurns: maxTurns, approver: options.Approver, beforeRequest: options.BeforeRequest, onMessage: options.OnMessage, drainMessages: options.DrainMessages}
 }
 
 func (r *Runner) Transcript() []Message {
@@ -57,17 +67,74 @@ func (r *Runner) Run(ctx context.Context, messages []Message, onEvent func(Event
 	current := append([]Message(nil), messages...)
 	r.transcript = append([]Message(nil), messages...)
 	r.usage = Usage{}
+	addQueued := func() (int, error) {
+		if r.drainMessages == nil {
+			return 0, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		queued := r.drainMessages()
+		for _, message := range queued {
+			if err := r.record(message); err != nil {
+				return 0, err
+			}
+			current = append(current, message)
+			emitToolEvent(onEvent, Event{Type: EventUserMessage, Text: message.Content})
+		}
+		return len(queued), nil
+	}
 
 	for turn := 0; turn < r.maxTurns; turn++ {
-		reply, err := r.provider.Complete(ctx, Request{Messages: current, Tools: r.defs}, onEvent)
-		if err != nil {
+		if err := ctx.Err(); err != nil {
 			return AssistantMessage{}, err
 		}
+		if _, err := addQueued(); err != nil {
+			return AssistantMessage{}, err
+		}
+		req := Request{Messages: current, Tools: r.defs}
+		if r.beforeRequest != nil {
+			var err error
+			req, err = r.beforeRequest(ctx, req)
+			if err != nil {
+				return AssistantMessage{}, err
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return AssistantMessage{}, err
+		}
+		reply, err := r.provider.Complete(ctx, req, onEvent)
 		r.usage = r.usage.Add(reply.Usage)
+		if err != nil {
+			// Partial tool arguments must never be persisted as executable calls.
+			msg := reply.Message
+			msg.Role, msg.ToolCalls, msg.Error = RoleAssistant, nil, err.Error()
+			msg.StopReason = reply.StopReason
+			if msg.StopReason == "" {
+				msg.StopReason = StopReasonError
+			}
+			if errors.Is(err, context.Canceled) {
+				msg.StopReason = StopReasonCanceled
+			}
+			if msg.Content == "" {
+				msg.Content = "Request interrupted: " + err.Error()
+			}
+			return reply, errors.Join(err, r.record(msg))
+		}
+		reply.Message.StopReason = reply.StopReason
+		if err := r.record(reply.Message); err != nil {
+			return AssistantMessage{}, err
+		}
 		current = append(current, reply.Message)
-		r.transcript = append(r.transcript, reply.Message)
 
 		if len(reply.ToolCalls) == 0 && reply.StopReason != StopReasonToolUse {
+			count, err := addQueued()
+			if err != nil {
+				return reply, err
+			}
+			if count > 0 {
+				continue
+			}
 			return reply, nil
 		}
 
@@ -86,14 +153,37 @@ func (r *Runner) Run(ctx context.Context, messages []Message, onEvent func(Event
 				}},
 			}
 			current = append(current, toolMessage)
-			r.transcript = append(r.transcript, toolMessage)
+			if result.IsError {
+				toolMessage.Error = content
+			}
+			if err := r.record(toolMessage); err != nil {
+				return AssistantMessage{}, err
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return AssistantMessage{}, err
 		}
 	}
 
 	return AssistantMessage{}, fmt.Errorf("agent exceeded %d turns", r.maxTurns)
 }
 
+func (r *Runner) record(message Message) error {
+	if r.onMessage != nil {
+		if err := r.onMessage(message); err != nil {
+			return err
+		}
+	}
+	r.transcript = append(r.transcript, message)
+	return nil
+}
+
 func (r *Runner) executeToolCall(ctx context.Context, call ToolCall, onEvent func(Event)) ToolResult {
+	if err := ctx.Err(); err != nil {
+		result := toolError(fmt.Errorf("tool not executed: %w", err))
+		emitToolFinish(onEvent, call, call.Name, result)
+		return result
+	}
 	tool, ok := r.tools[call.Name]
 	if !ok {
 		summary, details := fallbackToolSummary(call)
@@ -131,6 +221,11 @@ func (r *Runner) executeToolCall(ctx context.Context, call ToolCall, onEvent fun
 				return result
 			}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		result := toolError(fmt.Errorf("tool not executed: %w", err))
+		emitToolFinish(onEvent, call, summary, result)
+		return result
 	}
 	result := tool.Execute(ctx, call.Arguments)
 	emitToolFinish(onEvent, call, summary, result)

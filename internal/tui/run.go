@@ -7,6 +7,9 @@ import (
 )
 
 func Run(ctx context.Context, config Config) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	config.Context = ctx
 	model := NewModel(config)
 	options := []tea.ProgramOption{tea.WithAltScreen()}
 	if config.Input != nil {

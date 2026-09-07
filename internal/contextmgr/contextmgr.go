@@ -1,6 +1,7 @@
 package contextmgr
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -8,8 +9,6 @@ import (
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/config"
 )
-
-const toolResultPreviewRunes = 1200
 
 type SummaryState struct {
 	Text                string
@@ -33,61 +32,25 @@ type BuildResult struct {
 }
 
 func Build(input BuildInput) BuildResult {
-	cfg := input.Config
 	messages := make([]agent.Message, 0, len(input.System)+len(input.History)+2)
 	messages = append(messages, input.System...)
 	if strings.TrimSpace(input.Summary.Text) != "" {
 		messages = append(messages, SummarySystemMessage(input.Summary.Text))
 	}
 	start := input.Summary.ThroughMessageCount
-	if start < 0 || start > len(input.History) {
+	if start < 0 || start > len(input.History) || strings.TrimSpace(input.Summary.Text) == "" {
 		start = 0
 	}
 	messages = append(messages, cloneMessages(input.History[start:])...)
-	messages = append(messages, input.Current)
+	if input.Current.Role != "" {
+		messages = append(messages, input.Current)
+	}
 	result := BuildResult{
 		Messages:        messages,
 		PromptTokens:    EstimateMessages(messages),
 		KeptTurns:       CountUserTurns(input.History[start:]),
 		SummaryIncluded: strings.TrimSpace(input.Summary.Text) != "",
 	}
-	if cfg.MaxPromptTokens <= 0 || result.PromptTokens <= cfg.MaxPromptTokens || !result.SummaryIncluded {
-		return result
-	}
-
-	maxTailTurns := cfg.TailTurns
-	if maxTailTurns <= 0 {
-		maxTailTurns = 1
-	}
-	for turns := maxTailTurns; turns >= 1; turns-- {
-		tailStart := TailStart(input.History, turns)
-		if input.Summary.ThroughMessageCount > tailStart && input.Summary.ThroughMessageCount <= len(input.History) {
-			tailStart = input.Summary.ThroughMessageCount
-		}
-		messages = make([]agent.Message, 0, len(input.System)+len(input.History[tailStart:])+2)
-		messages = append(messages, input.System...)
-		if strings.TrimSpace(input.Summary.Text) != "" {
-			messages = append(messages, SummarySystemMessage(input.Summary.Text))
-		}
-		messages = append(messages, cloneMessages(input.History[tailStart:])...)
-		messages = append(messages, input.Current)
-		result.Messages = messages
-		result.PromptTokens = EstimateMessages(messages)
-		result.KeptTurns = CountUserTurns(input.History[tailStart:])
-		if result.PromptTokens <= cfg.MaxPromptTokens {
-			return result
-		}
-	}
-
-	for i := range result.Messages {
-		if result.Messages[i].Role != agent.RoleTool || len([]rune(result.Messages[i].Content)) <= toolResultPreviewRunes {
-			continue
-		}
-		result.Messages[i].Content = truncateRunes(result.Messages[i].Content, toolResultPreviewRunes) + "\n... truncated for context ..."
-		result.Messages[i].ContentBlocks = []agent.ContentBlock{{Type: agent.ContentText, Text: result.Messages[i].Content}}
-		result.TruncatedToolResults = true
-	}
-	result.PromptTokens = EstimateMessages(result.Messages)
 	return result
 }
 
@@ -139,10 +102,7 @@ func CountUserTurns(messages []agent.Message) int {
 func EstimateMessages(messages []agent.Message) int {
 	total := 0
 	for _, message := range messages {
-		total += EstimateText(string(message.Role)) + EstimateText(message.Content)
-		for _, block := range message.ContentBlocks {
-			total += EstimateText(block.Text)
-		}
+		total += 4 + EstimateText(string(message.Role)) + EstimateText(agent.MessageText(message))
 		for _, call := range message.ToolCalls {
 			total += EstimateText(call.ID) + EstimateText(call.Name) + EstimateText(string(call.Arguments))
 		}
@@ -194,11 +154,11 @@ func FormatSummaryPrompt(previous string, messages []agent.Message, maxTokens in
 			fmt.Fprintf(&b, " tool_calls=%d", len(message.ToolCalls))
 		}
 		b.WriteString("\n")
-		content := message.Content
-		if content == "" && len(message.ToolCalls) > 0 {
-			content = formatToolCalls(message.ToolCalls)
+		content := agent.MessageText(message)
+		if len(message.ToolCalls) > 0 {
+			content += "\n" + formatToolCalls(message.ToolCalls)
 		}
-		b.WriteString(truncateRunes(content, 4000))
+		b.WriteString(content)
 		b.WriteString("\n")
 	}
 	return b.String()
@@ -228,4 +188,33 @@ func truncateRunes(text string, limit int) string {
 		return text
 	}
 	return string(runes[:limit])
+}
+
+// EstimateTools includes schema text and approximate provider framing overhead.
+func EstimateTools(defs []agent.ToolDefinition) int {
+	if len(defs) == 0 {
+		return 0
+	}
+	data, _ := json.Marshal(defs)
+	return EstimateText(string(data)) + 8*len(defs)
+}
+
+// CompactionCut keeps recent turns when they fit, then advances only across
+// complete tool batches. It never separates tool results from their call.
+func CompactionCut(history []agent.Message, through, tailTurns, tailTokens int) int {
+	cut := max(through, TailStart(history, tailTurns))
+	if cut >= len(history) {
+		return through
+	}
+	for EstimateMessages(history[cut:]) > tailTokens {
+		next := cut + 1
+		for next < len(history) && history[next].Role == agent.RoleTool {
+			next++
+		}
+		if next >= len(history) {
+			break
+		}
+		cut = next
+	}
+	return cut
 }

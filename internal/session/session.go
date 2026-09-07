@@ -59,14 +59,17 @@ type SummaryEntry struct {
 }
 
 type Loaded struct {
-	Header      Header
-	Entries     []MessageEntry
-	Usages      []UsageEntry
-	Models      []ModelEntry
-	Summaries   []SummaryEntry
-	LastModel   *ModelEntry
-	LastSummary *SummaryEntry
-	Messages    []agent.Message
+	Header         Header
+	Entries        []MessageEntry
+	Usages         []UsageEntry
+	Models         []ModelEntry
+	Summaries      []SummaryEntry
+	LastModel      *ModelEntry
+	LastSummary    *SummaryEntry
+	Messages       []agent.Message
+	validBytes     int64
+	incompleteTail bool
+	needsNewline   bool
 }
 
 type Store struct {
@@ -88,6 +91,24 @@ func NewStore(path, cwd string) (*Store, error) {
 			return nil, err
 		}
 		store := &Store{path: path, header: loaded.Header}
+		if loaded.incompleteTail {
+			if err := os.Truncate(path, loaded.validBytes); err != nil {
+				return nil, err
+			}
+		} else if loaded.needsNewline {
+			file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+			if err != nil {
+				return nil, err
+			}
+			_, writeErr := file.WriteString("\n")
+			closeErr := file.Close()
+			if writeErr != nil {
+				return nil, writeErr
+			}
+			if closeErr != nil {
+				return nil, closeErr
+			}
+		}
 		if len(loaded.Entries) > 0 {
 			last := loaded.Entries[len(loaded.Entries)-1].ID
 			store.lastID = &last
@@ -229,6 +250,14 @@ func Load(path string) (Loaded, error) {
 			break
 		}
 		line := strings.TrimSpace(raw)
+		// A process may die in the final append. Keep complete entries; malformed
+		// records in the middle of the file are still treated as corruption.
+		if lineNo > 0 && readErr == io.EOF && line != "" && !json.Valid([]byte(line)) {
+			loaded.incompleteTail = true
+			break
+		}
+		loaded.validBytes += int64(len(raw))
+		loaded.needsNewline = !strings.HasSuffix(raw, "\n")
 		if line == "" {
 			if readErr == io.EOF {
 				break
@@ -299,7 +328,7 @@ func writeJSONLine(file *os.File, value any) error {
 	if _, err := file.Write(append(data, '\n')); err != nil {
 		return err
 	}
-	return nil
+	return file.Sync()
 }
 
 func newID() string {

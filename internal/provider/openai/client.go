@@ -47,32 +47,44 @@ func NewClient(config Config) *Client {
 
 func (c *Client) Complete(ctx context.Context, req agent.Request, onEvent func(agent.Event)) (agent.AssistantMessage, error) {
 	includeUsage := true
-	for attempt := 0; ; attempt++ {
-		reply, err := c.complete(ctx, req, onEvent, includeUsage)
+	completionLimit := false
+	for attempt := 0; ; {
+		reply, err := c.complete(ctx, req, onEvent, includeUsage, completionLimit)
 		if isUnsupportedUsageError(err) && includeUsage {
 			includeUsage = false
-			reply, err = c.complete(ctx, req, onEvent, includeUsage)
+			continue
+		}
+		var apiErr apiError
+		if !completionLimit && req.MaxOutputTokens > 0 && errors.As(err, &apiErr) && apiErr.statusCode == http.StatusBadRequest && strings.Contains(apiErr.body, "max_tokens") && strings.Contains(apiErr.body, "max_completion_tokens") {
+			completionLimit = true
+			continue
 		}
 		if err == nil {
 			return reply, nil
 		}
 		if attempt >= len(retryDelays) || !isRetryableError(err) {
-			return agent.AssistantMessage{}, err
+			return reply, err
 		}
 		if err := sleepContext(ctx, retryDelays[attempt]); err != nil {
 			return agent.AssistantMessage{}, err
 		}
+		attempt++
 	}
 }
 
-func (c *Client) complete(ctx context.Context, req agent.Request, onEvent func(agent.Event), includeUsage bool) (agent.AssistantMessage, error) {
+func (c *Client) complete(ctx context.Context, req agent.Request, onEvent func(agent.Event), includeUsage, completionLimit bool) (agent.AssistantMessage, error) {
 	if c.apiKey == "" {
 		return agent.AssistantMessage{}, fmt.Errorf("missing API key: set OPENAI_API_KEY or pass --api-key")
 	}
 	if c.baseURL == "" {
 		return agent.AssistantMessage{}, fmt.Errorf("missing base URL")
 	}
-	body, err := json.Marshal(c.requestPayload(req, includeUsage))
+	payload := c.requestPayload(req, includeUsage)
+	if completionLimit && req.MaxOutputTokens > 0 {
+		delete(payload, "max_tokens")
+		payload["max_completion_tokens"] = req.MaxOutputTokens
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return agent.AssistantMessage{}, err
 	}
@@ -156,6 +168,9 @@ func (c *Client) requestPayload(req agent.Request, includeUsage bool) map[string
 		"messages": chatMessages(req.Messages),
 		"stream":   true,
 	}
+	if req.MaxOutputTokens > 0 {
+		payload["max_tokens"] = req.MaxOutputTokens
+	}
 	if includeUsage {
 		payload["stream_options"] = map[string]any{"include_usage": true}
 	}
@@ -169,6 +184,7 @@ func (c *Client) requestPayload(req agent.Request, includeUsage bool) map[string
 func chatMessages(messages []agent.Message) []map[string]any {
 	out := make([]map[string]any, 0, len(messages))
 	for _, msg := range messages {
+		msg.Content = agent.MessageText(msg)
 		item := map[string]any{"role": string(msg.Role)}
 		switch msg.Role {
 		case agent.RoleTool:
@@ -218,6 +234,9 @@ func chatTools(defs []agent.ToolDefinition) []map[string]any {
 }
 
 type streamChunk struct {
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error"`
 	Choices []struct {
 		Delta struct {
 			Content   string          `json:"content"`
@@ -258,13 +277,22 @@ type toolCallBuilder struct {
 	args strings.Builder
 }
 
-func parseStream(r io.Reader, onEvent func(agent.Event)) (agent.AssistantMessage, error) {
+func parseStream(r io.Reader, onEvent func(agent.Event)) (result agent.AssistantMessage, streamErr error) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	var text strings.Builder
 	toolCalls := map[int]*toolCallBuilder{}
 	finishReason := ""
 	var usage agent.Usage
+	done := false
+	defer func() {
+		if streamErr != nil {
+			result = agent.AssistantMessage{Message: agent.Message{Role: agent.RoleAssistant, Content: text.String()}, StopReason: agent.StopReasonError, Error: streamErr.Error(), Usage: usage}
+			if finishReason == "length" {
+				result.StopReason = agent.StopReasonMaxTokens
+			}
+		}
+	}()
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -273,11 +301,15 @@ func parseStream(r io.Reader, onEvent func(agent.Event)) (agent.AssistantMessage
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if data == "[DONE]" {
+			done = true
 			break
 		}
 		var chunk streamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			return agent.AssistantMessage{}, err
+		}
+		if chunk.Error != nil {
+			return agent.AssistantMessage{}, fmt.Errorf("model stream error: %s", chunk.Error.Message)
 		}
 		if chunk.Usage.TotalTokens != 0 || chunk.Usage.PromptTokens != 0 || chunk.Usage.CompletionTokens != 0 {
 			usage = chunk.Usage.agentUsage()
@@ -313,6 +345,16 @@ func parseStream(r io.Reader, onEvent func(agent.Event)) (agent.AssistantMessage
 	if err := scanner.Err(); err != nil {
 		return agent.AssistantMessage{}, err
 	}
+	if !done && finishReason == "" {
+		return agent.AssistantMessage{}, fmt.Errorf("model stream interrupted: %w", io.ErrUnexpectedEOF)
+	}
+	switch finishReason {
+	case "", "stop", "tool_calls":
+	case "length":
+		return agent.AssistantMessage{}, fmt.Errorf("model output reached its token limit; response is incomplete")
+	default:
+		return agent.AssistantMessage{}, fmt.Errorf("model response ended with %q", finishReason)
+	}
 
 	content := text.String()
 	msg := agent.AssistantMessage{
@@ -328,9 +370,18 @@ func parseStream(r io.Reader, onEvent func(agent.Event)) (agent.AssistantMessage
 	}
 	if len(toolCalls) > 0 {
 		msg.ToolCalls = buildToolCalls(toolCalls)
+		for _, call := range msg.ToolCalls {
+			var args map[string]json.RawMessage
+			if call.ID == "" || call.Name == "" || json.Unmarshal(call.Arguments, &args) != nil || args == nil {
+				return agent.AssistantMessage{}, fmt.Errorf("incomplete or invalid tool call in model stream")
+			}
+		}
 		msg.StopReason = agent.StopReasonToolUse
 	}
 	if finishReason == "tool_calls" {
+		if len(msg.ToolCalls) == 0 {
+			return agent.AssistantMessage{}, fmt.Errorf("model requested tools without providing a tool call")
+		}
 		msg.StopReason = agent.StopReasonToolUse
 	}
 	return msg, nil
@@ -346,9 +397,6 @@ func buildToolCalls(builders map[int]*toolCallBuilder) []agent.ToolCall {
 	for _, idx := range indexes {
 		builder := builders[idx]
 		args := builder.args.String()
-		if strings.TrimSpace(args) == "" {
-			args = "{}"
-		}
 		out = append(out, agent.ToolCall{
 			ID:        builder.id,
 			Name:      builder.name,

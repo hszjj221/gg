@@ -11,6 +11,9 @@ English | [简体中文](README.zh-CN.md)
 - OpenAI-compatible streaming provider with tool calling
 - Automatic retry for transient model call failures
 - JSONL session storage with list and resume commands
+- Incremental session persistence and interruption recovery
+- Steering and follow-up messages while the agent works
+- Project instructions from `AGENTS.md`
 - Optional token usage reporting with `--usage`
 - Codex-style local skills from `.agents/skills`
 - Simple Markdown memory from `~/.gg/memory.md`
@@ -76,6 +79,9 @@ Interactive mode:
 
 - Running `gg` in a terminal starts the TUI chat interface.
 - The TUI shows the conversation, a single-line prompt input, streaming replies, and a status bar.
+- While running, Enter queues a steering message for the next model boundary; Alt+Enter queues a follow-up for after successful completion. Use follow-ups for slash commands.
+- Escape or Ctrl+C cancels the active run. Unconsumed queued messages are restored to the input on cancellation or failure.
+- Page Up / Page Down scroll history; incoming output preserves your scroll position when reading older messages.
 - The TUI also shows compact inline logs for tool calls such as `read`, `bash`, `edit`, `write`, and `subagent`.
 - Use `/model` to list configured models and `/model provider:model` to switch the provider/model used by later turns.
 - Tool logs are only a TUI view feature; they do not change the JSONL session format or one-shot/line interactive output.
@@ -97,6 +103,7 @@ Provider/model configuration:
   "default": "openai:gpt-4.1",
   "context": {
     "maxPromptTokens": 24000,
+    "maxOutputTokens": 4096,
     "tailTurns": 6,
     "summaryMaxTokens": 1200,
     "autoCompact": true
@@ -132,17 +139,35 @@ Selection uses `provider:model`:
 
 Only `openai-compatible` providers are supported in v1. Remote model discovery is not implemented; list allowed model names in `models`.
 
-Model calls are retried on temporary failures such as network errors, rate limits, and 5xx responses. `gg` does not fall back to another provider or model; if all retry attempts fail, the normal CLI or TUI error path is used.
+Model calls are retried on temporary failures before streaming, such as network errors, rate limits, and 5xx responses. Interrupted streams, incomplete tool arguments, and output-length limits are reported as errors; partially streamed content is retained and is not blindly retried. Output limits use `max_tokens`, with a compatibility retry for providers explicitly requiring `max_completion_tokens`. `gg` does not fall back to another provider or model; if all retry attempts fail, the normal CLI or TUI error path is used.
+
+Project instructions:
+
+- Every turn includes basic coding instructions and the working directory.
+- `gg` reads `~/.gg/AGENTS.md`, then `AGENTS.md` files from ancestor directories to the current directory. Files are re-read for each user turn, limited to 32 KiB each.
+- `--no-context-files` disables `AGENTS.md` discovery while retaining the basic instructions.
+
+Tool output and files:
+
+- `read` returns up to 2,000 lines or 50 KiB from the requested offset, including offsets deep inside large files.
+- `edit` matches LF and CRLF text consistently, preserves unaffected content and file permissions, and writes atomically.
+- `bash` retains the last 50 KiB of output. When truncated, the full output is saved under `.gg/outputs/` and its path is returned for subsequent reads. These logs persist until you remove them.
+- On Unix systems, cancellation and timeouts terminate the shell process group; other platforms bound waiting for inherited output pipes.
 
 Session management:
 
 - `gg sessions list` lists sessions for the current working directory.
 - `gg resume <id-or-path>` resumes a session by displayed ID, JSONL filename stem, filename, or path.
 - `gg --continue` and `gg --last` resume the latest session for the current working directory.
+- User messages, completed model messages, and individual tool results are saved as they complete. Provider errors and partial responses remain available after a failed run.
+- Resume recovers complete JSONL entries after an interrupted final append. Missing tool results are marked as unknown, so the model can inspect the workspace before retrying.
 
 Context management:
 
-- `gg` estimates prompt size and automatically compacts long sessions when `context.autoCompact` is enabled.
+- Before every model request, including requests between tool batches, `gg` checks the estimated message and tool-schema size against `context.maxPromptTokens`.
+- With `context.autoCompact` enabled, old content is summarized before removal. Recent history is retained within the available token budget without splitting tool-call/result batches.
+- Summary requests are also budgeted and may run in multiple batches. Requests that still exceed the budget stop with an actionable error rather than silently discarding unsummarized content.
+- `context.maxOutputTokens` limits ordinary responses (default 4096); `context.summaryMaxTokens` limits summary responses. Configure the input and output budgets to fit your model’s context window.
 - Compaction stores a JSONL `summary` entry and keeps recent turns verbatim; original session messages are not deleted or rewritten.
 - Resumed sessions use the latest summary plus recent unsummarized turns.
 - `/compact` manually writes a new summary, and `/context` shows the current estimated prompt size and budget.
@@ -210,6 +235,8 @@ gg -p "Use a subagent to inspect how sessions are stored, then summarize the flo
 ```
 
 ## Development
+
+The runner exposes `BeforeRequest`, `OnMessage`, and `DrainMessages` hooks for context preparation, durable messages, and steering without coupling the loop to the TUI.
 
 Run the test suite:
 

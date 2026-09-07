@@ -60,7 +60,7 @@ func TestSummarizePrefixKeepsLastUserTurns(t *testing.T) {
 	}
 }
 
-func TestBuildTruncatesToolResultsOnlyInContextCopy(t *testing.T) {
+func TestBuildKeepsToolResultsForCompaction(t *testing.T) {
 	longResult := strings.Repeat("x", 5000)
 	history := []agent.Message{
 		{Role: agent.RoleUser, Content: "old"},
@@ -75,12 +75,13 @@ func TestBuildTruncatesToolResultsOnlyInContextCopy(t *testing.T) {
 		Config:  config.ContextConfig{MaxPromptTokens: 40, TailTurns: 1, SummaryMaxTokens: 100, AutoCompact: true},
 	})
 
-	if !result.TruncatedToolResults {
-		t.Fatalf("expected tool result truncation")
+	if result.TruncatedToolResults || result.Messages[2].Content != longResult {
+		t.Fatalf("unsummarized tool result must remain intact for compaction")
 	}
-	if !strings.Contains(result.Messages[2].Content, "truncated") {
-		t.Fatalf("context copy was not truncated: %+v", result.Messages)
+	if result.PromptTokens <= 40 {
+		t.Fatal("over-budget context must remain detectable")
 	}
+
 	if history[2].Content != longResult {
 		t.Fatalf("original history was mutated")
 	}
@@ -107,7 +108,7 @@ func TestBuildWithoutSummaryKeepsFullHistoryEvenOverBudget(t *testing.T) {
 	}
 }
 
-func TestBuildReducesTailTurnsBeforeTruncatingToolResults(t *testing.T) {
+func TestBuildDoesNotDropUnsummarizedTurns(t *testing.T) {
 	history := []agent.Message{
 		{Role: agent.RoleUser, Content: strings.Repeat("u1 ", 80)},
 		{Role: agent.RoleAssistant, Content: strings.Repeat("a1 ", 80)},
@@ -124,15 +125,13 @@ func TestBuildReducesTailTurnsBeforeTruncatingToolResults(t *testing.T) {
 		Config:  config.ContextConfig{MaxPromptTokens: 20, TailTurns: 3, SummaryMaxTokens: 100, AutoCompact: true},
 	})
 
-	if result.KeptTurns != 1 {
-		t.Fatalf("expected tail to shrink to one turn, got %d messages=%+v", result.KeptTurns, result.Messages)
+	if result.KeptTurns != 3 || !containsContent(result.Messages, "u1") || !containsContent(result.Messages, "u2") {
+		t.Fatalf("unsummarized turns must not disappear: %+v", result)
 	}
-	if containsContent(result.Messages, "u1") || containsContent(result.Messages, "u2") {
-		t.Fatalf("older turns should be removed before truncation: %+v", result.Messages)
+	if result.PromptTokens <= 20 {
+		t.Fatal("compaction must still be triggered")
 	}
-	if result.TruncatedToolResults {
-		t.Fatalf("tool truncation should not run when shrinking tail is enough")
-	}
+
 }
 
 func containsContent(messages []agent.Message, text string) bool {

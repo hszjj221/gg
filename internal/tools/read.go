@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"strings"
 
 	"github.com/hszjj221/gg/internal/agent"
 )
@@ -45,7 +44,7 @@ func (t ReadTool) Definition() agent.ToolDefinition {
 	}
 }
 
-func (t ReadTool) Execute(_ context.Context, raw json.RawMessage) ToolResult {
+func (t ReadTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {
 	var input struct {
 		Path   string `json:"path"`
 		Offset int    `json:"offset"`
@@ -58,11 +57,6 @@ func (t ReadTool) Execute(_ context.Context, raw json.RawMessage) ToolResult {
 	if err != nil {
 		return errorResult(err)
 	}
-	data, truncated, err := readTextPrefix(path, defaultMaxReadBytes)
-	if err != nil {
-		return errorResult(fmt.Errorf("%w: %s", err, input.Path))
-	}
-	lines := splitTextLines(string(data))
 	offset := input.Offset
 	if offset <= 0 {
 		offset = 1
@@ -71,17 +65,9 @@ func (t ReadTool) Execute(_ context.Context, raw json.RawMessage) ToolResult {
 	if limit <= 0 || limit > defaultMaxReadLines {
 		limit = defaultMaxReadLines
 	}
-	start := offset - 1
-	if start >= len(lines) {
-		return textResult("")
-	}
-	end := start + limit
-	if end > len(lines) {
-		end = len(lines)
-	}
-	output := strings.Join(lines[start:end], "\n")
-	if truncated {
-		output += truncationMarker(defaultMaxReadBytes)
+	output, err := readTextRange(ctx, path, offset, limit)
+	if err != nil {
+		return errorResult(fmt.Errorf("%w: %s", err, input.Path))
 	}
 	return textResult(output)
 }

@@ -1,13 +1,15 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
@@ -22,7 +24,7 @@ type BashTool struct {
 	options BashOptions
 }
 
-const maxBashOutputBytes = 256 * 1024
+const maxBashOutputBytes = 50 * 1024
 
 func NewBashTool(cwd string, options BashOptions) BashTool {
 	if options.DefaultTimeout == 0 {
@@ -95,13 +97,39 @@ func (t BashTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {
 	}
 	cmd := exec.CommandContext(runCtx, shell, "-lc", input.Command)
 	cmd.Dir = t.cwd
+	configureProcess(cmd)
+	outputDir := filepath.Join(t.cwd, ".gg", "outputs")
+	if err := os.MkdirAll(outputDir, 0o700); err != nil {
+		return errorResult(err)
+	}
+	log, err := os.CreateTemp(outputDir, "bash-*.log")
+	if err != nil {
+		return errorResult(err)
+	}
+	defer log.Close()
 	output := newLimitedOutputBuffer(maxBashOutputBytes)
-	cmd.Stdout = &output
-	cmd.Stderr = &output
-	err := cmd.Run()
+	writer := io.MultiWriter(log, &output)
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+	err = cmd.Run()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		_ = cmd.Cancel()
+	}
+	closeErr := log.Close()
 	text := output.String()
+	if output.truncated > 0 {
+		text += "\nFull output saved to: " + log.Name()
+	} else {
+		_ = os.Remove(log.Name())
+	}
+	if closeErr != nil {
+		return errorResult(closeErr)
+	}
 	if runCtx.Err() == context.DeadlineExceeded {
 		return ToolResult{IsError: true, Content: []ContentBlock{{Type: ContentText, Text: text + fmt.Sprintf("\ncommand timed out after %s", timeout)}}}
+	}
+	if runCtx.Err() != nil {
+		return ToolResult{IsError: true, Content: []ContentBlock{{Type: ContentText, Text: text + "\ncommand canceled"}}}
 	}
 	if err != nil {
 		var exitErr *exec.ExitError
@@ -114,7 +142,7 @@ func (t BashTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {
 }
 
 type limitedOutputBuffer struct {
-	buf       bytes.Buffer
+	buf       []byte
 	limit     int
 	truncated int
 }
@@ -128,23 +156,23 @@ func (b *limitedOutputBuffer) Write(p []byte) (int, error) {
 		b.truncated += len(p)
 		return len(p), nil
 	}
-	remaining := b.limit - b.buf.Len()
-	if remaining > 0 {
-		if remaining > len(p) {
-			remaining = len(p)
+	drop := max(0, len(b.buf)+len(p)-b.limit)
+	b.truncated += drop
+	if len(p) >= b.limit {
+		b.buf = append(b.buf[:0], p[len(p)-b.limit:]...)
+	} else {
+		if drop > 0 {
+			b.buf = b.buf[:copy(b.buf, b.buf[drop:])]
 		}
-		_, _ = b.buf.Write(p[:remaining])
-	}
-	if remaining < len(p) {
-		b.truncated += len(p) - remaining
+		b.buf = append(b.buf, p...)
 	}
 	return len(p), nil
 }
 
 func (b *limitedOutputBuffer) String() string {
-	text := b.buf.String()
+	text := strings.ToValidUTF8(string(b.buf), "")
 	if b.truncated == 0 {
 		return text
 	}
-	return text + fmt.Sprintf("\n... output truncated after %d bytes, omitted %d bytes ...", b.limit, b.truncated)
+	return fmt.Sprintf("... output truncated: omitted %d bytes; showing last %d bytes ...\n", b.truncated, len(b.buf)) + text
 }
