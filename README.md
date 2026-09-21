@@ -19,7 +19,8 @@ English | [简体中文](README.zh-CN.md)
 - Simple Markdown memory from `~/.gg/memory.md`
 - Built-in coding tools: `read`, `list`, `grep`, `bash`, `edit`, `write`
 - Synchronous read-only `subagent` tool for focused codebase research
-- Single binary Go CLI with a Bubble Tea-powered TUI and inline tool call logs
+- Reusable Go conversation runtime shared by the TUI, Web, and desktop adapters
+- Bubble Tea TUI plus Web/Electron clients built from one React UI
 
 ## Install
 
@@ -54,6 +55,36 @@ Start the TUI interactive mode:
 ```bash
 gg
 ```
+
+### Web and Electron
+
+The new `ggd` process exposes sessions and agent runs through a stable JSON-RPC interface. The Web client reaches it over Bearer-protected HTTP; Electron starts it as a local sidecar and talks through an isolated preload bridge.
+
+Start the local Web development environment:
+
+```bash
+# terminal 1
+go run ./cmd/ggd --http 127.0.0.1:8765 --token development-token
+
+# terminal 2
+cd ui
+npm install
+npm run dev:web
+```
+
+Open `http://127.0.0.1:5173`, leave the endpoint blank, and enter the same token. Vite proxies `/rpc` and `/events` to the local daemon. In production, serve `ui/dist` and proxy those paths to `ggd` from the same origin.
+
+Run Electron from source:
+
+```bash
+cd ui
+npm install
+npm run desktop
+```
+
+The desktop app asks for a workspace, then builds and launches the local `ggd` binary for the current platform. This stage provides the runnable desktop shell; signing, installers, and auto-update belong in a later release pipeline.
+
+See the [architecture guide](docs/architecture.md) for the dependency boundaries and protocol.
 
 ## Usage
 
@@ -163,7 +194,7 @@ Session management:
 - `gg resume` and `gg --resume` open a searchable session selector in a terminal.
 - `gg --continue` and `gg --last` resume the latest session for the current working directory.
 - `--name`/`-n` sets a session display name; `/name <name>` changes it interactively and `/name --clear` removes it.
-- Session v2 stores every message and metadata entry in an append-only tree. Opening a v1 session upgrades its existing entries without discarding history.
+- Session v3 stores messages and metadata in an append-only tree and persists the active branch with a separate head record. Older sessions upgrade without discarding history.
 - In the TUI, `/tree` opens a searchable conversation tree. Selecting an earlier user message rewinds to its parent and places that prompt back in the editor; selecting an assistant message continues from it as a new branch.
 - In the TUI, `/fork` selects an earlier user message, creates a new session from its parent, and places the prompt back in the editor. `/clone` copies the complete active branch into a new session immediately.
 - User messages, completed model messages, and individual tool results are saved as they complete. Provider errors and partial responses remain available after a failed run.

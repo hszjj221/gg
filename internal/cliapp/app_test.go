@@ -1,4 +1,4 @@
-package app
+package cliapp
 
 import (
 	"context"

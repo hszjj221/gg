@@ -1,4 +1,4 @@
-package app
+package cliapp
 
 import (
 	"context"
@@ -35,15 +35,17 @@ func TestFailedBatchedCompactionLeavesValidToolBoundary(t *testing.T) {
 		{Role: agent.RoleTool, ToolCallID: "r1", Content: strings.Repeat("y", 5000)},
 		{Role: agent.RoleUser, Content: "continue"},
 	}
-	e := newTurnExecutor(config.Config{CWD: t.TempDir(), Context: config.ContextConfig{MaxPromptTokens: 1000, SummaryMaxTokens: 100}}, nil, nil, history, nil, skills.Set{}, true)
-	_, err := e.compactThrough(context.Background(), p, 3)
+	cfg := config.Config{CWD: t.TempDir(), Context: config.ContextConfig{MaxPromptTokens: 1000, SummaryMaxTokens: 100, TailTurns: 1}}
+	e := newTurnExecutor(cfg, func(config.Config) agent.Provider { return p }, nil, history, nil, skills.Set{}, true)
+	_, err := e.Run(context.Background(), "/compact", nil, nil)
 	if err == nil {
 		t.Fatal("oversized tool batch should fail without being split")
 	}
-	if e.summary == nil || e.summary.ThroughMessageCount != 1 {
-		t.Fatalf("partial compaction committed an invalid boundary: %+v", e.summary)
+	snapshot := e.Snapshot()
+	if snapshot.SummaryThrough != 1 {
+		t.Fatalf("partial compaction committed an invalid boundary: %+v", snapshot)
 	}
-	build := e.buildContext(nil, agent.Message{})
+	build := contextmgr.Build(contextmgr.BuildInput{History: snapshot.Messages, Summary: contextmgr.SummaryState{Text: snapshot.Summary, ThroughMessageCount: snapshot.SummaryThrough}, Config: cfg.Context})
 	if build.Messages[1].Role != agent.RoleAssistant || len(build.Messages[1].ToolCalls) != 1 || build.Messages[2].Role != agent.RoleTool {
 		t.Fatal("retained tool sequence was corrupted")
 	}
@@ -87,10 +89,11 @@ func TestCompactionRunsBetweenToolBatchesWithoutLosingTranscript(t *testing.T) {
 			t.Fatalf("sent oversized request: %d", tokens)
 		}
 	}
-	if len(e.history) != 6 {
-		t.Fatalf("original transcript was changed: %d messages", len(e.history))
+	snapshot := e.Snapshot()
+	if len(snapshot.Messages) != 6 {
+		t.Fatalf("original transcript was changed: %d messages", len(snapshot.Messages))
 	}
-	if e.summary == nil || e.history[e.summary.ThroughMessageCount].Role == agent.RoleTool {
+	if snapshot.Summary == "" || snapshot.Messages[snapshot.SummaryThrough].Role == agent.RoleTool {
 		t.Fatal("compaction cut a tool batch")
 	}
 }
@@ -103,8 +106,9 @@ func TestResumeRepairsMissingToolResultsWithoutReplaying(t *testing.T) {
 	if _, err := e.Run(context.Background(), "continue", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if e.history[2].Role != agent.RoleTool || e.history[2].ToolCallID != "w1" || !strings.Contains(e.history[2].Content, "may already have run") {
-		t.Fatalf("missing recovery result: %+v", e.history)
+	history = e.Snapshot().Messages
+	if history[2].Role != agent.RoleTool || history[2].ToolCallID != "w1" || !strings.Contains(history[2].Content, "may already have run") {
+		t.Fatalf("missing recovery result: %+v", history)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "should-not-exist")); !os.IsNotExist(err) {
 		t.Fatalf("tool was replayed: %v", err)
@@ -120,7 +124,7 @@ func TestBudgetRejectsUncompressiblePromptBeforeProviderCall(t *testing.T) {
 	if len(p.requests) != 0 {
 		t.Fatal("oversized request sent to provider")
 	}
-	if len(e.history) != 1 {
+	if len(e.Snapshot().Messages) != 1 {
 		t.Fatal("user input should remain recoverable")
 	}
 }
@@ -134,30 +138,30 @@ func TestProjectInstructionsReloadAndCanBeDisabled(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	e := newTurnExecutor(config.Config{CWD: child}, nil, nil, nil, nil, skills.Set{}, true)
-	messages, err := e.systemMessages()
-	if err != nil {
+	provider := &appContextProvider{}
+	e := newTurnExecutor(config.Config{CWD: child}, func(config.Config) agent.Provider { return provider }, nil, nil, nil, skills.Set{}, true)
+	if _, err := e.Run(context.Background(), "first", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	text := messages[0].Content
+	text := provider.requests[0].Messages[0].Content
 	if strings.Index(text, "parent convention") < 0 || strings.Index(text, "parent convention") > strings.Index(text, "child convention") {
 		t.Fatalf("wrong instruction order: %s", text)
 	}
 	if err := os.WriteFile(filepath.Join(child, "AGENTS.md"), []byte("updated convention"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	messages, err = e.systemMessages()
-	if err != nil {
+	if _, err := e.Run(context.Background(), "second", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if !containsMessage(messages, "updated convention") {
+	if !containsMessage(provider.requests[len(provider.requests)-1].Messages, "updated convention") {
 		t.Fatal("rules were not reloaded")
 	}
-	e.cfg.NoContextFiles = true
-	messages, err = e.systemMessages()
-	if err != nil {
+	disabledProvider := &appContextProvider{}
+	e = newTurnExecutor(config.Config{CWD: child, NoContextFiles: true}, func(config.Config) agent.Provider { return disabledProvider }, nil, nil, nil, skills.Set{}, true)
+	if _, err := e.Run(context.Background(), "disabled", nil, nil); err != nil {
 		t.Fatal(err)
 	}
+	messages := disabledProvider.requests[0].Messages
 	if containsMessage(messages, "convention") || !containsMessage(messages, "coding agent") {
 		t.Fatal("disable flag should retain only base instructions")
 	}

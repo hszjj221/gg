@@ -110,6 +110,36 @@ func TestBranchPreservesOldPathAndBuildsActivePath(t *testing.T) {
 	}
 }
 
+func TestBranchCheckoutPersistsWithoutNewMessage(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "session.jsonl"), "/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range []agent.Message{
+		{Role: agent.RoleUser, Content: "question"},
+		{Role: agent.RoleAssistant, Content: "answer"},
+		{Role: agent.RoleUser, Content: "later"},
+	} {
+		if err := store.AppendMessage(message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := store.records[1].id()
+	if err := store.Branch(&target); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := messageContents(loaded.Messages); got != "question|answer" {
+		t.Fatalf("persisted checkout = %q", got)
+	}
+	if len(loaded.Heads) != 1 {
+		t.Fatalf("head entries = %d, want 1", len(loaded.Heads))
+	}
+}
+
 func TestOpeningV1MigratesSidebandEntriesIntoLinearTree(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "old.jsonl")
 	header := Header{Type: "session", Version: 1, ID: "session-1", CWD: "/project"}
@@ -180,7 +210,7 @@ func TestForkCopiesOnlySelectedPathAndRecordsLineage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Header.ParentSession != store.Path() || loaded.Header.ID == store.Header().ID {
+	if loaded.Header.ParentSessionID != store.Header().ID || loaded.Header.ParentEntryID == nil || *loaded.Header.ParentEntryID != target || loaded.Header.ID == store.Header().ID {
 		t.Fatalf("fork lineage is incorrect: %+v", loaded.Header)
 	}
 	if got := messageContents(loaded.Messages); got != "question|answer" {

@@ -377,7 +377,7 @@ func TestTreeCommandSelectsNodeAndRebuildsConversation(t *testing.T) {
 		SessionAction: func(action SessionAction, id string) (SessionUpdate, error) {
 			gotAction, gotID = action, id
 			return SessionUpdate{
-				Messages:    []Message{{Role: agent.RoleUser, Content: "rebuilt"}},
+				Messages:    []agent.Message{{Role: agent.RoleUser, Content: "rebuilt"}},
 				TreeItems:   []TreeItem{{ID: "user-1", Role: agent.RoleUser, Text: "first question", Active: true}},
 				SessionName: "branch",
 				Draft:       "edit me",

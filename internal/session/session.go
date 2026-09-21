@@ -15,14 +15,17 @@ import (
 	"github.com/hszjj221/gg/internal/agent"
 )
 
-const CurrentVersion = 2
+const CurrentVersion = 3
 
 type Header struct {
-	Type          string `json:"type"`
-	Version       int    `json:"version"`
-	ID            string `json:"id"`
-	Timestamp     string `json:"timestamp"`
-	CWD           string `json:"cwd"`
+	Type            string  `json:"type"`
+	Version         int     `json:"version"`
+	ID              string  `json:"id"`
+	Timestamp       string  `json:"timestamp"`
+	CWD             string  `json:"cwd"`
+	ParentSessionID string  `json:"parentSessionId,omitempty"`
+	ParentEntryID   *string `json:"parentEntryId,omitempty"`
+	// ParentSession is retained only for reading session v2 lineage.
 	ParentSession string `json:"parentSession,omitempty"`
 }
 
@@ -69,6 +72,15 @@ type SessionInfoEntry struct {
 	Name      string  `json:"name"`
 }
 
+// HeadEntry persists an explicit checkout without changing conversation
+// content. Its parent is the entry that future records should branch from.
+type HeadEntry struct {
+	Type      string  `json:"type"`
+	ID        string  `json:"id"`
+	ParentID  *string `json:"parentId"`
+	Timestamp string  `json:"timestamp"`
+}
+
 type TreeEntry struct {
 	ID       string
 	ParentID *string
@@ -84,6 +96,7 @@ type Loaded struct {
 	Models         []ModelEntry
 	Summaries      []SummaryEntry
 	Infos          []SessionInfoEntry
+	Heads          []HeadEntry
 	LastModel      *ModelEntry
 	LastSummary    *SummaryEntry
 	LastInfo       *SessionInfoEntry
@@ -109,6 +122,7 @@ type entryRecord struct {
 	model   *ModelEntry
 	summary *SummaryEntry
 	info    *SessionInfoEntry
+	head    *HeadEntry
 }
 
 func (r entryRecord) id() string {
@@ -123,6 +137,8 @@ func (r entryRecord) id() string {
 		return r.summary.ID
 	case "session_info":
 		return r.info.ID
+	case "head":
+		return r.head.ID
 	default:
 		return ""
 	}
@@ -140,6 +156,8 @@ func (r entryRecord) parentID() *string {
 		return cloneStringPtr(r.summary.ParentID)
 	case "session_info":
 		return cloneStringPtr(r.info.ParentID)
+	case "head":
+		return cloneStringPtr(r.head.ParentID)
 	default:
 		return nil
 	}
@@ -157,6 +175,8 @@ func (r entryRecord) timestamp() string {
 		return r.summary.Timestamp
 	case "session_info":
 		return r.info.Timestamp
+	case "head":
+		return r.head.Timestamp
 	default:
 		return ""
 	}
@@ -175,6 +195,8 @@ func (r *entryRecord) setParentID(parent *string) {
 		r.summary.ParentID = parent
 	case "session_info":
 		r.info.ParentID = parent
+	case "head":
+		r.head.ParentID = parent
 	}
 }
 
@@ -190,6 +212,8 @@ func (r entryRecord) value() any {
 		return *r.summary
 	case "session_info":
 		return *r.info
+	case "head":
+		return *r.head
 	default:
 		return nil
 	}
@@ -298,8 +322,8 @@ func (s *Store) Branch(id *string) error {
 			return fmt.Errorf("session entry %q not found", *id)
 		}
 	}
-	s.lastID = cloneStringPtr(id)
-	return nil
+	entry := HeadEntry{Type: "head", ID: newID(), ParentID: cloneStringPtr(id), Timestamp: now()}
+	return s.appendRecord(entryRecord{typ: "head", head: &entry})
 }
 
 func (s *Store) State() Loaded {
@@ -376,7 +400,15 @@ func (s *Store) Fork(id *string) (*Store, error) {
 		}
 	}
 	records := pathRecords(s.records, id)
-	header := Header{Type: "session", Version: CurrentVersion, ID: newID(), Timestamp: now(), CWD: s.header.CWD, ParentSession: s.path}
+	header := Header{
+		Type:            "session",
+		Version:         CurrentVersion,
+		ID:              newID(),
+		Timestamp:       now(),
+		CWD:             s.header.CWD,
+		ParentSessionID: s.header.ID,
+		ParentEntryID:   cloneStringPtr(id),
+	}
 	path, err := createForkFile(filepath.Dir(s.path), header, records)
 	if err != nil {
 		return nil, err
@@ -505,8 +537,10 @@ func Load(path string) (Loaded, error) {
 	if loaded.Header.Version > CurrentVersion {
 		return Loaded{}, fmt.Errorf("unsupported session version %d", loaded.Header.Version)
 	}
-	if loaded.Header.Version < CurrentVersion {
+	if loaded.Header.Version == 1 {
 		linearizeRecords(loaded.records)
+	}
+	if loaded.Header.Version < CurrentVersion {
 		loaded.Header.Version = CurrentVersion
 		loaded.migrated = true
 	}
@@ -559,6 +593,12 @@ func decodeRecord(data []byte) (entryRecord, error) {
 			return entryRecord{}, err
 		}
 		return entryRecord{typ: probe.Type, info: &entry}, nil
+	case "head":
+		var entry HeadEntry
+		if err := json.Unmarshal(data, &entry); err != nil {
+			return entryRecord{}, err
+		}
+		return entryRecord{typ: probe.Type, head: &entry}, nil
 	default:
 		return entryRecord{}, fmt.Errorf("unknown session entry type %q", probe.Type)
 	}
@@ -573,6 +613,7 @@ func populateLoaded(loaded *Loaded, leaf *string) error {
 	loaded.Models = nil
 	loaded.Summaries = nil
 	loaded.Infos = nil
+	loaded.Heads = nil
 	loaded.Messages = nil
 	loaded.LastModel = nil
 	loaded.LastSummary = nil
@@ -589,6 +630,8 @@ func populateLoaded(loaded *Loaded, leaf *string) error {
 			loaded.Summaries = append(loaded.Summaries, *record.summary)
 		case "session_info":
 			loaded.Infos = append(loaded.Infos, *record.info)
+		case "head":
+			loaded.Heads = append(loaded.Heads, *record.head)
 		}
 	}
 	path, err := validatedPathRecords(loaded.records, leaf)
@@ -728,6 +771,10 @@ func cloneRecord(record entryRecord) entryRecord {
 		entry := *record.info
 		entry.ParentID = cloneStringPtr(entry.ParentID)
 		copy.info = &entry
+	case "head":
+		entry := *record.head
+		entry.ParentID = cloneStringPtr(entry.ParentID)
+		copy.head = &entry
 	}
 	return copy
 }

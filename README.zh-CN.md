@@ -19,7 +19,8 @@
 - 从 `~/.gg/memory.md` 加载简单 Markdown memory
 - 内置代码工具：`read`、`list`、`grep`、`bash`、`edit`、`write`
 - 用于聚焦代码库调研的同步只读 `subagent` 工具
-- 带 Bubble Tea TUI 和内联工具调用日志的单二进制 Go CLI
+- 可复用的 Go conversation runtime，同一套会话与 Agent 核心可供 TUI、Web 和桌面端使用
+- Bubble Tea TUI，以及共享 React UI 的 Web/Electron 客户端
 
 ## Install
 
@@ -54,6 +55,36 @@ gg -p "List the files in this project"
 ```bash
 gg
 ```
+
+### Web 与 Electron
+
+新的 `ggd` 进程通过稳定的 JSON-RPC 接口暴露会话和 Agent 能力。Web 端经带 Bearer Token 的 HTTP 使用它；Electron 则在本机启动 `ggd` sidecar，并通过隔离的 preload bridge 通信。
+
+本地启动 Web 开发环境：
+
+```bash
+# 终端 1
+go run ./cmd/ggd --http 127.0.0.1:8765 --token development-token
+
+# 终端 2
+cd ui
+npm install
+npm run dev:web
+```
+
+打开 `http://127.0.0.1:5173`，服务地址留空并输入同一个 token。Vite 会把 `/rpc` 和 `/events` 转发给本地 `ggd`。生产环境应由同源反向代理提供 `ui/dist`，并将这两个路径转发到 `ggd`。
+
+从源码启动 Electron：
+
+```bash
+cd ui
+npm install
+npm run desktop
+```
+
+客户端启动时会让你选择工作目录，然后构建并启动当前平台的本地 `ggd`。当前阶段提供可运行的客户端壳；签名、安装包和自动更新留给后续发布流水线处理。
+
+更完整的分层说明和协议边界见 [架构文档](docs/architecture.md)。
 
 ## Usage
 
@@ -163,7 +194,7 @@ v1 只支持 `openai-compatible` provider。不支持远端拉取模型列表；
 - `gg resume` 和 `gg --resume` 会在终端中打开可搜索的会话选择器。
 - `gg --continue` 和 `gg --last` 会恢复当前工作目录的最新会话。
 - `--name`/`-n` 设置会话显示名称；交互模式使用 `/name <名称>` 修改，使用 `/name --clear` 清除。
-- Session v2 会把消息和元数据都存入只追加的树结构；打开 v1 会话时会自动升级已有记录，不丢失历史。
+- Session v3 会把消息和元数据存入只追加的树结构，并用独立 head 记录持久化当前分支位置；打开旧会话时会自动升级，不丢失历史。
 - TUI 中的 `/tree` 会打开可搜索的对话树。选择旧的用户消息会回到它的父节点，并把原提示词放回输入框；选择助手消息则从该节点创建新分支。
 - TUI 中的 `/fork` 可选择一条旧的用户消息，从它的父节点创建新会话，并把原提示词放回输入框；`/clone` 会立即把当前活动分支复制为新会话。
 - 用户输入、完整模型消息、每个工具结果分别即时保存；模型调用失败时仍保留已完成操作和部分回复。

@@ -1,0 +1,27 @@
+{
+  "name": "gg-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev:web": "vite",
+    "build:web": "tsc -b && vite build",
+    "build:daemon": "node scripts/build-daemon.cjs",
+    "desktop": "npm run build:web && npm run build:daemon && electron .",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "electron": "44.4.3",
+    "typescript": "7.0.2",
+    "vite": "8.3.0"
+  }
+}

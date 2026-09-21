@@ -18,18 +18,18 @@ Use exact, unique text for edits. When tool output is truncated, read the saved 
 Treat tool errors and interrupted executions as incomplete work. Inspect state before retrying an operation whose result is unknown.
 Ask concise questions when essential information is missing. Do not claim success without evidence.`
 
-func (e *turnExecutor) instructionMessages() ([]agent.Message, error) {
-	text := codingInstructions + "\nWorking directory: " + e.cfg.CWD
-	if !e.cfg.NoContextFiles {
+func (s *Service) instructionMessages() ([]agent.Message, error) {
+	text := codingInstructions + "\nWorking directory: " + s.cfg.CWD
+	if !s.cfg.NoContextFiles {
 		var paths []string
-		for dir := filepath.Clean(e.cfg.CWD); dir != "."; dir = filepath.Dir(dir) {
+		for dir := filepath.Clean(s.cfg.CWD); dir != "."; dir = filepath.Dir(dir) {
 			paths = append(paths, filepath.Join(dir, "AGENTS.md"))
 			if filepath.Dir(dir) == dir {
 				break
 			}
 		}
-		if e.cfg.MemoryPath != "" {
-			paths = append(paths, filepath.Join(filepath.Dir(e.cfg.MemoryPath), "AGENTS.md"))
+		if s.cfg.MemoryPath != "" {
+			paths = append(paths, filepath.Join(filepath.Dir(s.cfg.MemoryPath), "AGENTS.md"))
 		}
 		seen := map[string]bool{}
 		for i := len(paths) - 1; i >= 0; i-- {

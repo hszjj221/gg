@@ -12,43 +12,23 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/hszjj221/gg/internal/agent"
+	"github.com/hszjj221/gg/internal/app"
 )
 
-type SubmitFunc func(context.Context, string, func(agent.Event), agent.Approver) (SubmitResult, error)
+type SubmitFunc func(context.Context, string, func(agent.Event), agent.Approver) (app.Result, error)
 type RenameSessionFunc func(string) error
-type SessionActionFunc func(SessionAction, string) (SessionUpdate, error)
+type SessionActionFunc func(app.SessionAction, string) (app.SessionUpdate, error)
 
-type SessionAction string
+type SubmitResult = app.Result
+type SessionAction = app.SessionAction
+type TreeItem = app.TreeItem
+type SessionUpdate = app.SessionUpdate
 
 const (
-	SessionActionTree  SessionAction = "tree"
-	SessionActionFork  SessionAction = "fork"
-	SessionActionClone SessionAction = "clone"
+	SessionActionTree  = app.SessionActionTree
+	SessionActionFork  = app.SessionActionFork
+	SessionActionClone = app.SessionActionClone
 )
-
-type TreeItem struct {
-	ID     string
-	Depth  int
-	Role   agent.Role
-	Text   string
-	Active bool
-}
-
-type SessionUpdate struct {
-	Messages    []Message
-	TreeItems   []TreeItem
-	SessionName string
-	SessionPath string
-	Draft       string
-	Notice      string
-}
-
-type SubmitResult struct {
-	Content   string
-	ModelName string
-	Usage     agent.Usage
-	TreeItems []TreeItem
-}
 
 type Message struct {
 	Role       agent.Role
@@ -447,7 +427,7 @@ func (m *Model) updateTreeSelector(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) applySessionUpdate(update SessionUpdate) {
-	m.messages = append([]Message(nil), update.Messages...)
+	m.messages = displayMessages(update.Messages)
 	m.treeItems = append([]TreeItem(nil), update.TreeItems...)
 	m.sessionName = update.SessionName
 	m.input.SetValue(update.Draft)
@@ -455,6 +435,20 @@ func (m *Model) applySessionUpdate(update SessionUpdate) {
 	m.notice = update.Notice
 	m.hasUsage = false
 	m.refreshViewport()
+}
+
+func displayMessages(messages []agent.Message) []Message {
+	out := make([]Message, 0, len(messages))
+	for _, message := range messages {
+		if message.Content == "" {
+			continue
+		}
+		switch message.Role {
+		case agent.RoleUser, agent.RoleAssistant:
+			out = append(out, Message{Role: message.Role, Content: message.Content})
+		}
+	}
+	return out
 }
 
 func (m *Model) handleAgentEvent(event agent.Event) {

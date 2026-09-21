@@ -1,2 +1,8 @@
 .DS_Store
 .gg/outputs/
+ui/node_modules/
+ui/dist/
+ui/bin/
+ui/out/
+ui/.vite/
+ui/*.tsbuildinfo
