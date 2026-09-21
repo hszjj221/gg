@@ -14,6 +14,7 @@ type Info struct {
 	ID           string
 	Path         string
 	CWD          string
+	Name         string
 	Timestamp    string
 	MessageCount int
 	Preview      string
@@ -112,10 +113,15 @@ func infoFromLoaded(path string, loaded Loaded) Info {
 	if len(loaded.Entries) > 0 {
 		timestamp = loaded.Entries[len(loaded.Entries)-1].Timestamp
 	}
+	name := ""
+	if loaded.LastInfo != nil {
+		name = loaded.LastInfo.Name
+	}
 	return Info{
 		ID:           loaded.Header.ID,
 		Path:         path,
 		CWD:          loaded.Header.CWD,
+		Name:         name,
 		Timestamp:    timestamp,
 		MessageCount: len(loaded.Messages),
 		Preview:      preview(loaded.Messages),

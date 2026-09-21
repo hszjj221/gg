@@ -309,6 +309,62 @@ func TestResizeUpdatesLayout(t *testing.T) {
 	}
 }
 
+func TestNameCommandRenamesSessionWithoutSubmitting(t *testing.T) {
+	var renamed string
+	submits := 0
+	model := NewModel(Config{
+		SessionName: "Old name",
+		RenameSession: func(name string) error {
+			renamed = name
+			return nil
+		},
+		Submit: func(ctx context.Context, prompt string, onEvent func(agent.Event), approver agent.Approver) (SubmitResult, error) {
+			submits++
+			return SubmitResult{}, nil
+		},
+	})
+	model.input.SetValue("/name New name")
+
+	model, cmd := updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil || submits != 0 || renamed != "New name" || model.sessionName != "New name" {
+		t.Fatalf("name command was not handled locally: renamed=%q submits=%d model=%+v", renamed, submits, model)
+	}
+	if !strings.Contains(model.View(), "session: New name") {
+		t.Fatalf("renamed session not rendered:\n%s", model.View())
+	}
+}
+
+func TestNameClearCommandClearsSessionName(t *testing.T) {
+	var renamed string
+	model := NewModel(Config{
+		SessionName: "Old name",
+		RenameSession: func(name string) error {
+			renamed = name
+			return nil
+		},
+	})
+	model.input.SetValue("/name --clear")
+
+	model, _ = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if renamed != "" || model.sessionName != "" || !strings.Contains(model.View(), "session name cleared") {
+		t.Fatalf("name was not cleared: renamed=%q view=%s", renamed, model.View())
+	}
+}
+
+func TestNameCommandIsNotQueuedWhileBusy(t *testing.T) {
+	model := NewModel(Config{})
+	model.busy = true
+	model.input.SetValue("/name Later")
+
+	model, cmd := updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil || model.queue.Len() != 0 || model.input.Value() != "/name Later" {
+		t.Fatalf("busy name command should remain as a draft: %+v", model)
+	}
+	if !strings.Contains(model.View(), "wait until") {
+		t.Fatalf("busy name command did not explain delay:\n%s", model.View())
+	}
+}
+
 func TestApprovalRequestCanBeApproved(t *testing.T) {
 	model := NewModel(Config{
 		CWD:            "/tmp/project",

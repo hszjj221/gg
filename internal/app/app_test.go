@@ -160,6 +160,80 @@ func TestRunPrintModeOutputsFinalTextAndWritesSession(t *testing.T) {
 	}
 }
 
+func TestRunNameFlagPersistsSessionDisplayName(t *testing.T) {
+	dir := t.TempDir()
+	sessionPath := filepath.Join(dir, "session.jsonl")
+	var stdout, stderr strings.Builder
+
+	code := Run(context.Background(), []string{"-p", "--api-key", "key", "--session", sessionPath, "--name", "Release audit", "say hi"}, Options{
+		CWD:     dir,
+		HomeDir: filepath.Join(dir, "home"),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			return &appFakeProvider{}
+		},
+	})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	loaded, err := session.Load(sessionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.LastInfo == nil || loaded.LastInfo.Name != "Release audit" {
+		t.Fatalf("session name not persisted: %+v", loaded.LastInfo)
+	}
+}
+
+func TestRunResumeSelectorRequiresTerminal(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr strings.Builder
+	code := Run(context.Background(), []string{"--resume"}, Options{
+		CWD:        dir,
+		HomeDir:    filepath.Join(dir, "home"),
+		Stdin:      strings.NewReader(""),
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+		IsTerminal: func(any) bool { return false },
+	})
+	if code != 2 || !strings.Contains(stderr.String(), "requires a terminal") {
+		t.Fatalf("unexpected result code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+func TestRunInteractiveNameCommandPersistsWithoutCallingProvider(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	var stdout, stderr strings.Builder
+	provider := &appFakeProvider{}
+
+	code := Run(context.Background(), nil, Options{
+		CWD:     dir,
+		HomeDir: home,
+		Stdin:   strings.NewReader("/name Interactive work\n"),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		IsTerminal: func(any) bool {
+			return false
+		},
+		ProviderFactory: func(config.Config) agent.Provider { return provider },
+	})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	if len(provider.requests) != 0 {
+		t.Fatalf("name command should not call provider: %+v", provider.requests)
+	}
+	infos, err := session.ListForCWD(filepath.Join(home, ".gg", "sessions"), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 1 || infos[0].Name != "Interactive work" {
+		t.Fatalf("interactive name not persisted: %+v", infos)
+	}
+}
+
 func TestRunPrintModeUsageWritesStderrAndSession(t *testing.T) {
 	dir := t.TempDir()
 	sessionPath := filepath.Join(dir, "session.jsonl")

@@ -190,6 +190,34 @@ func TestStoreWritesAndLoadsSummaryEntries(t *testing.T) {
 	}
 }
 
+func TestStoreWritesAndLoadsLatestSessionName(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(filepath.Join(dir, "session.jsonl"), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendName("  First\nname  "); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendName("Final name"); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := Load(store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Infos) != 2 {
+		t.Fatalf("expected two session info entries, got %d", len(loaded.Infos))
+	}
+	if loaded.Infos[0].Name != "First name" {
+		t.Fatalf("session name was not sanitized: %q", loaded.Infos[0].Name)
+	}
+	if loaded.LastInfo == nil || loaded.LastInfo.Name != "Final name" {
+		t.Fatalf("latest session name not loaded: %+v", loaded.LastInfo)
+	}
+}
+
 func TestListForCWDReturnsNewestFirst(t *testing.T) {
 	dir := t.TempDir()
 	cwd := filepath.Join(dir, "project")
@@ -209,6 +237,27 @@ func TestListForCWDReturnsNewestFirst(t *testing.T) {
 	}
 	if infos[0].MessageCount != 1 || infos[0].Preview != "second" {
 		t.Fatalf("unexpected newest session info: %+v", infos[0])
+	}
+}
+
+func TestListForCWDIncludesSessionName(t *testing.T) {
+	dir := t.TempDir()
+	cwd := filepath.Join(dir, "project")
+	path := createSession(t, dir, cwd, "named.jsonl", "hello")
+	store, err := NewStore(path, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendName("Refactor auth"); err != nil {
+		t.Fatal(err)
+	}
+
+	infos, err := ListForCWD(dir, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 1 || infos[0].Name != "Refactor auth" {
+		t.Fatalf("session name missing from listing: %+v", infos)
 	}
 }
 

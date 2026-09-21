@@ -10,7 +10,7 @@
 
 - 支持 tool calling 的 OpenAI-compatible streaming provider
 - 对临时模型调用失败自动重试
-- 支持列出和恢复命令的 JSONL 会话存储
+- 支持命名、列出、搜索和恢复的 JSONL 会话存储
 - 增量保存会话，支持中断恢复
 - 运行中补充要求和排队后续任务
 - 从 `AGENTS.md` 加载项目规则
@@ -72,7 +72,9 @@ gg -p "/skill:ca review and commit my changes"
 gg -p "/memory add Prefer concise answers with file references."
 gg sessions list
 gg resume <id-or-path> "Continue from this session"
+gg --resume
 gg --continue "Resume the latest session"
+gg --name "重构认证模块" -p "Review this module"
 ```
 
 交互模式：
@@ -158,7 +160,9 @@ v1 只支持 `openai-compatible` provider。不支持远端拉取模型列表；
 
 - `gg sessions list` 会列出当前工作目录的会话。
 - `gg resume <id-or-path>` 可以通过显示的 ID、JSONL 文件名（不含 `.jsonl` 后缀）、文件名或路径恢复会话。
+- `gg resume` 和 `gg --resume` 会在终端中打开可搜索的会话选择器。
 - `gg --continue` 和 `gg --last` 会恢复当前工作目录的最新会话。
+- `--name`/`-n` 设置会话显示名称；交互模式使用 `/name <名称>` 修改，使用 `/name --clear` 清除。
 - 用户输入、完整模型消息、每个工具结果分别即时保存；模型调用失败时仍保留已完成操作和部分回复。
 - 恢复会话时可修复末尾未写完的 JSONL 记录；缺失的工具结果会标记为未知，由模型检查当前状态后再决定是否重试。
 

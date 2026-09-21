@@ -58,14 +58,24 @@ type SummaryEntry struct {
 	ThroughMessageCount int     `json:"throughMessageCount"`
 }
 
+type SessionInfoEntry struct {
+	Type      string  `json:"type"`
+	ID        string  `json:"id"`
+	ParentID  *string `json:"parentId"`
+	Timestamp string  `json:"timestamp"`
+	Name      string  `json:"name"`
+}
+
 type Loaded struct {
 	Header         Header
 	Entries        []MessageEntry
 	Usages         []UsageEntry
 	Models         []ModelEntry
 	Summaries      []SummaryEntry
+	Infos          []SessionInfoEntry
 	LastModel      *ModelEntry
 	LastSummary    *SummaryEntry
+	LastInfo       *SessionInfoEntry
 	Messages       []agent.Message
 	validBytes     int64
 	incompleteTail bool
@@ -231,6 +241,26 @@ func (s *Store) AppendSummary(summary string, throughMessageCount int) error {
 	return writeJSONLine(file, entry)
 }
 
+func (s *Store) AppendName(name string) error {
+	if s == nil {
+		return fmt.Errorf("session persistence is disabled")
+	}
+	name = strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ").Replace(name))
+	entry := SessionInfoEntry{
+		Type:      "session_info",
+		ID:        newID(),
+		ParentID:  s.lastID,
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Name:      name,
+	}
+	file, err := os.OpenFile(s.path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return writeJSONLine(file, entry)
+}
+
 func Load(path string) (Loaded, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -307,6 +337,14 @@ func Load(path string) (Loaded, error) {
 			loaded.Summaries = append(loaded.Summaries, entry)
 			last := entry
 			loaded.LastSummary = &last
+		case "session_info":
+			var entry SessionInfoEntry
+			if err := json.Unmarshal([]byte(line), &entry); err != nil {
+				return Loaded{}, err
+			}
+			loaded.Infos = append(loaded.Infos, entry)
+			last := entry
+			loaded.LastInfo = &last
 		default:
 			return Loaded{}, fmt.Errorf("unknown session entry type %q", probe.Type)
 		}

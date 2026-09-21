@@ -15,6 +15,7 @@ import (
 )
 
 type SubmitFunc func(context.Context, string, func(agent.Event), agent.Approver) (SubmitResult, error)
+type RenameSessionFunc func(string) error
 
 type SubmitResult struct {
 	Content   string
@@ -35,10 +36,12 @@ type Config struct {
 	Queue           *agent.MessageQueue
 	CWD             string
 	ModelName       string
+	SessionName     string
 	ShowUsage       bool
 	EnableApproval  bool
 	InitialMessages []Message
 	Submit          SubmitFunc
+	RenameSession   RenameSessionFunc
 	Input           io.Reader
 	Output          io.Writer
 }
@@ -48,9 +51,11 @@ type Model struct {
 	queue          *agent.MessageQueue
 	cwd            string
 	modelName      string
+	sessionName    string
 	showUsage      bool
 	enableApproval bool
 	submit         SubmitFunc
+	renameSession  RenameSessionFunc
 
 	messages []Message
 	input    textinput.Model
@@ -66,6 +71,7 @@ type Model struct {
 	lastUsage       agent.Usage
 	hasUsage        bool
 	err             error
+	notice          string
 }
 
 type agentEventMsg agent.Event
@@ -107,9 +113,11 @@ func NewModel(config Config) Model {
 		queue:          config.Queue,
 		cwd:            config.CWD,
 		modelName:      config.ModelName,
+		sessionName:    config.SessionName,
 		showUsage:      config.ShowUsage,
 		enableApproval: config.EnableApproval,
 		submit:         config.Submit,
+		renameSession:  config.RenameSession,
 		messages:       append([]Message(nil), config.InitialMessages...),
 		input:          input,
 		viewport:       viewport.New(80, 20),
@@ -221,6 +229,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "enter", "alt+enter":
 				prompt := strings.TrimSpace(m.input.Value())
+				if isSessionCommand(prompt) {
+					m.notice = "wait until the current response finishes to rename the session"
+					return m, nil
+				}
 				if prompt != "" && !m.cancelRequested {
 					m.queue.Add(prompt, msg.String() == "alt+enter")
 					m.input.SetValue("")
@@ -234,6 +246,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter":
 				prompt := strings.TrimSpace(m.input.Value())
 				if prompt == "" {
+					return m, nil
+				}
+				if m.handleSessionCommand(prompt) {
+					m.input.SetValue("")
 					return m, nil
 				}
 				return m.startSubmit(prompt)
@@ -265,6 +281,7 @@ func (m Model) startSubmit(prompt string) (Model, tea.Cmd) {
 	m.cancel = cancel
 	m.updates = updates
 	m.err = nil
+	m.notice = ""
 	m.messages = append(m.messages,
 		Message{Role: agent.RoleUser, Content: prompt},
 		Message{Role: agent.RoleAssistant},
@@ -273,6 +290,46 @@ func (m Model) startSubmit(prompt string) (Model, tea.Cmd) {
 	m.input.Focus()
 	m.refreshViewport()
 	return m, tea.Batch(startSubmitCmd(m.submit, m.ctx, ctx, prompt, updates, m.enableApproval), waitForUpdateCmd(updates))
+}
+
+func (m *Model) handleSessionCommand(prompt string) bool {
+	if prompt == "/name" {
+		if m.sessionName == "" {
+			m.notice = "session is unnamed; use /name <name>"
+		} else {
+			m.notice = "session: " + m.sessionName
+		}
+		return true
+	}
+	if !strings.HasPrefix(prompt, "/name ") {
+		return false
+	}
+	name := strings.TrimSpace(strings.TrimPrefix(prompt, "/name "))
+	if name == "--clear" {
+		name = ""
+	}
+	if m.renameSession == nil {
+		m.err = fmt.Errorf("session persistence is disabled")
+		m.notice = ""
+		return true
+	}
+	if err := m.renameSession(name); err != nil {
+		m.err = err
+		m.notice = ""
+		return true
+	}
+	m.err = nil
+	m.sessionName = name
+	if name == "" {
+		m.notice = "session name cleared"
+	} else {
+		m.notice = "session named: " + name
+	}
+	return true
+}
+
+func isSessionCommand(prompt string) bool {
+	return prompt == "/name" || strings.HasPrefix(prompt, "/name ")
 }
 
 func (m *Model) handleAgentEvent(event agent.Event) {
@@ -460,7 +517,11 @@ func (m Model) statusLine() string {
 	} else if m.approval != nil {
 		state = "approval"
 	}
-	parts := []string{"gg", shortPath(m.cwd), m.modelName, state}
+	parts := []string{"gg", shortPath(m.cwd)}
+	if m.sessionName != "" {
+		parts = append(parts, "session: "+m.sessionName)
+	}
+	parts = append(parts, m.modelName, state)
 	if count := m.queue.Len(); count > 0 {
 		parts = append(parts, fmt.Sprintf("queued: %d", count))
 	}
@@ -472,6 +533,8 @@ func (m Model) statusLine() string {
 	}
 	if m.err != nil {
 		parts = append(parts, "error: "+m.err.Error())
+	} else if m.notice != "" {
+		parts = append(parts, m.notice)
 	}
 	return statusStyle.Width(max(1, m.width)).Render(strings.Join(parts, " | "))
 }

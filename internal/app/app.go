@@ -80,6 +80,23 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	if parsed.Command == cli.CommandSessionsList {
 		return runSessionsList(cfg, stdout, stderr)
 	}
+	if wantsSessionSelector(parsed) {
+		if !shouldRunTUI(stdin, stdout, isTerm) {
+			fmt.Fprintln(stderr, "session selector requires a terminal; use gg resume <id-or-path>")
+			return 2
+		}
+		selected, ok, err := selectSession(ctx, cfg, stdin, stdout)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if !ok {
+			return 0
+		}
+		parsed.Command = cli.CommandResume
+		parsed.ResumeTarget = selected
+		parsed.Resume = false
+	}
 	if parsed.Approval == "on-request" && !approvalTerminalAvailable(parsed, stdin, stdout, stderr, isTerm) {
 		fmt.Fprintln(stderr, "--approval on-request requires a terminal")
 		return 2
@@ -101,6 +118,13 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	if parsed.Name != "" && (loaded.LastInfo == nil || loaded.LastInfo.Name != parsed.Name) {
+		if err := sessionStore.AppendName(parsed.Name); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		loaded.LastInfo = &session.SessionInfoEntry{Name: parsed.Name}
+	}
 	if parsed.Model == "" && loaded.LastModel != nil {
 		cfg, err = cfg.WithSelection(loaded.LastModel.Selection)
 		if err != nil {
@@ -120,10 +144,10 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		return 2
 	}
 	if shouldRunTUI(stdin, stdout, isTerm) {
-		return runTUI(ctx, executor, cfg, stdin, stdout, stderr, parsed.Usage, parsed.Approval != "never")
+		return runTUI(ctx, executor, cfg, sessionName(loaded), stdin, stdout, stderr, parsed.Usage, parsed.Approval != "never")
 	}
 	reader := bufio.NewReader(stdin)
-	return runInteractive(ctx, executor, reader, stdout, stderr, parsed.Usage, interactiveApprover(parsed, reader, stderr, bothTerminals(stdin, stdout, isTerm)))
+	return runInteractive(ctx, executor, reader, stdout, stderr, sessionName(loaded), parsed.Usage, interactiveApprover(parsed, reader, stderr, bothTerminals(stdin, stdout, isTerm)))
 }
 
 func runPrompt(
@@ -440,13 +464,43 @@ func defaultTools(cfg config.Config, provider agent.Provider, readRoots []string
 }
 
 func validateSessionArgs(args cli.Args) error {
-	if args.NoSession && (args.Command == cli.CommandResume || args.Continue || args.Last) {
-		return fmt.Errorf("--no-session cannot be used with resume, --continue, or --last")
+	resume := args.Command == cli.CommandResume || args.Resume
+	if args.NoSession && (resume || args.Continue || args.Last || args.Name != "") {
+		return fmt.Errorf("--no-session cannot be used with resume, --continue, --last, or --name")
 	}
-	if args.Session != "" && (args.Command == cli.CommandResume || args.Continue || args.Last) {
+	if args.Session != "" && (resume || args.Continue || args.Last) {
 		return fmt.Errorf("--session cannot be combined with resume, --continue, or --last")
 	}
+	if resume && (args.Continue || args.Last) {
+		return fmt.Errorf("resume cannot be combined with --continue or --last")
+	}
 	return nil
+}
+
+func wantsSessionSelector(args cli.Args) bool {
+	return args.Resume || (args.Command == cli.CommandResume && args.ResumeTarget == "")
+}
+
+func selectSession(ctx context.Context, cfg config.Config, stdin io.Reader, stdout io.Writer) (string, bool, error) {
+	infos, err := session.ListForCWD(cfg.SessionDir, cfg.CWD)
+	if err != nil {
+		return "", false, err
+	}
+	if len(infos) == 0 {
+		return "", false, fmt.Errorf("no sessions found for %s", cfg.CWD)
+	}
+	items := make([]tui.SessionItem, 0, len(infos))
+	for _, info := range infos {
+		items = append(items, tui.SessionItem{
+			ID:           info.ID,
+			Path:         info.Path,
+			Name:         info.Name,
+			Timestamp:    info.Timestamp,
+			MessageCount: info.MessageCount,
+			Preview:      info.Preview,
+		})
+	}
+	return tui.RunSessionSelector(ctx, items, stdin, stdout)
 }
 
 func runSessionsList(cfg config.Config, stdout io.Writer, stderr io.Writer) int {
@@ -460,9 +514,9 @@ func runSessionsList(cfg config.Config, stdout io.Writer, stderr io.Writer) int 
 		return 0
 	}
 	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tUPDATED\tMESSAGES\tPATH\tPREVIEW")
+	fmt.Fprintln(w, "ID\tUPDATED\tMESSAGES\tNAME\tPATH\tPREVIEW")
 	for _, info := range infos {
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\n", info.ID, info.Timestamp, info.MessageCount, info.Path, info.Preview)
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\n", info.ID, info.Timestamp, info.MessageCount, info.Name, info.Path, info.Preview)
 	}
 	if err := w.Flush(); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -477,10 +531,12 @@ func runInteractive(
 	stdin *bufio.Reader,
 	stdout io.Writer,
 	stderr io.Writer,
+	initialSessionName string,
 	showUsage bool,
 	approver agent.Approver,
 ) int {
 	fmt.Fprintln(stdout, "gg interactive mode. Press Ctrl+D to exit.")
+	currentSessionName := initialSessionName
 	for {
 		fmt.Fprint(stdout, "> ")
 		line, err := stdin.ReadString('\n')
@@ -498,6 +554,15 @@ func runInteractive(
 			}
 			continue
 		}
+		if handled, commandErr := handleSessionCommand(prompt, executor.store, &currentSessionName, stdout); handled {
+			if commandErr != nil {
+				fmt.Fprintln(stderr, commandErr)
+			}
+			if err == io.EOF {
+				break
+			}
+			continue
+		}
 		code := runPrompt(ctx, executor, prompt, stdout, stderr, true, showUsage, approver)
 		if code != 0 {
 			return code
@@ -509,10 +574,39 @@ func runInteractive(
 	return 0
 }
 
+func handleSessionCommand(prompt string, store *session.Store, name *string, stdout io.Writer) (bool, error) {
+	if prompt == "/name" {
+		if *name == "" {
+			fmt.Fprintln(stdout, "session is unnamed; use /name <name>")
+		} else {
+			fmt.Fprintln(stdout, *name)
+		}
+		return true, nil
+	}
+	if !strings.HasPrefix(prompt, "/name ") {
+		return false, nil
+	}
+	next := strings.TrimSpace(strings.TrimPrefix(prompt, "/name "))
+	if next == "--clear" {
+		next = ""
+	}
+	if err := store.AppendName(next); err != nil {
+		return true, err
+	}
+	*name = next
+	if next == "" {
+		fmt.Fprintln(stdout, "session name cleared")
+	} else {
+		fmt.Fprintf(stdout, "session named: %s\n", next)
+	}
+	return true, nil
+}
+
 func runTUI(
 	ctx context.Context,
 	executor *turnExecutor,
 	cfg config.Config,
+	sessionName string,
 	stdin io.Reader,
 	stdout io.Writer,
 	stderr io.Writer,
@@ -524,6 +618,7 @@ func runTUI(
 		Queue:           executor.queue,
 		CWD:             cfg.CWD,
 		ModelName:       cfg.Selection,
+		SessionName:     sessionName,
 		ShowUsage:       showUsage,
 		EnableApproval:  enableApproval,
 		InitialMessages: displayMessages(executor.history),
@@ -533,12 +628,22 @@ func runTUI(
 			result, err := executor.Run(ctx, prompt, onEvent, approver)
 			return tui.SubmitResult{Content: result.Content, Usage: result.Usage, ModelName: result.ModelName}, err
 		},
+		RenameSession: func(name string) error {
+			return executor.store.AppendName(name)
+		},
 	})
 	if err != nil && err != context.Canceled {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	return 0
+}
+
+func sessionName(loaded session.Loaded) string {
+	if loaded.LastInfo == nil {
+		return ""
+	}
+	return loaded.LastInfo.Name
 }
 
 func appendUsage(store *session.Store, usage agent.Usage) error {

@@ -10,7 +10,7 @@ English | [简体中文](README.zh-CN.md)
 
 - OpenAI-compatible streaming provider with tool calling
 - Automatic retry for transient model call failures
-- JSONL session storage with list and resume commands
+- Named JSONL sessions with list, search, and resume flows
 - Incremental session persistence and interruption recovery
 - Steering and follow-up messages while the agent works
 - Project instructions from `AGENTS.md`
@@ -72,7 +72,9 @@ gg -p "/skill:ca review and commit my changes"
 gg -p "/memory add Prefer concise answers with file references."
 gg sessions list
 gg resume <id-or-path> "Continue from this session"
+gg --resume
 gg --continue "Resume the latest session"
+gg --name "Refactor auth" -p "Review this module"
 ```
 
 Interactive mode:
@@ -158,7 +160,9 @@ Session management:
 
 - `gg sessions list` lists sessions for the current working directory.
 - `gg resume <id-or-path>` resumes a session by displayed ID, JSONL filename stem, filename, or path.
+- `gg resume` and `gg --resume` open a searchable session selector in a terminal.
 - `gg --continue` and `gg --last` resume the latest session for the current working directory.
+- `--name`/`-n` sets a session display name; `/name <name>` changes it interactively and `/name --clear` removes it.
 - User messages, completed model messages, and individual tool results are saved as they complete. Provider errors and partial responses remain available after a failed run.
 - Resume recovers complete JSONL entries after an interrupted final append. Missing tool results are marked as unknown, so the model can inspect the workspace before retrying.
 

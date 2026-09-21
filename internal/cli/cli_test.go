@@ -48,6 +48,26 @@ func TestParseResumeCommandTargetAndPrompt(t *testing.T) {
 	}
 }
 
+func TestParseResumeCommandWithoutTargetOpensSelector(t *testing.T) {
+	args, err := Parse([]string{"resume"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args.Command != CommandResume || args.ResumeTarget != "" {
+		t.Fatalf("unexpected args: %+v", args)
+	}
+}
+
+func TestParseResumeAndNameFlags(t *testing.T) {
+	args, err := Parse([]string{"--resume", "--name", "Refactor auth"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !args.Resume || args.Name != "Refactor auth" {
+		t.Fatalf("unexpected args: %+v", args)
+	}
+}
+
 func TestParseContinueAndLastFlags(t *testing.T) {
 	args, err := Parse([]string{"--continue", "--last"})
 	if err != nil {
@@ -113,7 +133,7 @@ func TestParseRejectsInvalidApprovalFlag(t *testing.T) {
 func TestHelpTextMentionsTUIInteractiveMode(t *testing.T) {
 	help := HelpText()
 
-	if !strings.Contains(help, "gg\n") || !strings.Contains(help, "TUI interactive mode") || !strings.Contains(help, "provider:model") || !strings.Contains(help, "--approval") || !strings.Contains(help, "--no-memory") {
+	if !strings.Contains(help, "gg\n") || !strings.Contains(help, "TUI interactive mode") || !strings.Contains(help, "provider:model") || !strings.Contains(help, "--approval") || !strings.Contains(help, "--no-memory") || !strings.Contains(help, "--resume") || !strings.Contains(help, "--name") {
 		t.Fatalf("help text should mention TUI interactive mode:\n%s", help)
 	}
 }

@@ -14,6 +14,7 @@ type Args struct {
 	NoSession      bool
 	Continue       bool
 	Last           bool
+	Resume         bool
 	Usage          bool
 	NoSkills       bool
 	NoMemory       bool
@@ -24,6 +25,7 @@ type Args struct {
 	Model          string
 	Session        string
 	SessionDir     string
+	Name           string
 	Command        Command
 	ResumeTarget   string
 	Prompt         string
@@ -51,6 +53,8 @@ func Parse(argv []string) (Args, error) {
 	fs.BoolVar(&args.NoSession, "no-session", false, "disable session persistence")
 	fs.BoolVar(&args.Continue, "continue", false, "resume the latest session")
 	fs.BoolVar(&args.Last, "last", false, "resume the latest session")
+	fs.BoolVar(&args.Resume, "resume", false, "select a session to resume")
+	fs.BoolVar(&args.Resume, "r", false, "select a session to resume")
 	fs.BoolVar(&args.Usage, "usage", false, "print token usage to stderr")
 	fs.BoolVar(&args.NoSkills, "no-skills", false, "disable .agents/skills discovery")
 	fs.BoolVar(&args.NoMemory, "no-memory", false, "disable ~/.gg/memory.md")
@@ -61,6 +65,8 @@ func Parse(argv []string) (Args, error) {
 	fs.StringVar(&args.Model, "model", "", "model selection as provider:model")
 	fs.StringVar(&args.Session, "session", "", "session JSONL path")
 	fs.StringVar(&args.SessionDir, "session-dir", "", "session storage directory")
+	fs.StringVar(&args.Name, "name", "", "session display name")
+	fs.StringVar(&args.Name, "n", "", "session display name")
 	if err := fs.Parse(argv); err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
@@ -97,12 +103,11 @@ func parseCommand(args *Args, rest []string) error {
 		}
 		args.Command = CommandSessionsList
 	case "resume":
-		if len(rest) < 2 {
-			return fmt.Errorf("usage: gg resume <id-or-path> [prompt]")
-		}
 		args.Command = CommandResume
-		args.ResumeTarget = rest[1]
-		args.Prompt = strings.Join(rest[2:], " ")
+		if len(rest) >= 2 {
+			args.ResumeTarget = rest[1]
+			args.Prompt = strings.Join(rest[2:], " ")
+		}
 	default:
 		args.Prompt = strings.Join(rest, " ")
 	}
@@ -116,7 +121,7 @@ Usage:
   gg
   gg [options] [prompt]
   gg sessions list
-  gg resume <id-or-path> [prompt]
+  gg resume [<id-or-path> [prompt]]
 
 Running gg without a prompt starts the TUI interactive mode when stdin/stdout are terminals.
 
@@ -130,6 +135,8 @@ Options:
   --no-session             disable session persistence
   --continue               resume the latest session
   --last                   resume the latest session
+  -r, --resume             select a session to resume
+  -n, --name <name>        set the session display name
   --usage                  print token usage to stderr
   --no-skills              disable .agents/skills discovery
   --no-memory              disable ~/.gg/memory.md
