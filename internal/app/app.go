@@ -614,6 +614,10 @@ func runTUI(
 	enableApproval bool,
 ) int {
 	executor.queue = &agent.MessageQueue{}
+	var sessionAction tui.SessionActionFunc
+	if executor.store != nil {
+		sessionAction = executor.handleSessionAction
+	}
 	err := tui.Run(ctx, tui.Config{
 		Queue:           executor.queue,
 		CWD:             cfg.CWD,
@@ -622,21 +626,125 @@ func runTUI(
 		ShowUsage:       showUsage,
 		EnableApproval:  enableApproval,
 		InitialMessages: displayMessages(executor.history),
+		TreeItems:       sessionTreeItems(executor.store),
 		Input:           stdin,
 		Output:          stdout,
 		Submit: func(ctx context.Context, prompt string, onEvent func(agent.Event), approver agent.Approver) (tui.SubmitResult, error) {
 			result, err := executor.Run(ctx, prompt, onEvent, approver)
-			return tui.SubmitResult{Content: result.Content, Usage: result.Usage, ModelName: result.ModelName}, err
+			return tui.SubmitResult{Content: result.Content, Usage: result.Usage, ModelName: result.ModelName, TreeItems: sessionTreeItems(executor.store)}, err
 		},
 		RenameSession: func(name string) error {
 			return executor.store.AppendName(name)
 		},
+		SessionAction: sessionAction,
 	})
 	if err != nil && err != context.Canceled {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	return 0
+}
+
+func (e *turnExecutor) handleSessionAction(action tui.SessionAction, entryID string) (tui.SessionUpdate, error) {
+	if e.store == nil {
+		return tui.SessionUpdate{}, fmt.Errorf("session persistence is disabled")
+	}
+	var (
+		store  = e.store
+		draft  string
+		notice string
+	)
+	switch action {
+	case tui.SessionActionTree:
+		entry, ok := findTreeEntry(store.TreeEntries(), entryID)
+		if !ok {
+			return tui.SessionUpdate{}, fmt.Errorf("conversation node %q not found", entryID)
+		}
+		target := &entry.ID
+		if entry.Message.Role == agent.RoleUser {
+			var found bool
+			target, found = store.ParentID(entry.ID)
+			if !found {
+				return tui.SessionUpdate{}, fmt.Errorf("conversation node %q not found", entryID)
+			}
+			draft = agent.MessageText(entry.Message)
+		}
+		if err := store.Branch(target); err != nil {
+			return tui.SessionUpdate{}, err
+		}
+		notice = "switched conversation branch"
+	case tui.SessionActionFork:
+		entry, ok := findTreeEntry(store.TreeEntries(), entryID)
+		if !ok || entry.Message.Role != agent.RoleUser {
+			return tui.SessionUpdate{}, fmt.Errorf("select a user message to fork")
+		}
+		parent, found := store.ParentID(entry.ID)
+		if !found {
+			return tui.SessionUpdate{}, fmt.Errorf("conversation node %q not found", entryID)
+		}
+		forked, err := store.Fork(parent)
+		if err != nil {
+			return tui.SessionUpdate{}, err
+		}
+		store = forked
+		draft = agent.MessageText(entry.Message)
+		notice = "forked to " + filepath.Base(store.Path())
+	case tui.SessionActionClone:
+		cloned, err := store.Fork(store.LeafID())
+		if err != nil {
+			return tui.SessionUpdate{}, err
+		}
+		store = cloned
+		notice = "cloned to " + filepath.Base(store.Path())
+	default:
+		return tui.SessionUpdate{}, fmt.Errorf("unknown session action %q", action)
+	}
+	loaded := store.State()
+	e.applySessionState(store, loaded)
+	return tui.SessionUpdate{
+		Messages:    displayMessages(e.history),
+		TreeItems:   sessionTreeItems(e.store),
+		SessionName: sessionName(loaded),
+		SessionPath: store.Path(),
+		Draft:       draft,
+		Notice:      notice,
+	}, nil
+}
+
+func (e *turnExecutor) applySessionState(store *session.Store, loaded session.Loaded) {
+	e.store = store
+	e.history = append([]agent.Message(nil), loaded.Messages...)
+	e.summary = cloneSummaryEntry(loaded.LastSummary)
+	e.modelRecorded = loaded.LastModel != nil && loaded.LastModel.Selection == e.cfg.Selection
+}
+
+func sessionTreeItems(store *session.Store) []tui.TreeItem {
+	if store == nil {
+		return nil
+	}
+	entries := store.TreeEntries()
+	items := make([]tui.TreeItem, 0, len(entries))
+	for _, entry := range entries {
+		text := agent.MessageText(entry.Message)
+		if text == "" && len(entry.Message.ToolCalls) > 0 {
+			names := make([]string, 0, len(entry.Message.ToolCalls))
+			for _, call := range entry.Message.ToolCalls {
+				names = append(names, call.Name)
+			}
+			text = "tool call: " + strings.Join(names, ", ")
+		}
+		items = append(items, tui.TreeItem{ID: entry.ID, Depth: entry.Depth, Role: entry.Message.Role, Text: text, Active: entry.Active})
+	}
+	return items
+}
+
+func findTreeEntry(entries []session.TreeEntry, id string) (session.TreeEntry, bool) {
+	for _, entry := range entries {
+		if entry.ID == id {
+			return entry, true
+		}
+	}
+	return session.TreeEntry{}, false
 }
 
 func sessionName(loaded session.Loaded) string {

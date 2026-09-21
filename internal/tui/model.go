@@ -16,11 +16,38 @@ import (
 
 type SubmitFunc func(context.Context, string, func(agent.Event), agent.Approver) (SubmitResult, error)
 type RenameSessionFunc func(string) error
+type SessionActionFunc func(SessionAction, string) (SessionUpdate, error)
+
+type SessionAction string
+
+const (
+	SessionActionTree  SessionAction = "tree"
+	SessionActionFork  SessionAction = "fork"
+	SessionActionClone SessionAction = "clone"
+)
+
+type TreeItem struct {
+	ID     string
+	Depth  int
+	Role   agent.Role
+	Text   string
+	Active bool
+}
+
+type SessionUpdate struct {
+	Messages    []Message
+	TreeItems   []TreeItem
+	SessionName string
+	SessionPath string
+	Draft       string
+	Notice      string
+}
 
 type SubmitResult struct {
 	Content   string
 	ModelName string
 	Usage     agent.Usage
+	TreeItems []TreeItem
 }
 
 type Message struct {
@@ -40,8 +67,10 @@ type Config struct {
 	ShowUsage       bool
 	EnableApproval  bool
 	InitialMessages []Message
+	TreeItems       []TreeItem
 	Submit          SubmitFunc
 	RenameSession   RenameSessionFunc
+	SessionAction   SessionActionFunc
 	Input           io.Reader
 	Output          io.Writer
 }
@@ -56,10 +85,13 @@ type Model struct {
 	enableApproval bool
 	submit         SubmitFunc
 	renameSession  RenameSessionFunc
+	sessionAction  SessionActionFunc
 
-	messages []Message
-	input    textinput.Model
-	viewport viewport.Model
+	messages     []Message
+	treeItems    []TreeItem
+	treeSelector *treeSelector
+	input        textinput.Model
+	viewport     viewport.Model
 
 	width           int
 	height          int
@@ -118,7 +150,9 @@ func NewModel(config Config) Model {
 		enableApproval: config.EnableApproval,
 		submit:         config.Submit,
 		renameSession:  config.RenameSession,
+		sessionAction:  config.SessionAction,
 		messages:       append([]Message(nil), config.InitialMessages...),
+		treeItems:      append([]TreeItem(nil), config.TreeItems...),
 		input:          input,
 		viewport:       viewport.New(80, 20),
 		width:          80,
@@ -156,6 +190,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.approval = nil
 		m.lastUsage = msg.result.Usage
 		m.hasUsage = true
+		if msg.result.TreeItems != nil {
+			m.treeItems = append([]TreeItem(nil), msg.result.TreeItems...)
+		}
 		if msg.err != nil {
 			m.err = msg.err
 			if len(m.messages) > 0 && m.messages[len(m.messages)-1].Role == agent.RoleAssistant && m.messages[len(m.messages)-1].Content == "" {
@@ -198,6 +235,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, nil
 	case tea.KeyMsg:
+		if m.treeSelector != nil {
+			return m.updateTreeSelector(msg)
+		}
 		if msg.String() == "pgup" || msg.String() == "pgdown" {
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
@@ -230,7 +270,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "enter", "alt+enter":
 				prompt := strings.TrimSpace(m.input.Value())
 				if isSessionCommand(prompt) {
-					m.notice = "wait until the current response finishes to rename the session"
+					m.notice = "wait until the current response finishes to manage the session"
 					return m, nil
 				}
 				if prompt != "" && !m.cancelRequested {
@@ -265,6 +305,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
+	if m.treeSelector != nil {
+		return lipgloss.JoinVertical(lipgloss.Left, m.treeSelector.View(m.width, m.height-1), m.statusLine())
+	}
 	parts := []string{m.viewport.View()}
 	if m.approval != nil {
 		parts = append(parts, m.approvalPanel())
@@ -293,6 +336,26 @@ func (m Model) startSubmit(prompt string) (Model, tea.Cmd) {
 }
 
 func (m *Model) handleSessionCommand(prompt string) bool {
+	switch prompt {
+	case "/tree":
+		return m.openTreeSelector(SessionActionTree)
+	case "/fork":
+		return m.openTreeSelector(SessionActionFork)
+	case "/clone":
+		if m.sessionAction == nil {
+			m.err = fmt.Errorf("session persistence is disabled")
+			m.notice = ""
+			return true
+		}
+		update, err := m.sessionAction(SessionActionClone, "")
+		if err != nil {
+			m.err = err
+			m.notice = ""
+			return true
+		}
+		m.applySessionUpdate(update)
+		return true
+	}
 	if prompt == "/name" {
 		if m.sessionName == "" {
 			m.notice = "session is unnamed; use /name <name>"
@@ -329,7 +392,69 @@ func (m *Model) handleSessionCommand(prompt string) bool {
 }
 
 func isSessionCommand(prompt string) bool {
-	return prompt == "/name" || strings.HasPrefix(prompt, "/name ")
+	return prompt == "/name" || strings.HasPrefix(prompt, "/name ") || prompt == "/tree" || prompt == "/fork" || prompt == "/clone"
+}
+
+func (m *Model) openTreeSelector(action SessionAction) bool {
+	if m.sessionAction == nil {
+		m.err = fmt.Errorf("session persistence is disabled")
+		m.notice = ""
+		return true
+	}
+	items := append([]TreeItem(nil), m.treeItems...)
+	if action == SessionActionFork {
+		filtered := items[:0]
+		for _, item := range items {
+			if item.Role == agent.RoleUser {
+				filtered = append(filtered, item)
+			}
+		}
+		items = filtered
+	}
+	if len(items) == 0 {
+		m.err = nil
+		m.notice = "no conversation nodes available"
+		return true
+	}
+	m.treeSelector = newTreeSelector(action, items)
+	m.input.Blur()
+	m.err = nil
+	m.notice = ""
+	return true
+}
+
+func (m *Model) updateTreeSelector(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	selected, canceled := m.treeSelector.Update(msg)
+	if canceled {
+		m.treeSelector = nil
+		m.input.Focus()
+		return *m, textinput.Blink
+	}
+	if selected == "" {
+		return *m, nil
+	}
+	action := m.treeSelector.action
+	update, err := m.sessionAction(action, selected)
+	if err != nil {
+		m.err = err
+		m.notice = ""
+		return *m, nil
+	}
+	m.treeSelector = nil
+	m.applySessionUpdate(update)
+	m.input.Focus()
+	return *m, textinput.Blink
+}
+
+func (m *Model) applySessionUpdate(update SessionUpdate) {
+	m.messages = append([]Message(nil), update.Messages...)
+	m.treeItems = append([]TreeItem(nil), update.TreeItems...)
+	m.sessionName = update.SessionName
+	m.input.SetValue(update.Draft)
+	m.err = nil
+	m.notice = update.Notice
+	m.hasUsage = false
+	m.refreshViewport()
 }
 
 func (m *Model) handleAgentEvent(event agent.Event) {

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
 )
@@ -110,8 +111,8 @@ func FindForCWD(sessionDir, cwd, target string) (string, error) {
 
 func infoFromLoaded(path string, loaded Loaded) Info {
 	timestamp := loaded.Header.Timestamp
-	if len(loaded.Entries) > 0 {
-		timestamp = loaded.Entries[len(loaded.Entries)-1].Timestamp
+	if len(loaded.records) > 0 {
+		timestamp = laterTimestamp(timestamp, loaded.records[len(loaded.records)-1].timestamp())
 	}
 	name := ""
 	if loaded.LastInfo != nil {
@@ -126,6 +127,21 @@ func infoFromLoaded(path string, loaded Loaded) Info {
 		MessageCount: len(loaded.Messages),
 		Preview:      preview(loaded.Messages),
 	}
+}
+
+func laterTimestamp(first, second string) string {
+	firstTime, firstErr := time.Parse(time.RFC3339Nano, first)
+	secondTime, secondErr := time.Parse(time.RFC3339Nano, second)
+	if firstErr == nil && secondErr == nil {
+		if secondTime.After(firstTime) {
+			return second
+		}
+		return first
+	}
+	if second > first {
+		return second
+	}
+	return first
 }
 
 func preview(messages []agent.Message) string {

@@ -163,6 +163,9 @@ Session management:
 - `gg resume` and `gg --resume` open a searchable session selector in a terminal.
 - `gg --continue` and `gg --last` resume the latest session for the current working directory.
 - `--name`/`-n` sets a session display name; `/name <name>` changes it interactively and `/name --clear` removes it.
+- Session v2 stores every message and metadata entry in an append-only tree. Opening a v1 session upgrades its existing entries without discarding history.
+- In the TUI, `/tree` opens a searchable conversation tree. Selecting an earlier user message rewinds to its parent and places that prompt back in the editor; selecting an assistant message continues from it as a new branch.
+- In the TUI, `/fork` selects an earlier user message, creates a new session from its parent, and places the prompt back in the editor. `/clone` copies the complete active branch into a new session immediately.
 - User messages, completed model messages, and individual tool results are saved as they complete. Provider errors and partial responses remain available after a failed run.
 - Resume recovers complete JSONL entries after an interrupted final append. Missing tool results are marked as unknown, so the model can inspect the workspace before retrying.
 

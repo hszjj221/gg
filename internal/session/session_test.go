@@ -36,7 +36,7 @@ func TestStoreWritesHeaderAndMessagesAsJSONL(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[0]), &header); err != nil {
 		t.Fatal(err)
 	}
-	if header.Type != "session" || header.Version != 1 || header.CWD != "/tmp/project" || header.ID == "" {
+	if header.Type != "session" || header.Version != CurrentVersion || header.CWD != "/tmp/project" || header.ID == "" {
 		t.Fatalf("unexpected header: %+v", header)
 	}
 

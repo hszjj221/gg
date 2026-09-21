@@ -365,6 +365,84 @@ func TestNameCommandIsNotQueuedWhileBusy(t *testing.T) {
 	}
 }
 
+func TestTreeCommandSelectsNodeAndRebuildsConversation(t *testing.T) {
+	var gotAction SessionAction
+	var gotID string
+	model := NewModel(Config{
+		InitialMessages: []Message{{Role: agent.RoleUser, Content: "old"}},
+		TreeItems: []TreeItem{
+			{ID: "user-1", Role: agent.RoleUser, Text: "first question", Active: true},
+			{ID: "assistant-1", Depth: 1, Role: agent.RoleAssistant, Text: "first answer", Active: true},
+		},
+		SessionAction: func(action SessionAction, id string) (SessionUpdate, error) {
+			gotAction, gotID = action, id
+			return SessionUpdate{
+				Messages:    []Message{{Role: agent.RoleUser, Content: "rebuilt"}},
+				TreeItems:   []TreeItem{{ID: "user-1", Role: agent.RoleUser, Text: "first question", Active: true}},
+				SessionName: "branch",
+				Draft:       "edit me",
+				Notice:      "switched conversation branch",
+			}, nil
+		},
+	})
+	model.input.SetValue("/tree")
+	model, _ = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.treeSelector == nil || !strings.Contains(model.View(), "Conversation tree") {
+		t.Fatalf("tree selector did not open:\n%s", model.View())
+	}
+	model, _ = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if gotAction != SessionActionTree || gotID != "assistant-1" {
+		t.Fatalf("tree action = %q %q", gotAction, gotID)
+	}
+	if model.treeSelector != nil || model.input.Value() != "edit me" || model.messages[0].Content != "rebuilt" || model.sessionName != "branch" {
+		t.Fatalf("session update was not applied: %+v", model)
+	}
+}
+
+func TestForkCommandOnlyOffersUserMessages(t *testing.T) {
+	var gotID string
+	model := NewModel(Config{
+		TreeItems: []TreeItem{
+			{ID: "user-1", Role: agent.RoleUser, Text: "question", Active: true},
+			{ID: "assistant-1", Depth: 1, Role: agent.RoleAssistant, Text: "answer", Active: true},
+		},
+		SessionAction: func(action SessionAction, id string) (SessionUpdate, error) {
+			if action != SessionActionFork {
+				t.Fatalf("action = %q, want fork", action)
+			}
+			gotID = id
+			return SessionUpdate{Draft: "question", Notice: "forked"}, nil
+		},
+	})
+	model.input.SetValue("/fork")
+	model, _ = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if model.treeSelector == nil || len(model.treeSelector.filtered) != 1 {
+		t.Fatalf("fork selector should contain one user message: %+v", model.treeSelector)
+	}
+	model, _ = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if gotID != "user-1" || model.input.Value() != "question" {
+		t.Fatalf("fork selection = %q draft=%q", gotID, model.input.Value())
+	}
+}
+
+func TestCloneCommandRunsImmediately(t *testing.T) {
+	calls := 0
+	model := NewModel(Config{
+		SessionAction: func(action SessionAction, id string) (SessionUpdate, error) {
+			calls++
+			if action != SessionActionClone || id != "" {
+				t.Fatalf("clone action = %q %q", action, id)
+			}
+			return SessionUpdate{SessionName: "copy", Notice: "cloned"}, nil
+		},
+	})
+	model.input.SetValue("/clone")
+	model, _ = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	if calls != 1 || model.sessionName != "copy" || !strings.Contains(model.View(), "cloned") {
+		t.Fatalf("clone command was not applied: calls=%d view=%s", calls, model.View())
+	}
+}
+
 func TestApprovalRequestCanBeApproved(t *testing.T) {
 	model := NewModel(Config{
 		CWD:            "/tmp/project",
