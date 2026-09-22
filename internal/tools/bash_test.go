@@ -1,17 +1,21 @@
 package tools
 
 import (
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
 )
 
 func TestBashToolReportsExitCodeAndOutput(t *testing.T) {
 	dir := t.TempDir()
 	tool := NewBashTool(dir, BashOptions{DefaultTimeout: 5 * time.Second})
 
-	result := executeTool(t, tool, `{"command":"printf hello && exit 7","timeout":5}`)
+	result := executeBashCommand(t, tool, platformCommand("printf hello && exit 7", "echo hello & exit /b 7"), 5)
 
 	if !result.IsError {
 		t.Fatalf("expected non-zero exit to be an error")
@@ -25,7 +29,10 @@ func TestBashToolTruncatesLargeOutput(t *testing.T) {
 	dir := t.TempDir()
 	tool := NewBashTool(dir, BashOptions{DefaultTimeout: 5 * time.Second})
 
-	result := executeTool(t, tool, `{"command":"yes x | head -c 307200","timeout":5}`)
+	result := executeBashCommand(t, tool, platformCommand(
+		"yes x | head -c 307200",
+		powershellCommand(`[Console]::Out.Write(('x' * 307200))`),
+	), 5)
 
 	if result.IsError {
 		t.Fatalf("expected success, got error: %s", result.Content[0].Text)
@@ -37,6 +44,31 @@ func TestBashToolTruncatesLargeOutput(t *testing.T) {
 	if !strings.Contains(text, "output truncated") {
 		t.Fatalf("truncation marker missing from output")
 	}
+}
+
+func executeBashCommand(t *testing.T, tool BashTool, command string, timeout int) ToolResult {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{"command": command, "timeout": timeout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return executeTool(t, tool, string(raw))
+}
+
+func platformCommand(unix, windows string) string {
+	if runtime.GOOS == "windows" {
+		return windows
+	}
+	return unix
+}
+
+func powershellCommand(script string) string {
+	codeUnits := utf16.Encode([]rune(script))
+	data := make([]byte, len(codeUnits)*2)
+	for index, codeUnit := range codeUnits {
+		binary.LittleEndian.PutUint16(data[index*2:], codeUnit)
+	}
+	return "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand " + base64.StdEncoding.EncodeToString(data)
 }
 
 func TestBashToolApprovalRequestDescribesCommand(t *testing.T) {

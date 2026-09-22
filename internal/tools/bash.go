@@ -91,11 +91,7 @@ func (t BashTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/sh"
-	}
-	cmd := exec.CommandContext(runCtx, shell, "-lc", input.Command)
+	cmd := newShellCommand(runCtx, input.Command)
 	cmd.Dir = t.cwd
 	configureProcess(cmd)
 	outputDir := filepath.Join(t.cwd, ".gg", "outputs")

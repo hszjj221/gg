@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,15 +13,16 @@ import (
 )
 
 func TestInitialViewContainsInputAndStatus(t *testing.T) {
+	cwd := filepath.Clean("/tmp/project")
 	model := NewModel(Config{
-		CWD:       "/tmp/project",
+		CWD:       cwd,
 		ModelName: "openai:gpt-test",
 		Submit:    successSubmit("hello"),
 	})
 	model, _ = updateModel(t, model, tea.WindowSizeMsg{Width: 80, Height: 20})
 
 	view := model.View()
-	for _, want := range []string{"gg", "/tmp/project", "openai:gpt-test"} {
+	for _, want := range []string{"gg", cwd, "openai:gpt-test"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}

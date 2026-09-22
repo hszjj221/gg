@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -38,9 +39,13 @@ func TestReadThenEditCRLFFile(t *testing.T) {
 	}
 }
 func TestBashTimeoutStopsChildPromptly(t *testing.T) {
-	t.Setenv("SHELL", "/bin/sh")
+	if runtime.GOOS != "windows" {
+		t.Setenv("SHELL", "/bin/sh")
+	}
 	start := time.Now()
-	result := NewBashTool(t.TempDir(), BashOptions{DefaultTimeout: 50 * time.Millisecond}).Execute(context.Background(), []byte(`{"command":"sleep 1 & wait"}`))
+	command := platformCommand("sleep 1 & wait", "ping -n 3 127.0.0.1 >nul")
+	raw, _ := json.Marshal(map[string]any{"command": command})
+	result := NewBashTool(t.TempDir(), BashOptions{DefaultTimeout: 50 * time.Millisecond}).Execute(context.Background(), raw)
 	elapsed := time.Since(start)
 	if elapsed > 500*time.Millisecond {
 		t.Fatalf("50ms timeout took %s (child held output pipe); result=%+v", elapsed, result)
@@ -49,7 +54,12 @@ func TestBashTimeoutStopsChildPromptly(t *testing.T) {
 
 func TestBashKeepsFailureTailAndReadableFullLog(t *testing.T) {
 	dir := t.TempDir()
-	result := NewBashTool(dir, BashOptions{}).Execute(context.Background(), []byte(`{"command":"printf START; yes x | head -c 60000; printf FAILURE_AT_END; exit 2"}`))
+	command := platformCommand(
+		"printf START; yes x | head -c 60000; printf FAILURE_AT_END; exit 2",
+		powershellCommand(`[Console]::Out.Write('START' + ('x' * 60000) + 'FAILURE_AT_END'); exit 2`),
+	)
+	raw, _ := json.Marshal(map[string]any{"command": command})
+	result := NewBashTool(dir, BashOptions{}).Execute(context.Background(), raw)
 	if !result.IsError || !strings.Contains(result.Content[0].Text, "FAILURE_AT_END") {
 		t.Fatalf("missing failure tail: %+v", result)
 	}
@@ -65,8 +75,8 @@ func TestBashKeepsFailureTailAndReadableFullLog(t *testing.T) {
 	if !strings.HasPrefix(string(data), "START") || !strings.HasSuffix(string(data), "FAILURE_AT_END") {
 		t.Fatal("full log was truncated")
 	}
-	raw, _ := json.Marshal(map[string]any{"path": path, "offset": 30001, "limit": 2})
-	read := NewReadTool(dir).Execute(context.Background(), raw)
+	readRaw, _ := json.Marshal(map[string]any{"path": path, "offset": 30001, "limit": 2})
+	read := NewReadTool(dir).Execute(context.Background(), readRaw)
 	if read.IsError || !strings.Contains(read.Content[0].Text, "FAILURE_AT_END") {
 		t.Fatalf("saved log cannot be paged: %+v", read)
 	}
@@ -90,8 +100,11 @@ func TestAtomicEditPreservesCRLFAndFileMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != "new\r\nlines\r\nuntouched\r\n" || info.Mode().Perm() != 0755 {
+	if string(data) != "new\r\nlines\r\nuntouched\r\n" {
 		t.Fatalf("format or mode changed: %q mode=%v", data, info.Mode())
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0755 {
+		t.Fatalf("file mode changed: %v", info.Mode())
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -39,6 +40,20 @@ func (p *appFakeProvider) Complete(ctx context.Context, req agent.Request, onEve
 type appToolProvider struct {
 	requests []agent.Request
 	command  string
+}
+
+func platformPrintCommand() string {
+	if runtime.GOOS == "windows" {
+		return "echo ok"
+	}
+	return "printf ok"
+}
+
+func markerWriteCommand(path string) string {
+	if runtime.GOOS == "windows" {
+		return `echo ok> "` + strings.ReplaceAll(path, `"`, `""`) + `"`
+	}
+	return "printf ok > " + strconv.Quote(path)
 }
 
 func (p *appToolProvider) Complete(ctx context.Context, req agent.Request, onEvent func(agent.Event)) (agent.AssistantMessage, error) {
@@ -458,7 +473,7 @@ func TestRunPrintModeAutoApprovalDoesNotPrompt(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "marker.txt")
 	var stdout, stderr strings.Builder
-	provider := &appToolProvider{command: "printf ok > " + strconv.Quote(marker)}
+	provider := &appToolProvider{command: markerWriteCommand(marker)}
 
 	code := Run(context.Background(), []string{"-p", "--api-key", "key", "--no-session", "write marker"}, Options{
 		CWD:     dir,
@@ -486,7 +501,7 @@ func TestRunPrintModeAutoApprovalDoesNotPrompt(t *testing.T) {
 
 func TestTurnExecutorForwardsToolEvents(t *testing.T) {
 	dir := t.TempDir()
-	provider := &appToolProvider{command: "printf ok"}
+	provider := &appToolProvider{command: platformPrintCommand()}
 	executor := newTurnExecutor(
 		config.Config{CWD: dir, Selection: "openai:gpt-4.1"},
 		func(config.Config) agent.Provider { return provider },
@@ -807,7 +822,7 @@ func TestRunApprovalOnRequestAllowsToolInPromptMode(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "marker.txt")
 	var stdout, stderr strings.Builder
-	provider := &appToolProvider{command: "printf ok > " + strconv.Quote(marker)}
+	provider := &appToolProvider{command: markerWriteCommand(marker)}
 
 	code := Run(context.Background(), []string{"-p", "--approval", "on-request", "--api-key", "key", "--no-session", "write marker"}, Options{
 		CWD:        dir,
@@ -837,7 +852,7 @@ func TestRunApprovalOnRequestAllowsPromptModeWithRedirectedStdout(t *testing.T) 
 	marker := filepath.Join(dir, "marker.txt")
 	stdin := strings.NewReader("y\n")
 	var stdout, stderr strings.Builder
-	provider := &appToolProvider{command: "printf ok > " + strconv.Quote(marker)}
+	provider := &appToolProvider{command: markerWriteCommand(marker)}
 
 	code := Run(context.Background(), []string{"-p", "--approval", "on-request", "--api-key", "key", "--no-session", "write marker"}, Options{
 		CWD:     dir,
@@ -865,7 +880,7 @@ func TestRunApprovalOnRequestDeniesToolInPromptMode(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "marker.txt")
 	var stdout, stderr strings.Builder
-	provider := &appToolProvider{command: "printf ok > " + strconv.Quote(marker)}
+	provider := &appToolProvider{command: markerWriteCommand(marker)}
 
 	code := Run(context.Background(), []string{"-p", "--approval", "on-request", "--api-key", "key", "--no-session", "write marker"}, Options{
 		CWD:        dir,
