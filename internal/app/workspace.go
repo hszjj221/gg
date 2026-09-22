@@ -173,6 +173,25 @@ func (w *Workspace) WaitRun(ctx context.Context, runID string, afterSequence int
 	return run.Wait(ctx, afterSequence)
 }
 
+func (w *Workspace) RunStatus(runID string) (RunStatus, error) {
+	status, ok := w.manager.RunStatus(runID)
+	if !ok {
+		return RunStatus{}, errorf(ErrorRunNotFound, false, "run %q not found", runID)
+	}
+	return status, nil
+}
+
+func (w *Workspace) ActiveRun(sessionID string) (*RunStatus, error) {
+	if _, err := w.service(sessionID); err != nil {
+		return nil, err
+	}
+	status, ok := w.manager.ActiveRun(sessionID)
+	if !ok {
+		return nil, nil
+	}
+	return &status, nil
+}
+
 func (w *Workspace) CancelRun(runID string) error {
 	return w.manager.Cancel(runID)
 }

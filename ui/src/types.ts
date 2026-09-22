@@ -89,8 +89,22 @@ export interface WaitResult {
   done: boolean;
 }
 
+export interface RunStatus {
+  id: string;
+  sessionId: string;
+  done: boolean;
+  startedAt: number;
+  completedAt?: number;
+  firstSequence: number;
+  lastSequence: number;
+  pendingApprovals: Approval[];
+}
+
 export interface DesktopBridge {
-  invoke<T>(method: string, params?: Record<string, unknown>): Promise<T>;
+  invoke<T>(method: string, params?: Record<string, unknown>): Promise<{
+    result?: T;
+    error?: { code?: number; message?: string; data?: { code?: string; retryable?: boolean } };
+  }>;
   workspace(): Promise<string>;
 }
 

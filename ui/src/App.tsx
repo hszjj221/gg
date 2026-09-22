@@ -1,6 +1,6 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
-import { API, ElectronTransport, protocolVersion, WebTransport } from './transport';
-import type { Approval, RunEvent, SessionSummary, SessionUpdate, Snapshot, TreeItem } from './types';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { API, ElectronTransport, protocolVersion, RPCError, WebTransport } from './transport';
+import type { Approval, RunEvent, RunStatus, SessionSummary, SessionUpdate, Snapshot, TreeItem } from './types';
 
 interface ToolLog {
   id: string;
@@ -26,6 +26,8 @@ export function App() {
   const [showTree, setShowTree] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const watchAbortRef = useRef<AbortController | null>(null);
+  const watchGenerationRef = useRef(0);
 
   const connected = api !== null;
   const activePath = useMemo(() => new Set((current?.treeItems ?? []).filter((item) => item.active).map((item) => item.id)), [current]);
@@ -38,17 +40,27 @@ export function App() {
 
   const connect = useCallback(
     async (client: API) => {
+      watchAbortRef.current?.abort();
+      watchGenerationRef.current += 1;
       setError('');
       try {
         const [items, label, info] = await Promise.all([loadSessions(client), client.transport.workspaceLabel(), client.systemInfo()]);
         if (info.protocolVersion.split('.')[0] !== protocolVersion.split('.')[0]) {
           throw new Error(`协议版本不兼容：客户端 ${protocolVersion}，服务端 ${info.protocolVersion}`);
         }
+        client.setCapabilities(info.capabilities);
         setAPI(client);
         setWorkspace(label);
-        if (items[0]) {
-          const snapshot = await client.openSession(items[0].id);
+        const savedSessionID = sessionStorage.getItem('gg.sessionId');
+        const selected = items.find((item) => item.id === savedSessionID) || items[0];
+        if (selected) {
+          const snapshot = await client.openSession(selected.id);
           setCurrent(snapshot);
+          sessionStorage.setItem('gg.sessionId', snapshot.sessionId);
+          const active = client.supports('run.reattach') ? await client.activeRun(snapshot.sessionId) : null;
+          if (active) void attachRun(client, snapshot.sessionId, active);
+        } else {
+          setCurrent(null);
         }
       } catch (cause) {
         setAPI(null);
@@ -62,6 +74,14 @@ export function App() {
     if (desktop) void connect(new API(new ElectronTransport()));
   }, [connect, desktop]);
 
+  useEffect(
+    () => () => {
+      watchAbortRef.current?.abort();
+      watchGenerationRef.current += 1;
+    },
+    [],
+  );
+
   useEffect(() => setName(current?.sessionName || ''), [current?.sessionId, current?.sessionName]);
 
   async function connectWeb(event: FormEvent) {
@@ -72,10 +92,11 @@ export function App() {
   }
 
   async function createSession() {
-    if (!api) return;
+    if (!api || busy) return;
     await action(async () => {
       const snapshot = await api.createSession();
       setCurrent(snapshot);
+      sessionStorage.setItem('gg.sessionId', snapshot.sessionId);
       setPrompt('');
       await loadSessions(api);
     });
@@ -84,10 +105,15 @@ export function App() {
   async function openSession(sessionId: string) {
     if (!api || busy) return;
     await action(async () => {
-      setCurrent(await api.openSession(sessionId));
+      const snapshot = await api.openSession(sessionId);
+      setCurrent(snapshot);
+      sessionStorage.setItem('gg.sessionId', snapshot.sessionId);
       setPrompt('');
       setStreamText('');
       setToolLogs([]);
+      setApproval(null);
+      const active = api.supports('run.reattach') ? await api.activeRun(snapshot.sessionId) : null;
+      if (active) void attachRun(api, snapshot.sessionId, active);
     });
   }
 
@@ -104,6 +130,7 @@ export function App() {
     await action(async () => {
       const update = await api.sessionAction(current.sessionId, actionName, nodeId);
       setCurrent(updateToSnapshot(update, current.modelName));
+      sessionStorage.setItem('gg.sessionId', update.sessionId);
       if (update.draft !== undefined) setPrompt(update.draft);
       if (actionName !== 'tree') await loadSessions(api);
       if (actionName === 'fork') setShowTree(false);
@@ -121,30 +148,89 @@ export function App() {
     setStreamText('');
     setToolLogs([]);
     setApproval(null);
+    let started: { runId: string };
     try {
-      const started = await api.startRun(sessionID, text, true);
-      setRunID(started.runId);
-      let after = 0;
-      let done = false;
-      while (!done) {
-        const batch = await api.waitRun(started.runId, after);
-        for (const eventItem of batch.events) {
-          after = eventItem.sequence;
-          handleRunEvent(eventItem);
-        }
-        done = batch.done;
-      }
-      setCurrent(await api.getSession(sessionID));
-      await loadSessions(api);
+      started = await api.startRun(sessionID, text, true);
     } catch (cause) {
       setError(errorMessage(cause));
       setPrompt((value) => value || text);
-    } finally {
       setBusy(false);
-      setRunID('');
-      setApproval(null);
-      setStreamText('');
-      setToolLogs([]);
+      return;
+    }
+    await attachRun(api, sessionID, {
+      id: started.runId,
+      sessionId: sessionID,
+      done: false,
+      startedAt: Date.now(),
+      firstSequence: 1,
+      lastSequence: 0,
+      pendingApprovals: [],
+    });
+  }
+
+  async function attachRun(client: API, sessionID: string, initialStatus: RunStatus) {
+    watchAbortRef.current?.abort();
+    const controller = new AbortController();
+    watchAbortRef.current = controller;
+    const generation = ++watchGenerationRef.current;
+    let status = initialStatus;
+    let after = 0;
+    setBusy(true);
+    setRunID(status.id);
+    setStreamText('');
+    setToolLogs([]);
+    setApproval(status.pendingApprovals[0] || null);
+
+    try {
+      while (!controller.signal.aborted) {
+        try {
+          after = await client.watchRun(
+            status.id,
+            after,
+            (eventItem) => {
+              if (watchGenerationRef.current === generation) handleRunEvent(eventItem);
+            },
+            controller.signal,
+          );
+          break;
+        } catch (cause) {
+          if (controller.signal.aborted || isAbortError(cause)) return;
+          if (!(cause instanceof RPCError) || cause.code !== 'event_history_expired') throw cause;
+          if (!client.supports('run.reattach')) {
+            setCurrent(await client.getSession(sessionID));
+            setError('部分实时事件已过期，已恢复最新会话内容。');
+            break;
+          }
+          const [snapshot, latest] = await Promise.all([client.getSession(sessionID), client.runStatus(status.id)]);
+          if (watchGenerationRef.current !== generation) return;
+          setCurrent(snapshot);
+          setStreamText('');
+          setToolLogs([]);
+          setApproval(latest.pendingApprovals[0] || null);
+          setError('部分实时事件已过期，已从最新会话状态恢复。');
+          status = latest;
+          if (latest.done) break;
+          after = Math.max(0, latest.firstSequence - 1);
+        }
+      }
+    } catch (cause) {
+      if (!controller.signal.aborted && watchGenerationRef.current === generation) setError(errorMessage(cause));
+    } finally {
+      if (watchGenerationRef.current !== generation) return;
+      try {
+        setCurrent(await client.getSession(sessionID));
+        await loadSessions(client);
+      } catch (cause) {
+        setError(errorMessage(cause));
+      }
+      if (watchGenerationRef.current === generation) {
+        setBusy(false);
+        setRunID('');
+        setApproval(null);
+        setStreamText('');
+        setToolLogs([]);
+        watchAbortRef.current = null;
+      }
     }
   }
 
@@ -169,6 +255,9 @@ export function App() {
       }
     }
     if (event.type === 'approval_requested' && event.approval) setApproval(event.approval);
+    if (event.type === 'approval_resolved' && event.approval) {
+      setApproval((value) => (value?.id === event.approval?.id ? null : value));
+    }
     if (event.type === 'run_failed' || event.type === 'run_canceled') setError(event.error || event.type.replace('_', ' '));
   }
 
@@ -243,7 +332,7 @@ export function App() {
       <aside className="sidebar">
         <header className="sidebar-header">
           <div className="brand"><span>g</span><strong>gg</strong></div>
-          <button className="icon-button" onClick={createSession} title="新建会话">＋</button>
+          <button className="icon-button" onClick={createSession} title="新建会话" disabled={busy}>＋</button>
         </header>
         <div className="workspace-label" title={workspace}>{workspace}</div>
         <nav className="session-list" aria-label="会话列表">
@@ -399,4 +488,8 @@ function formatTime(value: string) {
 
 function errorMessage(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause);
+}
+
+function isAbortError(cause: unknown) {
+  return cause instanceof Error && cause.name === 'AbortError';
 }

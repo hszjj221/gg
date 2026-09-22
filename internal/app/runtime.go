@@ -49,6 +49,24 @@ type Approval struct {
 	Request agent.ApprovalRequest `json:"request"`
 }
 
+// RunStatus is a reconnect-safe snapshot of a run. FirstSequence and
+// LastSequence describe the currently retained replay window.
+type RunStatus struct {
+	ID               string     `json:"id"`
+	SessionID        string     `json:"sessionId"`
+	Done             bool       `json:"done"`
+	StartedAt        int64      `json:"startedAt"`
+	CompletedAt      int64      `json:"completedAt,omitempty"`
+	FirstSequence    int64      `json:"firstSequence"`
+	LastSequence     int64      `json:"lastSequence"`
+	PendingApprovals []Approval `json:"pendingApprovals"`
+}
+
+type pendingApproval struct {
+	approval Approval
+	response chan agent.ApprovalDecision
+}
+
 type Run struct {
 	id        string
 	sessionID string
@@ -58,20 +76,22 @@ type Run struct {
 	events    []Event
 	changed   chan struct{}
 	done      bool
+	started   time.Time
 	completed time.Time
 	nextSeq   int64
 	maxEvents int
-	approvals map[string]chan agent.ApprovalDecision
+	approvals map[string]pendingApproval
 }
 
-func newRun(sessionID string, cancel context.CancelFunc, maxEvents int) *Run {
+func newRun(sessionID string, cancel context.CancelFunc, maxEvents int, started time.Time) *Run {
 	return &Run{
 		id:        newRuntimeID(),
 		sessionID: sessionID,
 		cancel:    cancel,
 		changed:   make(chan struct{}),
+		started:   started,
 		maxEvents: maxEvents,
-		approvals: make(map[string]chan agent.ApprovalDecision),
+		approvals: make(map[string]pendingApproval),
 	}
 }
 
@@ -80,6 +100,33 @@ func (r *Run) ID() string { return r.id }
 func (r *Run) SessionID() string { return r.sessionID }
 
 func (r *Run) Cancel() { r.cancel() }
+
+func (r *Run) Status() RunStatus {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	status := RunStatus{
+		ID:            r.id,
+		SessionID:     r.sessionID,
+		Done:          r.done,
+		StartedAt:     r.started.UnixMilli(),
+		LastSequence:  r.nextSeq,
+		FirstSequence: r.nextSeq + 1,
+	}
+	if len(r.events) > 0 {
+		status.FirstSequence = r.events[0].Sequence
+	}
+	if !r.completed.IsZero() {
+		status.CompletedAt = r.completed.UnixMilli()
+	}
+	status.PendingApprovals = make([]Approval, 0, len(r.approvals))
+	for _, pending := range r.approvals {
+		status.PendingApprovals = append(status.PendingApprovals, pending.approval)
+	}
+	sort.Slice(status.PendingApprovals, func(i, j int) bool {
+		return status.PendingApprovals[i].ID < status.PendingApprovals[j].ID
+	})
+	return status
+}
 
 // Wait returns every event after afterSequence. It blocks until an event is
 // available, the run finishes, or ctx is canceled. Retained events make this
@@ -157,7 +204,7 @@ func (r *Run) requestApproval(ctx context.Context, request agent.ApprovalRequest
 	approval := Approval{ID: newRuntimeID(), Request: request}
 	response := make(chan agent.ApprovalDecision, 1)
 	r.mu.Lock()
-	r.approvals[approval.ID] = response
+	r.approvals[approval.ID] = pendingApproval{approval: approval, response: response}
 	r.mu.Unlock()
 	r.publish(Event{Type: EventApprovalRequested, Approval: &approval})
 
@@ -175,7 +222,7 @@ func (r *Run) requestApproval(ctx context.Context, request agent.ApprovalRequest
 
 func (r *Run) approve(approvalID string, decision agent.ApprovalDecision) error {
 	r.mu.Lock()
-	response, ok := r.approvals[approvalID]
+	pending, ok := r.approvals[approvalID]
 	if ok {
 		delete(r.approvals, approvalID)
 	}
@@ -183,7 +230,7 @@ func (r *Run) approve(approvalID string, decision agent.ApprovalDecision) error 
 	if !ok {
 		return errorf(ErrorApprovalExpired, false, "approval %q is not pending", approvalID)
 	}
-	response <- decision
+	pending.response <- decision
 	return nil
 }
 
@@ -316,7 +363,7 @@ func (m *Manager) StartTurn(parent context.Context, sessionID, prompt string, re
 		return nil, errorf(ErrorRunConflict, true, "session %q already has active run %q", sessionID, runID)
 	}
 	ctx, cancel := context.WithCancel(parent)
-	run := newRun(sessionID, cancel, m.options.MaxEventsPerRun)
+	run := newRun(sessionID, cancel, m.options.MaxEventsPerRun, m.options.Clock())
 	m.runs[run.id] = run
 	m.active[sessionID] = run.id
 	m.touchSessionLocked(sessionID)
@@ -333,15 +380,6 @@ func (m *Manager) StartTurn(parent context.Context, sessionID, prompt string, re
 			run.publish(Event{Type: EventAgent, Agent: &event})
 		}, approver)
 		cancel()
-		m.mu.Lock()
-		if m.active[sessionID] == run.id {
-			delete(m.active, sessionID)
-		}
-		if errors.Is(err, session.ErrConflict) {
-			delete(m.sessions, sessionID)
-			delete(m.sessionAccess, sessionID)
-		}
-		m.mu.Unlock()
 		completed := m.options.Clock()
 		if err == nil {
 			run.finish(Event{Type: EventRunCompleted, Result: &result}, completed)
@@ -352,6 +390,13 @@ func (m *Manager) StartTurn(parent context.Context, sessionID, prompt string, re
 			run.finish(Event{Type: EventRunFailed, Error: err.Error(), ErrorCode: code, Retryable: retryable, Result: &result}, completed)
 		}
 		m.mu.Lock()
+		if m.active[sessionID] == run.id {
+			delete(m.active, sessionID)
+		}
+		if errors.Is(err, session.ErrConflict) {
+			delete(m.sessions, sessionID)
+			delete(m.sessionAccess, sessionID)
+		}
 		m.pruneRunsLocked(completed)
 		m.pruneSessionsLocked("")
 		m.mu.Unlock()
@@ -365,6 +410,26 @@ func (m *Manager) Run(runID string) (*Run, bool) {
 	m.pruneRunsLocked(m.options.Clock())
 	run, ok := m.runs[runID]
 	return run, ok
+}
+
+func (m *Manager) RunStatus(runID string) (RunStatus, bool) {
+	run, ok := m.Run(runID)
+	if !ok {
+		return RunStatus{}, false
+	}
+	return run.Status(), true
+}
+
+func (m *Manager) ActiveRun(sessionID string) (RunStatus, bool) {
+	m.mu.Lock()
+	m.pruneRunsLocked(m.options.Clock())
+	runID := m.active[sessionID]
+	run := m.runs[runID]
+	m.mu.Unlock()
+	if run == nil {
+		return RunStatus{}, false
+	}
+	return run.Status(), true
 }
 
 func (m *Manager) Cancel(runID string) error {

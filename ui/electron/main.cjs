@@ -13,6 +13,8 @@ const allowedMethods = new Set([
   'session.action',
   'run.start',
   'run.wait',
+  'run.get',
+  'run.active',
   'run.cancel',
   'run.approve',
   'run.steer',
@@ -72,8 +74,7 @@ class DaemonClient {
     const pending = this.pending.get(String(response.id));
     if (!pending) return;
     this.pending.delete(String(response.id));
-    if (response.error) pending.reject(new Error(response.error.message || 'ggd request failed'));
-    else pending.resolve(response.result);
+    pending.resolve(response);
   }
 
   failAll(error) {

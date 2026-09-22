@@ -39,7 +39,8 @@ Dependencies point inward: UI and transports depend on application use cases; th
 
 - A `Workspace` opens sessions by stable ID and never exposes session file paths over the network boundary.
 - A `Manager` owns open conversation services. Different sessions may run concurrently, while one session permits only one active run. Inactive sessions are evicted least-recently-used, and completed runs expire by count and age.
-- Each turn receives a run ID. Events carry a monotonically increasing sequence number and remain replayable through `run.wait` or `/events` within a bounded retention window. A client that falls behind receives `event_history_expired` and reloads the session snapshot.
+- Each turn receives a run ID. Events carry a monotonically increasing sequence number and remain replayable through `run.wait` or `/events` within a bounded retention window. SSE frames include sequence IDs and idle heartbeats, so Web clients can reconnect with exponential backoff and resume from the last event. A client that falls behind receives `event_history_expired` and reloads the session snapshot.
+- `run.active` and `run.get` expose reconnect-safe run state, including the retained sequence window and pending approvals. On reload, Web and Electron clients reopen the last selected session and reattach to its active run.
 - Tool approval is asynchronous: an `approval_requested` event pauses the tool, and `run.approve` resolves it. Cancellation and steering use the same run/session boundary.
 - Fork and clone create independent services and stores. Checkout writes a `head` entry so the selected tree position survives a restart even if no new message is sent.
 - JSONL writes use a short-lived cross-process lease plus optimistic head validation. A stale CLI or daemon receives `session_conflict` instead of silently interleaving branches.
@@ -51,7 +52,7 @@ The transport-independent methods are:
 - `system.info` for the gg protocol version and capability negotiation
 - `session.list`, `session.create`, `session.open`, `session.get`, `session.rename`
 - `session.action` with `tree`, `fork`, or `clone`
-- `run.start`, `run.wait`, `run.cancel`, `run.approve`, `run.steer`
+- `run.start`, `run.wait`, `run.get`, `run.active`, `run.cancel`, `run.approve`, `run.steer`
 
 stdio uses one JSON-RPC object per line and supports concurrent requests, which is required while one request is waiting for an approval. HTTP accepts JSON-RPC at `POST /rpc`; `GET /events` streams run events as SSE. HTTP mode requires a Bearer token and binds only to loopback unless `--allow-remote` is explicit. JSON-RPC 2.0 remains the wire format; `system.info.protocolVersion` independently versions gg methods, events, DTOs, and stable application error codes.
 

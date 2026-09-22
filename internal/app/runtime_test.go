@@ -86,6 +86,10 @@ func TestManagerRoutesApprovalDecisionBackToRun(t *testing.T) {
 	events := waitForRun(t, run, func(event Event) {
 		if event.Type == EventApprovalRequested {
 			approvalID = event.Approval.ID
+			status, ok := manager.ActiveRun(sessionID)
+			if !ok || status.ID != run.ID() || status.Done || len(status.PendingApprovals) != 1 || status.PendingApprovals[0].ID != approvalID {
+				t.Errorf("unexpected active run status: ok=%t status=%+v", ok, status)
+			}
 			if err := manager.Approve(run.ID(), approvalID, agent.ApprovalDecision{Allow: true}); err != nil {
 				t.Errorf("approve: %v", err)
 			}
@@ -102,6 +106,13 @@ func TestManagerRoutesApprovalDecisionBackToRun(t *testing.T) {
 	}
 	if !seenResolved || events[len(events)-1].Type != EventRunCompleted {
 		t.Fatalf("approval lifecycle incomplete: %+v", events)
+	}
+	if _, ok := manager.ActiveRun(sessionID); ok {
+		t.Fatal("completed run remained active")
+	}
+	status, ok := manager.RunStatus(run.ID())
+	if !ok || !status.Done || status.CompletedAt == 0 || len(status.PendingApprovals) != 0 {
+		t.Fatalf("unexpected completed run status: ok=%t status=%+v", ok, status)
 	}
 }
 
@@ -174,10 +185,14 @@ func TestManagerEvictsLeastRecentlyUsedInactiveSession(t *testing.T) {
 func TestRunReportsExpiredEventHistory(t *testing.T) {
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	run := newRun("session", cancel, 2)
+	run := newRun("session", cancel, 2, time.Now())
 	run.publish(Event{Type: EventRunStarted})
 	run.publish(Event{Type: EventAgent})
 	run.publish(Event{Type: EventAgent})
+	status := run.Status()
+	if status.FirstSequence != 2 || status.LastSequence != 3 {
+		t.Fatalf("unexpected retained window: %+v", status)
+	}
 	_, _, err := run.Wait(context.Background(), 0)
 	var appErr *AppError
 	if !errors.As(err, &appErr) || appErr.Code != ErrorEventHistoryExpired || !appErr.Retryable {

@@ -1,19 +1,23 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hszjj221/gg/internal/app"
 	"github.com/hszjj221/gg/internal/transport/jsonrpc"
 )
 
 const maxRequestBytes = 4 * 1024 * 1024
+const sseHeartbeatInterval = 15 * time.Second
 
 type Handler struct {
 	rpc       *jsonrpc.Handler
@@ -72,7 +76,11 @@ func (h *Handler) handleEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "runId is required", http.StatusBadRequest)
 		return
 	}
-	after, err := strconv.ParseInt(defaultString(r.URL.Query().Get("after"), "0"), 10, 64)
+	afterValue := r.URL.Query().Get("after")
+	if afterValue == "" {
+		afterValue = r.Header.Get("Last-Event-ID")
+	}
+	after, err := strconv.ParseInt(defaultString(afterValue, "0"), 10, 64)
 	if err != nil || after < 0 {
 		http.Error(w, "after must be a non-negative integer", http.StatusBadRequest)
 		return
@@ -85,17 +93,28 @@ func (h *Handler) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 	for {
-		events, done, err := h.workspace.WaitRun(r.Context(), runID, after)
+		waitContext, cancel := context.WithTimeout(r.Context(), sseHeartbeatInterval)
+		events, done, err := h.workspace.WaitRun(waitContext, runID, after)
+		cancel()
 		if err != nil {
-			writeSSE(w, "error", jsonrpc.ErrorFrom(err))
+			if errors.Is(err, context.DeadlineExceeded) {
+				_, _ = io.WriteString(w, ": keepalive\n\n")
+				flusher.Flush()
+				continue
+			}
+			if errors.Is(err, context.Canceled) && r.Context().Err() != nil {
+				return
+			}
+			writeSSE(w, "error", "", jsonrpc.ErrorFrom(err))
 			flusher.Flush()
 			return
 		}
 		for _, event := range events {
-			writeSSE(w, "event", event)
+			writeSSE(w, "event", strconv.FormatInt(event.Sequence, 10), event)
 			after = event.Sequence
 		}
 		flusher.Flush()
@@ -120,12 +139,15 @@ func (h *Handler) authorized(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(provided), []byte(h.token)) == 1
 }
 
-func writeSSE(w io.Writer, eventType string, value any) {
+func writeSSE(w io.Writer, eventType, eventID string, value any) {
 	data, err := json.Marshal(value)
 	if err != nil {
 		data = []byte(fmt.Sprintf(`{"error":%q}`, err.Error()))
 	}
-	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, data)
+	if eventID != "" {
+		_, _ = fmt.Fprintf(w, "id: %s\n", eventID)
+	}
+	_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, data)
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

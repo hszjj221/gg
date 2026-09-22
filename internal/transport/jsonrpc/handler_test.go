@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/app"
@@ -16,6 +17,13 @@ type fakeProvider struct{}
 
 func (fakeProvider) Complete(context.Context, agent.Request, func(agent.Event)) (agent.AssistantMessage, error) {
 	return agent.AssistantMessage{Message: agent.Message{Role: agent.RoleAssistant, Content: "ok"}, StopReason: agent.StopReasonEndTurn}, nil
+}
+
+type blockingProvider struct{}
+
+func (blockingProvider) Complete(ctx context.Context, _ agent.Request, _ func(agent.Event)) (agent.AssistantMessage, error) {
+	<-ctx.Done()
+	return agent.AssistantMessage{}, ctx.Err()
 }
 
 func TestHandlerCreatesAndListsSessionsWithoutPaths(t *testing.T) {
@@ -81,13 +89,79 @@ func TestHandlerReturnsStableApplicationError(t *testing.T) {
 	}
 }
 
+func TestHandlerFindsActiveRunForSession(t *testing.T) {
+	workspace := testWorkspaceWithProvider(t, blockingProvider{})
+	handler := NewHandler(workspace)
+	created := handler.Handle(context.Background(), Request{JSONRPC: Version, ID: []byte(`1`), Method: "session.create"})
+	snapshot, ok := created.Result.(app.Snapshot)
+	if created.Error != nil || !ok {
+		t.Fatalf("create session: %+v", created)
+	}
+	started := handler.Handle(context.Background(), Request{
+		JSONRPC: Version,
+		ID:      []byte(`2`),
+		Method:  "run.start",
+		Params:  json.RawMessage(`{"sessionId":"` + snapshot.SessionID + `","prompt":"hello"}`),
+	})
+	startResult, ok := started.Result.(map[string]string)
+	if started.Error != nil || !ok || startResult["runId"] == "" {
+		t.Fatalf("start run: %+v", started)
+	}
+	active := handler.Handle(context.Background(), Request{
+		JSONRPC: Version,
+		ID:      []byte(`3`),
+		Method:  "run.active",
+		Params:  json.RawMessage(`{"sessionId":"` + snapshot.SessionID + `"}`),
+	})
+	status, ok := active.Result.(*app.RunStatus)
+	if active.Error != nil || !ok || status.ID != startResult["runId"] || status.Done {
+		t.Fatalf("active run: %+v", active)
+	}
+	got := handler.Handle(context.Background(), Request{
+		JSONRPC: Version,
+		ID:      []byte(`4`),
+		Method:  "run.get",
+		Params:  json.RawMessage(`{"runId":"` + status.ID + `"}`),
+	})
+	if runStatus, ok := got.Result.(app.RunStatus); got.Error != nil || !ok || runStatus.ID != status.ID {
+		t.Fatalf("get run: %+v", got)
+	}
+	if response := handler.Handle(context.Background(), Request{
+		JSONRPC: Version,
+		ID:      []byte(`5`),
+		Method:  "run.cancel",
+		Params:  json.RawMessage(`{"runId":"` + status.ID + `"}`),
+	}); response.Error != nil {
+		t.Fatalf("cancel run: %+v", response)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var after int64
+	for {
+		events, done, err := workspace.WaitRun(ctx, status.ID, after)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(events) > 0 {
+			after = events[len(events)-1].Sequence
+		}
+		if done {
+			break
+		}
+	}
+}
+
 func testWorkspace(t *testing.T) *app.Workspace {
+	return testWorkspaceWithProvider(t, fakeProvider{})
+}
+
+func testWorkspaceWithProvider(t *testing.T, provider agent.Provider) *app.Workspace {
 	t.Helper()
 	root := t.TempDir()
 	cfg := config.Config{CWD: filepath.Join(root, "project"), Selection: "test:model"}
 	workspace, err := app.NewWorkspace(app.WorkspaceOptions{
 		Config:          cfg,
-		ProviderFactory: func(config.Config) agent.Provider { return fakeProvider{} },
+		ProviderFactory: func(config.Config) agent.Provider { return provider },
 		Repository:      session.NewFileRepository(filepath.Join(root, "sessions")),
 	})
 	if err != nil {

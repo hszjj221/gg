@@ -14,11 +14,12 @@ const Version = "2.0"
 
 // ProtocolVersion versions gg's method, result, event, and application-error
 // contract independently from the JSON-RPC wire version.
-const ProtocolVersion = "1.0"
+const ProtocolVersion = "1.1"
 
 var capabilities = []string{
 	"run.approval",
 	"run.event-replay",
+	"run.reattach",
 	"run.steering",
 	"session.clone",
 	"session.fork",
@@ -177,6 +178,24 @@ func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) 
 			return nil, err
 		}
 		return map[string]any{"events": events, "done": done}, nil
+	case "run.get":
+		var params runParams
+		if err := decodeParams(raw, &params); err != nil {
+			return nil, err
+		}
+		if params.RunID == "" {
+			return nil, invalidParams("runId is required")
+		}
+		return h.workspace.RunStatus(params.RunID)
+	case "run.active":
+		var params sessionParams
+		if err := decodeParams(raw, &params); err != nil {
+			return nil, err
+		}
+		if params.SessionID == "" {
+			return nil, invalidParams("sessionId is required")
+		}
+		return h.workspace.ActiveRun(params.SessionID)
 	case "run.cancel":
 		var params runParams
 		if err := decodeParams(raw, &params); err != nil {
