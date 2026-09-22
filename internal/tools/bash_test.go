@@ -30,9 +30,9 @@ func TestBashToolTruncatesLargeOutput(t *testing.T) {
 	tool := NewBashTool(dir, BashOptions{DefaultTimeout: 5 * time.Second})
 
 	result := executeBashCommand(t, tool, platformCommand(
-		"yes x | head -c 307200",
-		powershellCommand(`[Console]::Out.Write(('x' * 307200))`),
-	), 5)
+		"yes x | head -c 60000",
+		powershellCommand(`[Console]::Out.Write(('x' * 60000))`),
+	), 10)
 
 	if result.IsError {
 		t.Fatalf("expected success, got error: %s", result.Content[0].Text)

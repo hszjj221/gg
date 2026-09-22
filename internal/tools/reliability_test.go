@@ -56,7 +56,7 @@ func TestBashKeepsFailureTailAndReadableFullLog(t *testing.T) {
 	dir := t.TempDir()
 	command := platformCommand(
 		"printf START; yes x | head -c 60000; printf FAILURE_AT_END; exit 2",
-		powershellCommand(`[Console]::Out.Write('START' + ('x' * 60000) + 'FAILURE_AT_END'); exit 2`),
+		powershellCommand(`[Console]::Out.Write('START' + (('x' + [Environment]::NewLine) * 30000) + 'FAILURE_AT_END'); exit 2`),
 	)
 	raw, _ := json.Marshal(map[string]any{"command": command})
 	result := NewBashTool(dir, BashOptions{}).Execute(context.Background(), raw)

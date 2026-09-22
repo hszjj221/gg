@@ -54,7 +54,7 @@ func resolveExistingInsideRoot(root, path, rootLabel string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	realTarget, err := filepath.EvalSymlinks(canonicalTarget)
+	realTarget, err := resolveRealPath(canonicalTarget)
 	if err != nil {
 		return "", err
 	}
@@ -73,7 +73,7 @@ func resolveWritableInsideRoot(root, path, rootLabel string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	realTarget, err := filepath.EvalSymlinks(canonicalTarget)
+	realTarget, err := resolveRealPath(canonicalTarget)
 	if err == nil {
 		if err := ensureInsideRealRoot(realRoot, realTarget, path, rootLabel); err != nil {
 			return "", err
@@ -85,7 +85,7 @@ func resolveWritableInsideRoot(root, path, rootLabel string) (string, error) {
 	}
 	parent := filepath.Dir(canonicalTarget)
 	for {
-		realParent, err := filepath.EvalSymlinks(parent)
+		realParent, err := resolveRealPath(parent)
 		if err == nil {
 			if err := ensureInsideRealRoot(realRoot, realParent, path, rootLabel); err != nil {
 				return "", err
@@ -111,7 +111,7 @@ func canonicalizeRootTarget(root, target string) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	realRoot, err := filepath.EvalSymlinks(absoluteRoot)
+	realRoot, err := resolveRealPath(absoluteRoot)
 	if err != nil {
 		return "", "", err
 	}
