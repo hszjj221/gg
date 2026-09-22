@@ -50,11 +50,11 @@ func resolveExistingInsideRoot(root, path, rootLabel string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	realRoot, canonicalTarget, err := canonicalizeRootTarget(root, target)
+	realRoot, err := resolveRealRoot(root)
 	if err != nil {
 		return "", err
 	}
-	realTarget, err := resolveRealPath(canonicalTarget)
+	realTarget, err := resolveRealPath(target)
 	if err != nil {
 		return "", err
 	}
@@ -69,11 +69,11 @@ func resolveWritableInsideRoot(root, path, rootLabel string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	realRoot, canonicalTarget, err := canonicalizeRootTarget(root, target)
+	realRoot, err := resolveRealRoot(root)
 	if err != nil {
 		return "", err
 	}
-	realTarget, err := resolveRealPath(canonicalTarget)
+	realTarget, err := resolveRealPath(target)
 	if err == nil {
 		if err := ensureInsideRealRoot(realRoot, realTarget, path, rootLabel); err != nil {
 			return "", err
@@ -83,14 +83,14 @@ func resolveWritableInsideRoot(root, path, rootLabel string) (string, error) {
 	if !os.IsNotExist(err) {
 		return "", err
 	}
-	parent := filepath.Dir(canonicalTarget)
+	parent := filepath.Dir(target)
 	for {
 		realParent, err := resolveRealPath(parent)
 		if err == nil {
 			if err := ensureInsideRealRoot(realRoot, realParent, path, rootLabel); err != nil {
 				return "", err
 			}
-			return canonicalTarget, nil
+			return target, nil
 		}
 		if !os.IsNotExist(err) {
 			return "", err
@@ -103,23 +103,12 @@ func resolveWritableInsideRoot(root, path, rootLabel string) (string, error) {
 	}
 }
 
-// canonicalizeRootTarget rebuilds the lexical target below the resolved root.
-// This avoids mixing Windows 8.3 aliases (for example RUNNER~1) with expanded
-// paths while preserving the symlink containment check below.
-func canonicalizeRootTarget(root, target string) (string, string, error) {
+func resolveRealRoot(root string) (string, error) {
 	absoluteRoot, err := filepath.Abs(root)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
-	realRoot, err := resolveRealPath(absoluteRoot)
-	if err != nil {
-		return "", "", err
-	}
-	relativeTarget, err := filepath.Rel(absoluteRoot, target)
-	if err != nil {
-		return "", "", err
-	}
-	return realRoot, filepath.Join(realRoot, relativeTarget), nil
+	return resolveRealPath(absoluteRoot)
 }
 
 func ensureInsideRealRoot(realRoot, realTarget, originalPath, rootLabel string) error {
