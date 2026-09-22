@@ -50,6 +50,13 @@ func (t ListTool) Execute(_ context.Context, raw json.RawMessage) ToolResult {
 	if err != nil {
 		return errorResult(err)
 	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return errorResult(err)
+	}
+	if !info.IsDir() {
+		return errorResult(fmt.Errorf("path %q is not a directory", input.Path))
+	}
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return errorResult(err)

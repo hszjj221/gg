@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -28,10 +30,13 @@ func TestBashToolReportsExitCodeAndOutput(t *testing.T) {
 func TestBashToolTruncatesLargeOutput(t *testing.T) {
 	dir := t.TempDir()
 	tool := NewBashTool(dir, BashOptions{DefaultTimeout: 5 * time.Second})
+	if err := os.WriteFile(filepath.Join(dir, "large.txt"), []byte(strings.Repeat("x", 60000)), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	result := executeBashCommand(t, tool, platformCommand(
-		"yes x | head -c 60000",
-		powershellCommand(`[Console]::Out.Write(('x' * 60000))`),
+		"cat large.txt",
+		"type large.txt",
 	), 10)
 
 	if result.IsError {
