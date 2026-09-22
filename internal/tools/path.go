@@ -61,7 +61,7 @@ func resolveExistingInsideRoot(root, path, rootLabel string) (string, error) {
 	if err := ensureInsideRealRoot(realRoot, realTarget, path, rootLabel); err != nil {
 		return "", err
 	}
-	return realTarget, nil
+	return target, nil
 }
 
 func resolveWritableInsideRoot(root, path, rootLabel string) (string, error) {
@@ -78,7 +78,7 @@ func resolveWritableInsideRoot(root, path, rootLabel string) (string, error) {
 		if err := ensureInsideRealRoot(realRoot, realTarget, path, rootLabel); err != nil {
 			return "", err
 		}
-		return realTarget, nil
+		return target, nil
 	}
 	if !os.IsNotExist(err) {
 		return "", err
