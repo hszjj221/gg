@@ -53,6 +53,34 @@ func TestHandlerReturnsProtocolErrors(t *testing.T) {
 	}
 }
 
+func TestHandlerReportsProtocolCapabilities(t *testing.T) {
+	handler := NewHandler(testWorkspace(t))
+	response := handler.Handle(context.Background(), Request{JSONRPC: Version, ID: []byte(`1`), Method: "system.info"})
+	if response.Error != nil {
+		t.Fatal(response.Error)
+	}
+	info, ok := response.Result.(SystemInfo)
+	if !ok || info.ProtocolVersion != ProtocolVersion || len(info.Capabilities) == 0 {
+		t.Fatalf("unexpected system info: %#v", response.Result)
+	}
+}
+
+func TestHandlerReturnsStableApplicationError(t *testing.T) {
+	handler := NewHandler(testWorkspace(t))
+	response := handler.Handle(context.Background(), Request{
+		JSONRPC: Version,
+		ID:      []byte(`1`),
+		Method:  "session.open",
+		Params:  []byte(`{"sessionId":"missing"}`),
+	})
+	if response.Error == nil || response.Error.Code != -32001 || response.Error.Data == nil {
+		t.Fatalf("unexpected application error: %+v", response)
+	}
+	if response.Error.Data.Code != app.ErrorSessionNotFound || response.Error.Data.Retryable {
+		t.Fatalf("unexpected application error data: %+v", response.Error.Data)
+	}
+}
+
 func testWorkspace(t *testing.T) *app.Workspace {
 	t.Helper()
 	root := t.TempDir()

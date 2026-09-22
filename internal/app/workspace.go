@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/hszjj221/gg/internal/agent"
@@ -15,6 +16,7 @@ type WorkspaceOptions struct {
 	ProviderFactory ProviderFactory
 	Skills          skills.Set
 	Repository      session.Repository
+	Manager         ManagerOptions
 }
 
 // Workspace is the application facade used by non-terminal transports. It
@@ -47,7 +49,7 @@ func NewWorkspace(options WorkspaceOptions) (*Workspace, error) {
 		providerFactory: options.ProviderFactory,
 		skills:          options.Skills,
 		repository:      options.Repository,
-		manager:         NewManager(),
+		manager:         NewManagerWithOptions(options.Manager),
 	}, nil
 }
 
@@ -93,6 +95,9 @@ func (w *Workspace) OpenSession(sessionID string) (Snapshot, error) {
 	}
 	store, loaded, err := w.repository.OpenForCWD(w.cfg.CWD, sessionID, false)
 	if err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			return Snapshot{}, wrapError(ErrorSessionNotFound, false, err, "session %q not found", sessionID)
+		}
 		return Snapshot{}, err
 	}
 	service, err := w.addLoaded(store, loaded)
@@ -116,7 +121,7 @@ func (w *Workspace) RenameSession(sessionID, name string) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	if err := service.RenameSession(name); err != nil {
-		return Snapshot{}, err
+		return Snapshot{}, w.sessionError(sessionID, err)
 	}
 	return service.Snapshot(), nil
 }
@@ -128,11 +133,12 @@ func (w *Workspace) SessionAction(sessionID string, action SessionAction, entryI
 	}
 	switch action {
 	case SessionActionTree:
-		return service.Checkout(entryID)
+		update, err := service.Checkout(entryID)
+		return update, w.sessionError(sessionID, err)
 	case SessionActionFork:
 		child, update, err := service.Fork(entryID)
 		if err != nil {
-			return SessionUpdate{}, err
+			return SessionUpdate{}, w.sessionError(sessionID, err)
 		}
 		if _, err := w.manager.Add(child); err != nil {
 			return SessionUpdate{}, err
@@ -141,14 +147,14 @@ func (w *Workspace) SessionAction(sessionID string, action SessionAction, entryI
 	case SessionActionClone:
 		child, update, err := service.Clone()
 		if err != nil {
-			return SessionUpdate{}, err
+			return SessionUpdate{}, w.sessionError(sessionID, err)
 		}
 		if _, err := w.manager.Add(child); err != nil {
 			return SessionUpdate{}, err
 		}
 		return update, nil
 	default:
-		return SessionUpdate{}, fmt.Errorf("unknown session action %q", action)
+		return SessionUpdate{}, errorf(ErrorInvalidAction, false, "unknown session action %q", action)
 	}
 }
 
@@ -162,7 +168,7 @@ func (w *Workspace) StartTurn(ctx context.Context, sessionID, prompt string, req
 func (w *Workspace) WaitRun(ctx context.Context, runID string, afterSequence int64) ([]Event, bool, error) {
 	run, ok := w.manager.Run(runID)
 	if !ok {
-		return nil, false, fmt.Errorf("run %q not found", runID)
+		return nil, false, errorf(ErrorRunNotFound, false, "run %q not found", runID)
 	}
 	return run.Wait(ctx, afterSequence)
 }
@@ -218,4 +224,15 @@ func (w *Workspace) addLoaded(store *session.Store, loaded session.Loaded) (*Ser
 		return nil, err
 	}
 	return service, nil
+}
+
+func (w *Workspace) sessionError(sessionID string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, session.ErrConflict) || errors.Is(err, session.ErrLocked) {
+		w.manager.Remove(sessionID)
+		return wrapError(ErrorSessionConflict, true, err, "session %q changed in another process; reopen and retry", sessionID)
+	}
+	return err
 }

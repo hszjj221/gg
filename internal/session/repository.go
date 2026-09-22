@@ -39,11 +39,7 @@ func (r *FileRepository) OpenPath(path, cwd string) (*Store, Loaded, error) {
 	if err != nil {
 		return nil, Loaded{}, err
 	}
-	loaded, err := Load(store.Path())
-	if err != nil {
-		return nil, Loaded{}, err
-	}
-	return store, loaded, nil
+	return store, store.State(), nil
 }
 
 func (r *FileRepository) OpenForCWD(cwd, target string, allowPath bool) (*Store, Loaded, error) {

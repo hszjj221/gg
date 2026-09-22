@@ -198,6 +198,7 @@ Session management:
 - In the TUI, `/tree` opens a searchable conversation tree. Selecting an earlier user message rewinds to its parent and places that prompt back in the editor; selecting an assistant message continues from it as a new branch.
 - In the TUI, `/fork` selects an earlier user message, creates a new session from its parent, and places the prompt back in the editor. `/clone` copies the complete active branch into a new session immediately.
 - User messages, completed model messages, and individual tool results are saved as they complete. Provider errors and partial responses remain available after a failed run.
+- If another CLI or `ggd` process advances the same session, stale writes fail with a retryable conflict instead of silently interleaving two parent chains in the JSONL file.
 - Resume recovers complete JSONL entries after an interrupted final append. Missing tool results are marked as unknown, so the model can inspect the workspace before retrying.
 
 Context management:

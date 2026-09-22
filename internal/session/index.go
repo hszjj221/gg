@@ -62,7 +62,7 @@ func LatestForCWD(sessionDir, cwd string) (Info, error) {
 		return Info{}, err
 	}
 	if len(infos) == 0 {
-		return Info{}, fmt.Errorf("no sessions found for %s", cwd)
+		return Info{}, fmt.Errorf("%w for %s", ErrNotFound, cwd)
 	}
 	return infos[0], nil
 }
@@ -101,7 +101,7 @@ func FindForCWD(sessionDir, cwd, target string) (string, error) {
 	}
 	switch len(matches) {
 	case 0:
-		return "", fmt.Errorf("session %q not found for %s", target, cwd)
+		return "", fmt.Errorf("%w: session %q for %s", ErrNotFound, target, cwd)
 	case 1:
 		return matches[0], nil
 	default:

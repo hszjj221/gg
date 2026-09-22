@@ -37,7 +37,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			methodNotAllowed(w)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "protocolVersion": jsonrpc.ProtocolVersion})
 	case "/rpc":
 		h.handleRPC(w, r)
 	case "/events":
@@ -90,7 +90,7 @@ func (h *Handler) handleEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		events, done, err := h.workspace.WaitRun(r.Context(), runID, after)
 		if err != nil {
-			writeSSE(w, "error", map[string]string{"error": err.Error()})
+			writeSSE(w, "error", jsonrpc.ErrorFrom(err))
 			flusher.Flush()
 			return
 		}
@@ -130,6 +130,7 @@ func writeSSE(w io.Writer, eventType string, value any) {
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)

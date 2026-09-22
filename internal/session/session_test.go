@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,6 +72,93 @@ func TestStoreLoadsMessagesAndMaintainsParentChain(t *testing.T) {
 	}
 	if loaded.Entries[1].ParentID == nil || *loaded.Entries[1].ParentID != loaded.Entries[0].ID {
 		t.Fatalf("parent chain not maintained: %+v", loaded.Entries)
+	}
+}
+
+func TestStoreRejectsStaleConcurrentWriter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	first, err := NewStore(path, "project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewStore(path, "project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.AppendMessage(agent.Message{Role: agent.RoleUser, Content: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	err = second.AppendMessage(agent.Message{Role: agent.RoleUser, Content: "stale"})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale writer error = %v, want ErrConflict", err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Messages) != 1 || loaded.Messages[0].Content != "first" {
+		t.Fatalf("stale writer changed the session: %+v", loaded.Messages)
+	}
+	if _, err := os.Stat(path + ".lock"); !os.IsNotExist(err) {
+		t.Fatalf("writer lease was not released: %v", err)
+	}
+}
+
+func TestStoreSerializesCompetingProcesses(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	first, err := NewStore(path, "project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewStore(path, "project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for index, store := range []*Store{first, second} {
+		go func(index int, store *Store) {
+			<-start
+			results <- store.AppendMessage(agent.Message{Role: agent.RoleUser, Content: string(rune('a' + index))})
+		}(index, store)
+	}
+	close(start)
+	var successes, conflicts int
+	for range 2 {
+		err := <-results
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrConflict):
+			conflicts++
+		default:
+			t.Fatalf("unexpected writer error: %v", err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("successes=%d conflicts=%d", successes, conflicts)
+	}
+}
+
+func TestStoreRecoversStaleWriterLease(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	store, err := NewStore(path, "project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockPath := path + ".lock"
+	if err := os.WriteFile(lockPath, []byte("dead-writer"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * staleLockAge)
+	if err := os.Chtimes(lockPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendName("recovered"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("stale writer lease remains: %v", err)
 	}
 }
 

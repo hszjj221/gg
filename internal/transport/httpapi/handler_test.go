@@ -34,7 +34,7 @@ func TestHTTPHandlerRequiresBearerToken(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer secret")
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"ok":true`) {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"ok":true`) || !strings.Contains(response.Body.String(), `"protocolVersion":"1.0"`) {
 		t.Fatalf("health response: status=%d body=%s", response.Code, response.Body.String())
 	}
 }
@@ -48,6 +48,17 @@ func TestHTTPHandlerServesJSONRPC(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"sessionName":"web"`) {
 		t.Fatalf("rpc response: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestHTTPEventStreamUsesStableApplicationErrors(t *testing.T) {
+	handler := testHandler(t, "secret")
+	request := httptest.NewRequest(http.MethodGet, "/events?runId=missing", nil)
+	request.Header.Set("Authorization", "Bearer secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"code":"run_not_found"`) {
+		t.Fatalf("event error response: status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

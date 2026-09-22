@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -103,7 +105,102 @@ func TestManagerRoutesApprovalDecisionBackToRun(t *testing.T) {
 	}
 }
 
+func TestManagerBoundsCompletedRuns(t *testing.T) {
+	manager, sessionID := runtimeTestManagerWithOptions(t, &runtimeProvider{}, ManagerOptions{
+		CompletedRunTTL:  time.Hour,
+		MaxCompletedRuns: 1,
+		MaxOpenSessions:  -1,
+		MaxEventsPerRun:  32,
+	})
+	first, err := manager.StartTurn(context.Background(), sessionID, "first", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, first, nil)
+	second, err := manager.StartTurn(context.Background(), sessionID, "second", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, second, nil)
+	if _, ok := manager.Run(first.ID()); ok {
+		t.Fatal("old completed run was retained past the configured limit")
+	}
+	if _, ok := manager.Run(second.ID()); !ok {
+		t.Fatal("newest completed run was evicted")
+	}
+}
+
+func TestManagerExpiresCompletedRunsByAge(t *testing.T) {
+	start := time.Now()
+	var nanos atomic.Int64
+	nanos.Store(start.UnixNano())
+	manager, sessionID := runtimeTestManagerWithOptions(t, &runtimeProvider{}, ManagerOptions{
+		CompletedRunTTL:  time.Minute,
+		MaxCompletedRuns: -1,
+		MaxOpenSessions:  -1,
+		MaxEventsPerRun:  32,
+		Clock: func() time.Time {
+			return time.Unix(0, nanos.Load())
+		},
+	})
+	run, err := manager.StartTurn(context.Background(), sessionID, "hello", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForRun(t, run, nil)
+	nanos.Store(start.Add(2 * time.Minute).UnixNano())
+	if _, ok := manager.Run(run.ID()); ok {
+		t.Fatal("completed run was retained past its TTL")
+	}
+}
+
+func TestManagerEvictsLeastRecentlyUsedInactiveSession(t *testing.T) {
+	manager := NewManagerWithOptions(ManagerOptions{
+		CompletedRunTTL:  time.Hour,
+		MaxCompletedRuns: 8,
+		MaxOpenSessions:  1,
+		MaxEventsPerRun:  32,
+	})
+	firstID := addRuntimeService(t, manager, &runtimeProvider{})
+	secondID := addRuntimeService(t, manager, &runtimeProvider{})
+	if _, ok := manager.Get(firstID); ok {
+		t.Fatal("least recently used inactive session was not evicted")
+	}
+	if _, ok := manager.Get(secondID); !ok {
+		t.Fatal("newest session was evicted")
+	}
+}
+
+func TestRunReportsExpiredEventHistory(t *testing.T) {
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	run := newRun("session", cancel, 2)
+	run.publish(Event{Type: EventRunStarted})
+	run.publish(Event{Type: EventAgent})
+	run.publish(Event{Type: EventAgent})
+	_, _, err := run.Wait(context.Background(), 0)
+	var appErr *AppError
+	if !errors.As(err, &appErr) || appErr.Code != ErrorEventHistoryExpired || !appErr.Retryable {
+		t.Fatalf("unexpected expired-history error: %#v", err)
+	}
+	events, _, err := run.Wait(context.Background(), 1)
+	if err != nil || len(events) != 2 || events[0].Sequence != 2 {
+		t.Fatalf("retained event replay failed: events=%+v err=%v", events, err)
+	}
+}
+
 func runtimeTestManager(t *testing.T, provider agent.Provider) (*Manager, string) {
+	return runtimeTestManagerWithOptions(t, provider, ManagerOptions{})
+}
+
+func runtimeTestManagerWithOptions(t *testing.T, provider agent.Provider, options ManagerOptions) (*Manager, string) {
+	t.Helper()
+	manager := NewManagerWithOptions(options)
+	sessionID := addRuntimeService(t, manager, provider)
+	return manager, sessionID
+}
+
+func addRuntimeService(t *testing.T, manager *Manager, provider agent.Provider) string {
 	t.Helper()
 	cwd := t.TempDir()
 	store, err := session.NewStore(filepath.Join(cwd, "session.jsonl"), cwd)
@@ -116,12 +213,11 @@ func runtimeTestManager(t *testing.T, provider agent.Provider) (*Manager, string
 		Store:           store,
 		ModelRecorded:   true,
 	})
-	manager := NewManager()
 	sessionID, err := manager.Add(service)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return manager, sessionID
+	return sessionID
 }
 
 func waitForRun(t *testing.T, run *Run, onEvent func(Event)) []Event {

@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
-import { API, ElectronTransport, WebTransport } from './transport';
+import { API, ElectronTransport, protocolVersion, WebTransport } from './transport';
 import type { Approval, RunEvent, SessionSummary, SessionUpdate, Snapshot, TreeItem } from './types';
 
 interface ToolLog {
@@ -40,7 +40,10 @@ export function App() {
     async (client: API) => {
       setError('');
       try {
-        const [items, label] = await Promise.all([loadSessions(client), client.transport.workspaceLabel()]);
+        const [items, label, info] = await Promise.all([loadSessions(client), client.transport.workspaceLabel(), client.systemInfo()]);
+        if (info.protocolVersion.split('.')[0] !== protocolVersion.split('.')[0]) {
+          throw new Error(`协议版本不兼容：客户端 ${protocolVersion}，服务端 ${info.protocolVersion}`);
+        }
         setAPI(client);
         setWorkspace(label);
         if (items[0]) {

@@ -4,6 +4,7 @@ const { createInterface } = require('node:readline');
 const path = require('node:path');
 
 const allowedMethods = new Set([
+  'system.info',
   'session.list',
   'session.create',
   'session.open',

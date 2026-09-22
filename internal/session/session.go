@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
@@ -109,6 +110,7 @@ type Loaded struct {
 }
 
 type Store struct {
+	mu      sync.Mutex
 	path    string
 	header  Header
 	records []entryRecord
@@ -226,6 +228,12 @@ func NewStore(path, cwd string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
+	release, err := acquireWriterLock(path)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	info, statErr := os.Stat(path)
 	if statErr != nil && !os.IsNotExist(statErr) {
 		return nil, statErr
@@ -249,6 +257,9 @@ func NewStore(path, cwd string) (*Store, error) {
 				return nil, err
 			}
 			_, writeErr := file.WriteString("\n")
+			if writeErr == nil {
+				writeErr = file.Sync()
+			}
 			closeErr := file.Close()
 			if writeErr != nil {
 				return nil, writeErr
@@ -266,10 +277,11 @@ func NewStore(path, cwd string) (*Store, error) {
 	}
 
 	header := Header{Type: "session", Version: CurrentVersion, ID: newID(), Timestamp: now(), CWD: cwd}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if os.IsExist(err) {
-		file, err = os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o600)
+	flags := os.O_CREATE | os.O_EXCL | os.O_WRONLY
+	if statErr == nil {
+		flags = os.O_WRONLY | os.O_TRUNC
 	}
+	file, err := os.OpenFile(path, flags, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -394,6 +406,16 @@ func (s *Store) Fork(id *string) (*Store, error) {
 	if s == nil {
 		return nil, fmt.Errorf("session persistence is disabled")
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	release, err := acquireWriterLock(s.path)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	if err := s.validateCurrentLocked(); err != nil {
+		return nil, err
+	}
 	if id != nil {
 		if _, ok := s.ParentID(*id); !ok {
 			return nil, fmt.Errorf("session entry %q not found", *id)
@@ -466,6 +488,19 @@ func (s *Store) AppendName(name string) error {
 }
 
 func (s *Store) appendRecord(record entryRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	release, err := acquireWriterLock(s.path)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if err := s.validateCurrentLocked(); err != nil {
+		return err
+	}
+	if record.typ != "head" && !sameID(record.parentID(), s.lastID) {
+		return fmt.Errorf("%w: in-memory session head advanced before append", ErrConflict)
+	}
 	file, err := os.OpenFile(s.path, os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
@@ -482,6 +517,35 @@ func (s *Store) appendRecord(record entryRecord) error {
 	last := record.id()
 	s.lastID = &last
 	return nil
+}
+
+func (s *Store) validateCurrentLocked() error {
+	loaded, err := Load(s.path)
+	if err != nil {
+		return err
+	}
+	if loaded.incompleteTail || loaded.needsNewline || loaded.migrated {
+		return fmt.Errorf("%w: session requires recovery before writing", ErrConflict)
+	}
+	if loaded.Header.ID != s.header.ID {
+		return fmt.Errorf("%w: session identity changed", ErrConflict)
+	}
+	var diskLast *string
+	if len(loaded.records) > 0 {
+		last := loaded.records[len(loaded.records)-1].id()
+		diskLast = &last
+	}
+	if !sameID(diskLast, s.lastID) {
+		return fmt.Errorf("%w: reopen session %s", ErrConflict, s.header.ID)
+	}
+	return nil
+}
+
+func sameID(first, second *string) bool {
+	if first == nil || second == nil {
+		return first == nil && second == nil
+	}
+	return *first == *second
 }
 
 func Load(path string) (Loaded, error) {

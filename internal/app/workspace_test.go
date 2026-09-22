@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -90,6 +91,47 @@ func TestWorkspaceNewSessionUsesJSONArrayCollections(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"messages":[]`) || !strings.Contains(string(data), `"treeItems":[]`) {
 		t.Fatalf("new snapshot must encode empty collections as arrays: %s", data)
+	}
+}
+
+func TestWorkspaceInvalidatesSessionAfterExternalWriteConflict(t *testing.T) {
+	root := t.TempDir()
+	cwd := filepath.Join(root, "project")
+	repository := session.NewFileRepository(filepath.Join(root, "sessions"))
+	newWorkspace := func() *Workspace {
+		workspace, err := NewWorkspace(WorkspaceOptions{
+			Config:          config.Config{CWD: cwd, Selection: "test:model"},
+			ProviderFactory: func(config.Config) agent.Provider { return &runtimeProvider{} },
+			Repository:      repository,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return workspace
+	}
+	first := newWorkspace()
+	created, err := first.CreateSession("initial")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := newWorkspace()
+	if _, err := second.OpenSession(created.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.RenameSession(created.SessionID, "external"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = second.RenameSession(created.SessionID, "stale")
+	var appErr *AppError
+	if !errors.As(err, &appErr) || appErr.Code != ErrorSessionConflict || !appErr.Retryable {
+		t.Fatalf("unexpected conflict: %#v", err)
+	}
+	reloaded, err := second.Snapshot(created.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.SessionName != "external" {
+		t.Fatalf("stale service was not reopened: %+v", reloaded)
 	}
 }
 

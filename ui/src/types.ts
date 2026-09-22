@@ -38,6 +38,11 @@ export interface SessionUpdate extends Snapshot {
   notice?: string;
 }
 
+export interface SystemInfo {
+  protocolVersion: string;
+  capabilities: string[];
+}
+
 export interface AgentEvent {
   type: 'text_delta' | 'tool_call_start' | 'tool_call_finish' | 'user_message';
   text?: string;
@@ -75,6 +80,8 @@ export interface RunEvent {
   approval?: Approval;
   result?: { content: string; modelName: string };
   error?: string;
+  errorCode?: string;
+  retryable?: boolean;
 }
 
 export interface WaitResult {

@@ -1,4 +1,18 @@
-import type { SessionSummary, SessionUpdate, Snapshot, WaitResult } from './types';
+import type { SessionSummary, SessionUpdate, Snapshot, SystemInfo, WaitResult } from './types';
+
+export const protocolVersion = '1.0';
+
+export class RPCError extends Error {
+  constructor(
+    message: string,
+    readonly code = 'internal_error',
+    readonly retryable = false,
+    readonly numericCode?: number,
+  ) {
+    super(message);
+    this.name = 'RPCError';
+  }
+}
 
 export interface Transport {
   call<T>(method: string, params?: Record<string, unknown>): Promise<T>;
@@ -33,8 +47,18 @@ export class WebTransport implements Transport {
       body: JSON.stringify({ jsonrpc: '2.0', id: crypto.randomUUID(), method, params }),
     });
     if (!response.ok) throw new Error(`Server returned HTTP ${response.status}`);
-    const payload = (await response.json()) as { result?: T; error?: { message?: string } };
-    if (payload.error) throw new Error(payload.error.message || 'Request failed');
+    const payload = (await response.json()) as {
+      result?: T;
+      error?: { code?: number; message?: string; data?: { code?: string; retryable?: boolean } };
+    };
+    if (payload.error) {
+      throw new RPCError(
+        payload.error.message || 'Request failed',
+        payload.error.data?.code,
+        payload.error.data?.retryable,
+        payload.error.code,
+      );
+    }
     return payload.result as T;
   }
 
@@ -45,6 +69,10 @@ export class WebTransport implements Transport {
 
 export class API {
   constructor(readonly transport: Transport) {}
+
+  systemInfo() {
+    return this.transport.call<SystemInfo>('system.info');
+  }
 
   listSessions() {
     return this.transport.call<SessionSummary[]>('session.list');

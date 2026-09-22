@@ -3,6 +3,7 @@ package jsonrpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -10,6 +11,19 @@ import (
 )
 
 const Version = "2.0"
+
+// ProtocolVersion versions gg's method, result, event, and application-error
+// contract independently from the JSON-RPC wire version.
+const ProtocolVersion = "1.0"
+
+var capabilities = []string{
+	"run.approval",
+	"run.event-replay",
+	"run.steering",
+	"session.clone",
+	"session.fork",
+	"session.tree",
+}
 
 type Request struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -26,8 +40,19 @@ type Response struct {
 }
 
 type Error struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int        `json:"code"`
+	Message string     `json:"message"`
+	Data    *ErrorData `json:"data,omitempty"`
+}
+
+type ErrorData struct {
+	Code      app.ErrorCode `json:"code"`
+	Retryable bool          `json:"retryable"`
+}
+
+type SystemInfo struct {
+	ProtocolVersion string   `json:"protocolVersion"`
+	Capabilities    []string `json:"capabilities"`
 }
 
 type Handler struct {
@@ -58,7 +83,7 @@ func (h *Handler) Handle(ctx context.Context, request Request) Response {
 		if rpcErr, ok := err.(*Error); ok {
 			response.Error = rpcErr
 		} else {
-			response.Error = &Error{Code: -32000, Message: err.Error()}
+			response.Error = ErrorFrom(err)
 		}
 		return response
 	}
@@ -70,6 +95,8 @@ func (e *Error) Error() string { return e.Message }
 
 func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) (any, error) {
 	switch method {
+	case "system.info":
+		return SystemInfo{ProtocolVersion: ProtocolVersion, Capabilities: append([]string(nil), capabilities...)}, nil
 	case "session.list":
 		return h.workspace.ListSessions()
 	case "session.create":
@@ -214,4 +241,30 @@ func invalidParams(message string) *Error {
 
 func okResult() map[string]bool {
 	return map[string]bool{"ok": true}
+}
+
+// ErrorFrom maps application errors to stable JSON-RPC numeric and symbolic
+// codes. Other transports reuse this shape for consistent error handling.
+func ErrorFrom(err error) *Error {
+	var appErr *app.AppError
+	if !errors.As(err, &appErr) {
+		return &Error{Code: -32000, Message: err.Error()}
+	}
+	numeric := map[app.ErrorCode]int{
+		app.ErrorSessionNotFound:     -32001,
+		app.ErrorRunNotFound:         -32002,
+		app.ErrorRunConflict:         -32003,
+		app.ErrorApprovalExpired:     -32004,
+		app.ErrorEventHistoryExpired: -32005,
+		app.ErrorSessionConflict:     -32006,
+		app.ErrorInvalidAction:       -32007,
+	}[appErr.Code]
+	if numeric == 0 {
+		numeric = -32000
+	}
+	return &Error{
+		Code:    numeric,
+		Message: appErr.Error(),
+		Data:    &ErrorData{Code: appErr.Code, Retryable: appErr.Retryable},
+	}
 }
