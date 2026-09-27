@@ -260,6 +260,12 @@ Artifacts 与 Library：
 - Web UI 有"文档"页签：markdown 渲染成文档，HTML 在沙箱 iframe 里渲染（不执行脚本）。
 - 交互模式下创建/编辑 artifact 需要你确认，和写文件一样；无人值守默认拒绝，除非开了 `--allow-all`。
 
+Connectors（外部服务）：
+
+- `gg connect google --client-id ID` 走 OAuth 流程（localhost 回调 + PKCE）连接 Gmail 和 Google Calendar；token 存 `~/.gg/connectors/google.json`（0600）。client 的创建见 `docs/connectors.md`。
+- 连接后 agent 获得 `gmail_search` / `gmail_read` / `gmail_send` 和 `calendar_agenda` / `calendar_create`。发邮件、建日程需要你确认；无人值守默认拒绝，除非开了 `--allow-all`。
+- `gg connect list`、`gg connect status [google]`、`gg connect remove google`。
+
 ## Skills
 
 `gg` 默认从 `.agents/skills` 加载 Codex 风格 skills。当前目录及其父目录中的项目 skills 优先于 `~/.agents/skills` 中的全局 skills。

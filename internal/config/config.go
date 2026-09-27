@@ -79,6 +79,21 @@ type SchedulerConfig struct {
 	Dir string `json:"dir"`
 }
 
+// ConnectorConfig locates connector state and holds per-connector settings.
+type ConnectorConfig struct {
+	Dir string
+	// Google holds the Google OAuth client credentials. They can also come
+	// from --client-id/--client-secret flags or the GG_GOOGLE_CLIENT_ID /
+	// GG_GOOGLE_CLIENT_SECRET environment variables.
+	Google GoogleConnectorConfig
+}
+
+// GoogleConnectorConfig is the OAuth client for `gg connect google`.
+type GoogleConnectorConfig struct {
+	ClientID     string
+	ClientSecret string
+}
+
 type Config struct {
 	APIKey  string
 	BaseURL string
@@ -97,6 +112,7 @@ type Config struct {
 	Scheduler    SchedulerConfig
 	Artifacts    ArtifactConfig
 	Library      LibraryConfig
+	Connectors   ConnectorConfig
 	// MemoryPath is the legacy single-file memory location (~/.gg/memory.md),
 	// kept only for the one-time migration into Memory.Dir. New code uses
 	// Memory.Dir.
@@ -115,13 +131,14 @@ type Config struct {
 }
 
 type fileConfig struct {
-	Default   string                    `json:"default"`
-	Providers map[string]ProviderConfig `json:"providers"`
-	Context   contextFileConfig         `json:"context"`
-	Memory    memoryFileConfig          `json:"memory"`
-	Scheduler schedulerFileConfig       `json:"scheduler"`
-	Artifacts dirFileConfig             `json:"artifacts"`
-	Library   dirFileConfig             `json:"library"`
+	Default    string                    `json:"default"`
+	Providers  map[string]ProviderConfig `json:"providers"`
+	Context    contextFileConfig         `json:"context"`
+	Memory     memoryFileConfig          `json:"memory"`
+	Scheduler  schedulerFileConfig       `json:"scheduler"`
+	Artifacts  dirFileConfig             `json:"artifacts"`
+	Library    dirFileConfig             `json:"library"`
+	Connectors connectorsFileConfig      `json:"connectors"`
 }
 
 type contextFileConfig struct {
@@ -142,6 +159,16 @@ type memoryFileConfig struct {
 
 type schedulerFileConfig struct {
 	Dir *string `json:"dir"`
+}
+
+type connectorsFileConfig struct {
+	Dir    *string                   `json:"dir"`
+	Google googleConnectorFileConfig `json:"google"`
+}
+
+type googleConnectorFileConfig struct {
+	ClientID     string `json:"clientId"`
+	ClientSecret string `json:"clientSecret"`
 }
 
 // dirFileConfig is a generic {"dir": ...} file override for a state dir.
@@ -189,6 +216,7 @@ func Resolve(options Options) (Config, error) {
 		Scheduler:       resolveSchedulerConfig(home, cfgFile.Scheduler),
 		Artifacts:       ArtifactConfig{Dir: resolveStateDir(home, cfgFile.Artifacts.Dir, "artifacts")},
 		Library:         LibraryConfig{Dir: resolveStateDir(home, cfgFile.Library.Dir, "library")},
+		Connectors:      resolveConnectorConfig(home, cfgFile.Connectors),
 		CWD:             cwd,
 		NoContextFiles:  options.NoContextFiles,
 		EmbedBaseURL:    os.Getenv("GG_EMBED_BASE_URL"),
@@ -334,6 +362,21 @@ func resolveStateDir(home string, configured *string, name string) string {
 // ~/.gg/scheduler. A configured dir supports the ~/ prefix like memory.dir.
 func resolveSchedulerConfig(home string, file schedulerFileConfig) SchedulerConfig {
 	return SchedulerConfig{Dir: resolveStateDir(home, file.Dir, "scheduler")}
+}
+
+// resolveConnectorConfig locates the connector state dir (~/.gg/connectors)
+// and resolves the Google OAuth client credentials: explicit config file
+// values lose to the GG_GOOGLE_CLIENT_ID / GG_GOOGLE_CLIENT_SECRET
+// environment variables, which lose to --client-id/--client-secret flags
+// (handled at the call site).
+func resolveConnectorConfig(home string, file connectorsFileConfig) ConnectorConfig {
+	return ConnectorConfig{
+		Dir: resolveStateDir(home, file.Dir, "connectors"),
+		Google: GoogleConnectorConfig{
+			ClientID:     first(os.Getenv("GG_GOOGLE_CLIENT_ID"), file.Google.ClientID),
+			ClientSecret: first(os.Getenv("GG_GOOGLE_CLIENT_SECRET"), file.Google.ClientSecret),
+		},
+	}
 }
 
 func resolveMemoryConfig(home string, file memoryFileConfig, disabledByCLI bool) (MemoryConfig, error) {

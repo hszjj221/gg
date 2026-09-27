@@ -100,6 +100,9 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	if parsed.Command == cli.CommandLibrary {
 		return runLibraryCommand(cfg, parsed.LibraryArgs, stdout, stderr)
 	}
+	if parsed.Command == cli.CommandConnect {
+		return runConnectCommand(ctx, cfg, parsed.ConnectArgs, stdout, stderr)
+	}
 	personal, notice, err := app.SetupPersonal(cfg)
 	if err != nil {
 		fmt.Fprintln(stderr, err)

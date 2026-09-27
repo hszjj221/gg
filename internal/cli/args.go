@@ -47,6 +47,8 @@ type Args struct {
 	ArtifactArgs []string
 	// LibraryArgs carries the subcommand for `gg library ...`.
 	LibraryArgs []string
+	// ConnectArgs carries the subcommand for `gg connect ...`.
+	ConnectArgs []string
 }
 
 type Command string
@@ -61,6 +63,7 @@ const (
 	CommandJob          Command = "job"
 	CommandArtifact     Command = "artifact"
 	CommandLibrary      Command = "library"
+	CommandConnect      Command = "connect"
 )
 
 func Parse(argv []string) (Args, error) {
@@ -184,6 +187,15 @@ func parseCommand(args *Args, rest []string) error {
 		} else {
 			args.Prompt = strings.Join(rest, " ")
 		}
+	case "connect":
+		// `gg connect` alone or with a known subcommand manages third-party
+		// connections; anything else stays a prompt.
+		if len(rest) == 1 || isConnectSubcommand(rest[1]) {
+			args.Command = CommandConnect
+			args.ConnectArgs = rest[1:]
+		} else {
+			args.Prompt = strings.Join(rest, " ")
+		}
 	default:
 		args.Prompt = strings.Join(rest, " ")
 	}
@@ -212,6 +224,15 @@ func isArtifactSubcommand(word string) bool {
 func isLibrarySubcommand(word string) bool {
 	switch word {
 	case "add", "list", "remove", "path":
+		return true
+	}
+	return false
+}
+
+// isConnectSubcommand reports whether word is a `gg connect` subcommand.
+func isConnectSubcommand(word string) bool {
+	switch word {
+	case "google", "list", "status", "remove":
 		return true
 	}
 	return false
@@ -313,6 +334,7 @@ Usage:
   gg artifact publish <id>
   gg library add <path> [--name NAME]
   gg library list
+  gg connect google [--client-id ID]   connect Gmail + Google Calendar (OAuth)
 
 Running gg without a prompt starts the TUI interactive mode when stdin/stdout are terminals.
 
@@ -366,5 +388,11 @@ Library (your file collection, ~/.gg/library):
   gg library add <path> [--name NAME]   copy a file into the library
   gg library list          list library files
   gg library remove <id|name>
-  gg library path <id|name>  print the stored file path`)
+  gg library path <id|name>  print the stored file path
+
+Connectors (third-party services, ~/.gg/connectors):
+  gg connect google [--client-id ID] [--manual]   OAuth connect Gmail + Google Calendar
+  gg connect list              list connections
+  gg connect status [google]   show scopes and token expiry
+  gg connect remove google     disconnect`)
 }
