@@ -137,3 +137,70 @@ func TestHelpTextMentionsTUIInteractiveMode(t *testing.T) {
 		t.Fatalf("help text should mention TUI interactive mode:\n%s", help)
 	}
 }
+
+func TestParseKBIndexCommand(t *testing.T) {
+	args, err := Parse([]string{"kb", "index", "./docs", "--name", "api", "--embed-model", "m1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args.Command != CommandKB || args.KBSub != "index" || args.KBPath != "./docs" {
+		t.Fatalf("unexpected args: %+v", args)
+	}
+	if args.KBName != "api" || args.KBEmbedModel != "m1" {
+		t.Fatalf("unexpected kb options: %+v", args)
+	}
+}
+
+func TestParseKBSearchCommand(t *testing.T) {
+	args, err := Parse([]string{"kb", "search", "how", "to", "deploy", "--top-k", "3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args.Command != CommandKB || args.KBSub != "search" || args.KBQuery != "how to deploy" {
+		t.Fatalf("unexpected args: %+v", args)
+	}
+	if args.KBTopK != 3 {
+		t.Fatalf("unexpected top-k: %d", args.KBTopK)
+	}
+}
+
+func TestParseKBEvalCommand(t *testing.T) {
+	args, err := Parse([]string{"kb", "eval", "--cases", "cases.jsonl"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args.Command != CommandKB || args.KBSub != "eval" || args.KBCases != "cases.jsonl" {
+		t.Fatalf("unexpected args: %+v", args)
+	}
+}
+
+func TestParseKBRejectsBadUsage(t *testing.T) {
+	for _, argv := range [][]string{
+		{"kb"},
+		{"kb", "frobnicate"},
+		{"kb", "index"},
+		{"kb", "search"},
+		{"kb", "eval"},
+	} {
+		if _, err := Parse(argv); err == nil {
+			t.Fatalf("expected error for %v", argv)
+		}
+	}
+}
+
+func TestParseKBFlagsBeforePositional(t *testing.T) {
+	args, err := Parse([]string{"kb", "index", "--name", "api", "./docs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args.KBSub != "index" || args.KBPath != "./docs" || args.KBName != "api" {
+		t.Fatalf("unexpected args: %+v", args)
+	}
+}
+
+func TestSplitKBArgsTerminator(t *testing.T) {
+	flags, positional := splitKBArgs([]string{"--name", "x", "--", "--not-a-flag"})
+	if len(flags) != 2 || len(positional) != 1 || positional[0] != "--not-a-flag" {
+		t.Fatalf("unexpected split: flags=%v positional=%v", flags, positional)
+	}
+}

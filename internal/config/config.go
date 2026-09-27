@@ -67,6 +67,7 @@ type Config struct {
 	Memory         MemoryConfig
 	MemoryPath     string
 	SessionDir     string
+	KBDir          string
 	CWD            string
 	NoContextFiles bool
 
@@ -128,6 +129,7 @@ func Resolve(options Options) (Config, error) {
 		Memory:          memoryConfig,
 		MemoryPath:      filepath.Join(home, ".gg", "memory.md"),
 		SessionDir:      sessionDir,
+		KBDir:           filepath.Join(home, ".gg", "kb"),
 		CWD:             cwd,
 		NoContextFiles:  options.NoContextFiles,
 		apiKeyOverride:  options.APIKey,

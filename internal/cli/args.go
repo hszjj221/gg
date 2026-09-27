@@ -29,6 +29,16 @@ type Args struct {
 	Command        Command
 	ResumeTarget   string
 	Prompt         string
+	// KB subcommand fields (gg kb index|search|eval).
+	KBSub        string
+	KBName       string
+	KBPath       string
+	KBQuery      string
+	KBTopK       int
+	KBCases      string
+	KBEmbedModel string
+	KBEmbedBase  string
+	KBEmbedKey   string
 }
 
 type Command string
@@ -37,6 +47,7 @@ const (
 	CommandRun          Command = ""
 	CommandSessionsList Command = "sessions-list"
 	CommandResume       Command = "resume"
+	CommandKB           Command = "kb"
 )
 
 func Parse(argv []string) (Args, error) {
@@ -108,10 +119,90 @@ func parseCommand(args *Args, rest []string) error {
 			args.ResumeTarget = rest[1]
 			args.Prompt = strings.Join(rest[2:], " ")
 		}
+	case "kb":
+		args.Command = CommandKB
+		if err := parseKBCommand(args, rest[1:]); err != nil {
+			return err
+		}
 	default:
 		args.Prompt = strings.Join(rest, " ")
 	}
 	return nil
+}
+
+// parseKBCommand parses `gg kb <sub> [options]` with its own flag set so
+// kb-specific options don't pollute the global flags.
+func parseKBCommand(args *Args, rest []string) error {
+	if len(rest) == 0 {
+		return fmt.Errorf("usage: gg kb <index|search|eval> [options]")
+	}
+	fs := flag.NewFlagSet("gg kb", flag.ContinueOnError)
+	var stderr bytes.Buffer
+	fs.SetOutput(&stderr)
+	fs.StringVar(&args.KBName, "name", "", "knowledge base name (default: default)")
+	fs.IntVar(&args.KBTopK, "top-k", 5, "results per query")
+	fs.StringVar(&args.KBCases, "cases", "", "eval cases file (JSONL)")
+	fs.StringVar(&args.KBEmbedModel, "embed-model", "", "embedding model (default: text-embedding-3-small)")
+	fs.StringVar(&args.KBEmbedBase, "embed-base-url", "", "embeddings base URL (default: --base-url)")
+	fs.StringVar(&args.KBEmbedKey, "embed-api-key", "", "embeddings API key (default: --api-key)")
+	// Go's flag package stops at the first positional argument, so
+	// `gg kb index ./docs --name api` would misparse. Reorder first.
+	flagArgs, positional := splitKBArgs(rest[1:])
+	if err := fs.Parse(flagArgs); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	switch rest[0] {
+	case "index":
+		args.KBSub = "index"
+		if len(positional) != 1 {
+			return fmt.Errorf("usage: gg kb index <dir> [options]")
+		}
+		args.KBPath = positional[0]
+	case "search":
+		args.KBSub = "search"
+		if len(positional) == 0 {
+			return fmt.Errorf("usage: gg kb search <query> [options]")
+		}
+		args.KBQuery = strings.Join(positional, " ")
+	case "eval":
+		args.KBSub = "eval"
+		if args.KBCases == "" {
+			return fmt.Errorf("usage: gg kb eval --cases <file> [options]")
+		}
+		args.KBPath = args.KBCases
+	default:
+		return fmt.Errorf("unknown kb subcommand %q: want index, search, or eval", rest[0])
+	}
+	return nil
+}
+
+// splitKBArgs partitions argv into flag tokens and positional tokens so
+// flags may appear before or after positional arguments. A `--` token ends
+// flag parsing; everything after it is positional.
+func splitKBArgs(argv []string) (flags, positional []string) {
+	i := 0
+	for i < len(argv) {
+		a := argv[i]
+		if a == "--" {
+			positional = append(positional, argv[i+1:]...)
+			break
+		}
+		if strings.HasPrefix(a, "-") && len(a) > 1 {
+			flags = append(flags, a)
+			if !strings.Contains(a, "=") && i+1 < len(argv) && !strings.HasPrefix(argv[i+1], "-") {
+				i++
+				flags = append(flags, argv[i])
+			}
+		} else {
+			positional = append(positional, a)
+		}
+		i++
+	}
+	return flags, positional
 }
 
 func HelpText() string {
@@ -122,6 +213,9 @@ Usage:
   gg [options] [prompt]
   gg sessions list
   gg resume [<id-or-path> [prompt]]
+  gg kb index <dir> [--name <kb>] [embedding options]
+  gg kb search <query> [--name <kb>] [--top-k <n>]
+  gg kb eval --cases <file> [--name <kb>] [--top-k <n>]
 
 Running gg without a prompt starts the TUI interactive mode when stdin/stdout are terminals.
 
@@ -143,5 +237,15 @@ Options:
   --no-context-files       disable AGENTS.md discovery
   --approval <mode>        tool approval mode: auto, never, on-request (default: auto)
   -h, --help               show help
-  -v, --version            show version`)
+  -v, --version            show version
+
+Knowledge base (RAG):
+  gg kb index <dir>        chunk, embed, and index text files under <dir>
+  gg kb search <query>     semantic search over the local index
+  gg kb eval --cases <f>   run retrieval eval cases (JSONL: {"query","expect"})
+  --name <kb>              knowledge base name (default: default)
+  --top-k <n>              results per query (default: 5)
+  --embed-model <m>        embedding model (default: text-embedding-3-small)
+  --embed-base-url <url>   embeddings base URL (default: --base-url)
+  --embed-api-key <key>    embeddings API key (default: --api-key)`)
 }

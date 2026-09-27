@@ -11,6 +11,7 @@ import (
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/contextmgr"
+	"github.com/hszjj221/gg/internal/kb"
 	"github.com/hszjj221/gg/internal/memory"
 	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/skills"
@@ -352,6 +353,11 @@ func defaultTools(cfg config.Config, provider agent.Provider, readRoots []string
 	}
 	if cfg.Memory.Enabled {
 		toolset = append(toolset, tools.NewMemoryAddTool(cfg.MemoryPath))
+	}
+	if kb.Exists(cfg.KBDir, kb.DefaultName) {
+		toolset = append(toolset, tools.NewKBSearchTool(
+			cfg.KBDir, cfg.APIKey, cfg.BaseURL, tools.KBSearchOptions{},
+		))
 	}
 	return toolset
 }
