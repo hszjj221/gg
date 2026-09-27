@@ -250,3 +250,29 @@ func writeConfig(t *testing.T, home, content string) {
 		t.Fatal(err)
 	}
 }
+
+func TestResolveExpandsMemoryDirTilde(t *testing.T) {
+	home := t.TempDir()
+	writeConfig(t, home, `{
+  "default": "openai:gpt-4.1",
+  "memory": {
+    "dir": "~/mymem"
+  },
+  "providers": {
+    "openai": {
+      "type": "openai-compatible",
+      "baseURL": "https://api.openai.com/v1",
+      "apiKey": "openai-key",
+      "models": ["gpt-4.1"]
+    }
+  }
+}`)
+
+	cfg, err := Resolve(Options{HomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Memory.Dir != filepath.Join(home, "mymem") {
+		t.Fatalf("memory.dir ~/ not expanded: %q", cfg.Memory.Dir)
+	}
+}

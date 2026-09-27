@@ -16,6 +16,7 @@ import (
 	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/skills"
 	"github.com/hszjj221/gg/internal/tools"
+	"github.com/hszjj221/gg/internal/userprofile"
 )
 
 type Options struct {
@@ -26,6 +27,10 @@ type Options struct {
 	Summary         *session.SummaryEntry
 	Skills          skills.Set
 	ModelRecorded   bool
+	// Profile and MemoryStore carry the personal layer. MemoryStore may be
+	// nil; NewService then falls back to a store rooted at Config.Memory.Dir.
+	Profile     userprofile.Profile
+	MemoryStore *memory.Store
 }
 
 // Service owns the mutable state of one conversation. Mutating operations are
@@ -40,10 +45,16 @@ type Service struct {
 	summary         *session.SummaryEntry
 	skillSet        skills.Set
 	modelRecorded   bool
+	profile         userprofile.Profile
+	memStore        *memory.Store
 	queue           *agent.MessageQueue
 }
 
 func NewService(options Options) *Service {
+	memStore := options.MemoryStore
+	if memStore == nil {
+		memStore = memory.NewStore(options.Config.Memory.Dir)
+	}
 	return &Service{
 		cfg:             options.Config,
 		providerFactory: options.ProviderFactory,
@@ -52,6 +63,8 @@ func NewService(options Options) *Service {
 		summary:         cloneSummaryEntry(options.Summary),
 		skillSet:        options.Skills,
 		modelRecorded:   options.ModelRecorded,
+		profile:         options.Profile,
+		memStore:        memStore,
 		queue:           &agent.MessageQueue{},
 	}
 }
@@ -102,7 +115,7 @@ func (s *Service) run(ctx context.Context, prompt string, onEvent func(agent.Eve
 	}
 	provider := s.providerFactory(s.cfg)
 	summaryUsage := agent.Usage{}
-	runner := agent.NewRunnerWithOptions(provider, defaultTools(s.cfg, provider, s.skillSet.ReadRoots()), agent.RunnerOptions{
+	runner := agent.NewRunnerWithOptions(provider, defaultTools(s.cfg, provider, s.skillSet.ReadRoots(), s.memStore), agent.RunnerOptions{
 		Approver:      approver,
 		OnMessage:     s.persistMessage,
 		DrainMessages: s.queue.DrainSteering,
@@ -250,22 +263,77 @@ func (s *Service) handleMemoryCommand(prompt string) (Result, bool, error) {
 	if !s.cfg.Memory.Enabled {
 		return Result{}, true, fmt.Errorf("memory is disabled")
 	}
+	store := s.memStore
 	if command == "" {
-		status, err := memory.Status(s.cfg.MemoryPath, s.cfg.Memory.MaxPromptTokens, s.cfg.Memory.Enabled)
+		status, err := memory.Status(store.CuratedPath(), s.cfg.Memory.MaxPromptTokens, s.cfg.Memory.Enabled)
 		return Result{Content: status, ModelName: s.cfg.Selection}, true, err
 	}
 	switch command {
 	case "add":
-		if err := memory.Append(s.cfg.MemoryPath, arg); err != nil {
-			return Result{}, true, err
+		scope, text := parseScopeFlag(arg)
+		if strings.TrimSpace(text) == "" {
+			return Result{}, true, fmt.Errorf("usage: /memory add [--scope=SCOPE] <text>")
+		}
+		var werr error
+		switch {
+		case scope == "" || scope == "general":
+			werr = store.AppendCurated(text)
+		case scope == "daily":
+			werr = store.AppendDaily(text)
+		case strings.HasPrefix(scope, "person:"):
+			name := strings.TrimSpace(strings.TrimPrefix(scope, "person:"))
+			if name == "" {
+				return Result{}, true, fmt.Errorf("person scope needs a name: /memory add --scope=person:<name> <text>")
+			}
+			werr = store.AppendPerson(name, text)
+		case strings.HasPrefix(scope, "group:"):
+			name := strings.TrimSpace(strings.TrimPrefix(scope, "group:"))
+			if name == "" {
+				return Result{}, true, fmt.Errorf("group scope needs a name: /memory add --scope=group:<name> <text>")
+			}
+			werr = store.AppendGroup(name, text)
+		default:
+			return Result{}, true, fmt.Errorf("unknown scope %q: want general, daily, person:<name>, group:<name>", scope)
+		}
+		if werr != nil {
+			return Result{}, true, werr
 		}
 		return Result{Content: "memory added", ModelName: s.cfg.Selection}, true, nil
 	case "show":
-		content, err := memory.Show(s.cfg.MemoryPath)
+		path := store.CuratedPath()
+		if arg == "daily" {
+			path = store.DailyPath(time.Now())
+		}
+		content, err := memory.Show(path)
 		return Result{Content: content, ModelName: s.cfg.Selection}, true, err
+	case "search":
+		hits, err := store.Search(arg, "all")
+		if err != nil {
+			return Result{}, true, err
+		}
+		if len(hits) == 0 {
+			return Result{Content: "no memory matches", ModelName: s.cfg.Selection}, true, nil
+		}
+		var b strings.Builder
+		for _, hit := range hits {
+			fmt.Fprintf(&b, "%s:%d: %s\n", hit.Path, hit.Line, hit.Snippet)
+		}
+		return Result{Content: strings.TrimSpace(b.String()), ModelName: s.cfg.Selection}, true, nil
 	default:
-		return Result{}, true, fmt.Errorf("usage: /memory [add <text>|show]")
+		return Result{}, true, fmt.Errorf("usage: /memory [add [--scope=SCOPE] <text>|show [daily]|search <query>]")
 	}
+}
+
+// parseScopeFlag splits a leading "--scope=SCOPE" from /memory add arguments.
+func parseScopeFlag(arg string) (scope, text string) {
+	if head, rest, ok := strings.Cut(arg, " "); ok && strings.HasPrefix(head, "--scope=") {
+		return strings.TrimPrefix(head, "--scope="), strings.TrimSpace(rest)
+	}
+	// A bare "--scope=X" with no text is a usage error, not literal content.
+	if strings.HasPrefix(arg, "--scope=") {
+		return strings.TrimPrefix(arg, "--scope="), ""
+	}
+	return "", arg
 }
 
 type compactResult struct {
@@ -306,7 +374,7 @@ func (s *Service) contextStatus() string {
 	}
 	build := s.buildContext(system, agent.Message{})
 	var defs []agent.ToolDefinition
-	for _, tool := range defaultTools(s.cfg, nil, s.skillSet.ReadRoots()) {
+	for _, tool := range defaultTools(s.cfg, nil, s.skillSet.ReadRoots(), s.memStore) {
 		defs = append(defs, tool.Definition())
 	}
 	hasSummary := s.summary != nil && strings.TrimSpace(s.summary.Summary) != ""
@@ -322,26 +390,38 @@ func (s *Service) contextStatus() string {
 }
 
 func (s *Service) systemMessages() ([]agent.Message, error) {
-	messages, err := s.instructionMessages()
+	// Prompt order: stable identity first, then memory, then project
+	// context, then skills.
+	messages := []agent.Message{s.codingInstructionMessage()}
+	if block := s.profile.PromptBlock(); block != "" {
+		messages = append(messages, agent.Message{Role: agent.RoleSystem, Content: block})
+	}
+	if s.cfg.Memory.Enabled {
+		snapshot, err := s.memStore.LoadCurated(s.cfg.Memory.MaxPromptTokens)
+		if err != nil {
+			return nil, err
+		}
+		if prompt := memory.SystemPrompt(snapshot); prompt != "" {
+			messages = append(messages, agent.Message{Role: agent.RoleSystem, Content: prompt, Timestamp: time.Now().UnixMilli()})
+		}
+		tail, err := s.memStore.LoadDailyTail(s.cfg.Memory.DailyLogTailTokens)
+		if err != nil {
+			return nil, err
+		}
+		if content := strings.TrimSpace(tail.Content); content != "" {
+			messages = append(messages, agent.Message{Role: agent.RoleSystem, Content: "Today's log:\n" + content, Timestamp: time.Now().UnixMilli()})
+		}
+	}
+	project, err := s.projectInstructionMessages()
 	if err != nil {
 		return nil, err
 	}
+	messages = append(messages, project...)
 	messages = append(messages, skillSystemMessages(s.skillSet)...)
-	if !s.cfg.Memory.Enabled {
-		return messages, nil
-	}
-	snapshot, err := memory.Load(s.cfg.MemoryPath, s.cfg.Memory.MaxPromptTokens)
-	if err != nil {
-		return nil, err
-	}
-	prompt := memory.SystemPrompt(snapshot)
-	if prompt != "" {
-		messages = append(messages, agent.Message{Role: agent.RoleSystem, Content: prompt, Timestamp: time.Now().UnixMilli()})
-	}
 	return messages, nil
 }
 
-func defaultTools(cfg config.Config, provider agent.Provider, readRoots []string) []agent.Tool {
+func defaultTools(cfg config.Config, provider agent.Provider, readRoots []string, memStore *memory.Store) []agent.Tool {
 	toolset := []agent.Tool{
 		tools.NewReadToolWithOptions(cfg.CWD, tools.ReadOptions{ExtraRoots: readRoots}),
 		tools.NewListTool(cfg.CWD),
@@ -352,7 +432,7 @@ func defaultTools(cfg config.Config, provider agent.Provider, readRoots []string
 		tools.NewSubagentTool(cfg.CWD, provider, tools.SubagentOptions{}),
 	}
 	if cfg.Memory.Enabled {
-		toolset = append(toolset, tools.NewMemoryAddTool(cfg.MemoryPath))
+		toolset = append(toolset, tools.NewMemoryAddTool(memStore), tools.NewMemorySearchTool(memStore))
 	}
 	if kb.Exists(cfg.KBDir, kb.DefaultName) {
 		// The query embedding must go to the same endpoint the index was

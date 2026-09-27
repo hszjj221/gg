@@ -16,7 +16,7 @@
 - 从 `AGENTS.md` 加载项目规则
 - 通过 `--usage` 可选展示 token 消耗
 - 从 `.agents/skills` 加载 Codex 风格本地 skills
-- 从 `~/.gg/memory.md` 加载简单 Markdown memory
+- 从 `~/.gg/` 加载个人画像与 memory（`gg init` 初始化）
 - 内置代码工具：`read`、`list`、`grep`、`bash`、`edit`、`write`
 - 用于聚焦代码库调研的同步只读 `subagent` 工具
 - 本地 RAG 知识库：`gg kb index` 索引 + agent 可调用的 `kb_search` 工具
@@ -144,7 +144,9 @@ Provider/model 配置：
   },
   "memory": {
     "enabled": true,
-    "maxPromptTokens": 1200
+    "maxPromptTokens": 1200,
+    "dailyLogTailTokens": 500,
+    "dailyLogRetentionDays": 90
   },
   "providers": {
     "openai": {
@@ -213,15 +215,17 @@ v1 只支持 `openai-compatible` provider。不支持远端拉取模型列表；
 - `/compact` 可以手动写入新 summary，`/context` 会展示当前估算 prompt 大小和预算。
 - token 估算是近似值；v1 不使用具体模型的 tokenizer。
 
-Memory：
+画像与 Memory：
 
-- `gg` 默认读取 `~/.gg/memory.md`，并把它作为临时 system context 注入普通 prompt。
-- Memory 是单个 Markdown 文件，不会写入 session，并且每个 turn 都会重新读取。
-- 启用 memory 时，模型可以调用 `memory_add` 把长期偏好或稳定事实追加到 `~/.gg/memory.md`。
-- `memory_add` 会立即写入，并且不走工具审批提示。
-- `/memory` 展示 memory 状态，`/memory add <text>` 会追加 Markdown bullet，`/memory show` 会输出文件内容。
-- `memory.maxPromptTokens` 限制注入的 memory 大小；原文件不会被截断。
-- 使用 `/memory show` 或文本编辑器检查 memory。使用 `memory.enabled=false` 或 `--no-memory` 可以关闭 memory 并隐藏 `memory_add`。
+- `gg init` 初始化个人层：`~/.gg/USER.md`（你是谁：名字、时区、语言、备注）和 `~/.gg/memory/`（gg 记住的内容）。
+- 启动时 gg 按顺序注入：用户画像、精选记忆（`memory/MEMORY.md`）、今日日志尾部（`memory/YYYY-MM-DD.md`）。
+- 老的 `~/.gg/memory.md` 在首次运行时自动迁移到 `memory/MEMORY.md`；原文件保留为 `memory.md.bak`。如果 `MEMORY.md` 已有内容，gg 不会自动合并：原文件同样保留为 `.bak`，并打印一条手动合并提示。
+- `memory.dir` 支持 `~/` 前缀（按 home 目录展开）。`~/.gg/USER.md` 损坏或日志删不掉时只打印 warning，不会阻止启动。
+- 启用 memory 时，模型可以调用 `memory_add`（`--scope general|daily|person:<name>|group:<name>`）和 `memory_search`（跨 scope 关键词检索）。`memory_add` 会立即写入，并且不走工具审批提示。
+- `/memory` 展示 memory 状态，`/memory add [--scope=<scope>] <text>` 追加 Markdown bullet，`/memory show [daily]` 输出内容，`/memory search <query>` 检索。
+- `gg memory search <query>` 和 `gg memory show [daily]` 无需启动 session 即可使用。
+- `memory.maxPromptTokens` 限制注入的精选记忆大小（原文件不会被截断）；`memory.dailyLogTailTokens` 限制日志尾部；`memory.dailyLogRetentionDays` 清理过期日志（`0` 表示永久保留）。
+- 使用 `/memory show` 或文本编辑器检查 memory。使用 `memory.enabled=false` 或 `--no-memory` 可以关闭 memory 并隐藏 memory 工具。
 
 Token 消耗：
 

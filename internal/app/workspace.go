@@ -7,8 +7,10 @@ import (
 
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/config"
+	"github.com/hszjj221/gg/internal/memory"
 	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/skills"
+	"github.com/hszjj221/gg/internal/userprofile"
 )
 
 type WorkspaceOptions struct {
@@ -17,6 +19,8 @@ type WorkspaceOptions struct {
 	Skills          skills.Set
 	Repository      session.Repository
 	Manager         ManagerOptions
+	Profile         userprofile.Profile
+	MemoryStore     *memory.Store
 }
 
 // Workspace is the application facade used by non-terminal transports. It
@@ -27,6 +31,8 @@ type Workspace struct {
 	skills          skills.Set
 	repository      session.Repository
 	manager         *Manager
+	profile         userprofile.Profile
+	memStore        *memory.Store
 }
 
 type SessionSummary struct {
@@ -50,6 +56,8 @@ func NewWorkspace(options WorkspaceOptions) (*Workspace, error) {
 		skills:          options.Skills,
 		repository:      options.Repository,
 		manager:         NewManagerWithOptions(options.Manager),
+		profile:         options.Profile,
+		memStore:        options.MemoryStore,
 	}, nil
 }
 
@@ -238,6 +246,8 @@ func (w *Workspace) addLoaded(store *session.Store, loaded session.Loaded) (*Ser
 		Summary:         loaded.LastSummary,
 		Skills:          w.skills,
 		ModelRecorded:   loaded.LastModel != nil && loaded.LastModel.Selection == cfg.Selection,
+		Profile:         w.profile,
+		MemoryStore:     w.memStore,
 	})
 	if _, err := w.manager.Add(service); err != nil {
 		return nil, err

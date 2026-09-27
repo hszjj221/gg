@@ -204,3 +204,58 @@ func TestSplitKBArgsTerminator(t *testing.T) {
 		t.Fatalf("unexpected split: flags=%v positional=%v", flags, positional)
 	}
 }
+func TestParseInitCommand(t *testing.T) {
+	args, err := Parse([]string{"init"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args.Command != CommandInit {
+		t.Fatalf("unexpected args: %+v", args)
+	}
+}
+
+func TestParseInitWithExtraWordsStaysPrompt(t *testing.T) {
+	args, err := Parse([]string{"init", "a", "repo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args.Command != CommandRun || args.Prompt != "init a repo" {
+		t.Fatalf("unexpected args: %+v", args)
+	}
+}
+
+func TestParseMemorySearchCommand(t *testing.T) {
+	args, err := Parse([]string{"memory", "search", "my", "preference"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args.Command != CommandMemory || len(args.MemoryArgs) != 3 || args.MemoryArgs[0] != "search" {
+		t.Fatalf("unexpected args: %+v", args)
+	}
+}
+
+func TestParseMemoryShowCommand(t *testing.T) {
+	args, err := Parse([]string{"memory", "show", "daily"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args.Command != CommandMemory || len(args.MemoryArgs) != 2 || args.MemoryArgs[1] != "daily" {
+		t.Fatalf("unexpected args: %+v", args)
+	}
+}
+
+func TestParseMemoryWithoutSubcommandStaysPrompt(t *testing.T) {
+	args, err := Parse([]string{"memory", "usage", "tips"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args.Command != CommandRun || args.Prompt != "memory usage tips" {
+		t.Fatalf("prompts starting with memory must not be hijacked: %+v", args)
+	}
+}
+
+func TestParseMemoryShowRejectsExtraArgs(t *testing.T) {
+	if _, err := Parse([]string{"memory", "show", "daily", "extra"}); err == nil {
+		t.Fatal("expected usage error for gg memory show daily extra")
+	}
+}

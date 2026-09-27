@@ -124,6 +124,8 @@ func (s *Service) childServiceLocked(store *session.Store) *Service {
 		Summary:         loaded.LastSummary,
 		Skills:          s.skillSet,
 		ModelRecorded:   loaded.LastModel != nil && loaded.LastModel.Selection == s.cfg.Selection,
+		Profile:         s.profile,
+		MemoryStore:     s.memStore,
 	})
 }
 

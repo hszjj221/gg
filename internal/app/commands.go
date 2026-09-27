@@ -46,14 +46,23 @@ func parseMemoryCommand(prompt string) (command, arg string, ok bool, err error)
 	case "add":
 		arg = afterCommand
 		if arg == "" {
-			return "", "", true, fmt.Errorf("usage: /memory add <text>")
+			return "", "", true, fmt.Errorf("usage: /memory add [--scope=SCOPE] <text>")
 		}
 		return command, arg, true, nil
 	case "show":
-		if len(fields) != 2 {
-			return "", "", true, fmt.Errorf("usage: /memory show")
+		if len(fields) == 2 {
+			return command, "", true, nil
 		}
-		return command, "", true, nil
+		if len(fields) == 3 && fields[2] == "daily" {
+			return command, "daily", true, nil
+		}
+		return "", "", true, fmt.Errorf("usage: /memory show [daily]")
+	case "search":
+		arg = afterCommand
+		if arg == "" {
+			return "", "", true, fmt.Errorf("usage: /memory search <query>")
+		}
+		return command, arg, true, nil
 	default:
 		return command, afterCommand, true, nil
 	}

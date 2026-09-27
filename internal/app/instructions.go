@@ -18,45 +18,57 @@ Use exact, unique text for edits. When tool output is truncated, read the saved 
 Treat tool errors and interrupted executions as incomplete work. Inspect state before retrying an operation whose result is unknown.
 Ask concise questions when essential information is missing. Do not claim success without evidence.`
 
-func (s *Service) instructionMessages() ([]agent.Message, error) {
+// codingInstructionMessage returns the base coding-agent system prompt.
+func (s *Service) codingInstructionMessage() agent.Message {
 	text := codingInstructions + "\nWorking directory: " + s.cfg.CWD
-	if !s.cfg.NoContextFiles {
-		var paths []string
-		for dir := filepath.Clean(s.cfg.CWD); dir != "."; dir = filepath.Dir(dir) {
-			paths = append(paths, filepath.Join(dir, "AGENTS.md"))
-			if filepath.Dir(dir) == dir {
-				break
-			}
-		}
-		if s.cfg.MemoryPath != "" {
-			paths = append(paths, filepath.Join(filepath.Dir(s.cfg.MemoryPath), "AGENTS.md"))
-		}
-		seen := map[string]bool{}
-		for i := len(paths) - 1; i >= 0; i-- {
-			path := paths[i]
-			if seen[path] {
-				continue
-			}
-			seen[path] = true
-			file, err := os.Open(path)
-			if os.IsNotExist(err) {
-				continue
-			}
-			if err != nil {
-				return nil, err
-			}
-			data, err := io.ReadAll(io.LimitReader(file, 32*1024+1))
-			file.Close()
-			if err != nil {
-				return nil, err
-			}
-			if len(data) > 32*1024 {
-				return nil, fmt.Errorf("project instructions exceed 32 KiB: %s", path)
-			}
-			if strings.TrimSpace(string(data)) != "" {
-				text += "\n\nProject instructions from " + path + ":\n" + string(data)
-			}
+	return agent.Message{Role: agent.RoleSystem, Content: text}
+}
+
+// projectInstructionMessages loads AGENTS.md project instructions, walking
+// from the working directory up to the filesystem root plus ~/.gg.
+func (s *Service) projectInstructionMessages() ([]agent.Message, error) {
+	if s.cfg.NoContextFiles {
+		return nil, nil
+	}
+	var paths []string
+	for dir := filepath.Clean(s.cfg.CWD); dir != "."; dir = filepath.Dir(dir) {
+		paths = append(paths, filepath.Join(dir, "AGENTS.md"))
+		if filepath.Dir(dir) == dir {
+			break
 		}
 	}
-	return []agent.Message{{Role: agent.RoleSystem, Content: text}}, nil
+	if s.cfg.Memory.Dir != "" {
+		paths = append(paths, filepath.Join(filepath.Dir(s.cfg.Memory.Dir), "AGENTS.md"))
+	}
+	var messages []agent.Message
+	seen := map[string]bool{}
+	for i := len(paths) - 1; i >= 0; i-- {
+		path := paths[i]
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		file, err := os.Open(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		data, err := io.ReadAll(io.LimitReader(file, 32*1024+1))
+		file.Close()
+		if err != nil {
+			return nil, err
+		}
+		if len(data) > 32*1024 {
+			return nil, fmt.Errorf("project instructions exceed 32 KiB: %s", path)
+		}
+		if strings.TrimSpace(string(data)) != "" {
+			messages = append(messages, agent.Message{
+				Role:    agent.RoleSystem,
+				Content: "Project instructions from " + path + ":\n" + string(data),
+			})
+		}
+	}
+	return messages, nil
 }

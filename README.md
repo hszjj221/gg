@@ -16,7 +16,7 @@ English | [简体中文](README.zh-CN.md)
 - Project instructions from `AGENTS.md`
 - Optional token usage reporting with `--usage`
 - Codex-style local skills from `.agents/skills`
-- Simple Markdown memory from `~/.gg/memory.md`
+- Personal profile and memory from `~/.gg/` (`gg init` scaffolds it)
 - Built-in coding tools: `read`, `list`, `grep`, `bash`, `edit`, `write`
 - Synchronous read-only `subagent` tool for focused codebase research
 - Local RAG knowledge base: `gg kb index` + agent-callable `kb_search` tool
@@ -144,7 +144,9 @@ Provider/model configuration:
   },
   "memory": {
     "enabled": true,
-    "maxPromptTokens": 1200
+    "maxPromptTokens": 1200,
+    "dailyLogTailTokens": 500,
+    "dailyLogRetentionDays": 90
   },
   "providers": {
     "openai": {
@@ -213,15 +215,17 @@ Context management:
 - `/compact` manually writes a new summary, and `/context` shows the current estimated prompt size and budget.
 - Token estimation is approximate; v1 does not use a model-specific tokenizer.
 
-Memory:
+Profile and memory:
 
-- `gg` reads `~/.gg/memory.md` by default and injects it as temporary system context for normal prompts.
-- Memory is a single Markdown file. It is not written to sessions and is re-read on each turn.
-- When memory is enabled, the model can call `memory_add` to append durable preferences or stable facts to `~/.gg/memory.md`.
-- `memory_add` writes immediately and does not use the tool approval prompt.
-- `/memory` shows memory status, `/memory add <text>` appends a Markdown bullet, and `/memory show` prints the file.
-- `memory.maxPromptTokens` limits how much memory is injected; the file itself is never truncated.
-- Use `/memory show` or a text editor to review memory. Use `memory.enabled=false` or `--no-memory` to disable memory and hide `memory_add`.
+- `gg init` scaffolds the personal layer: `~/.gg/USER.md` (who you are: name, timezone, language, notes) and `~/.gg/memory/` (what gg remembers).
+- On startup gg injects, in order: user profile, curated memory (`memory/MEMORY.md`), and today's daily-log tail (`memory/YYYY-MM-DD.md`).
+- A legacy `~/.gg/memory.md` is migrated to `memory/MEMORY.md` automatically on first run; the legacy file is kept as `memory.md.bak`. If `MEMORY.md` already has content, gg does not merge automatically: the legacy file is still kept as `.bak` and a manual-merge notice is printed.
+- `memory.dir` accepts a `~/` prefix (expanded against your home directory). A broken `~/.gg/USER.md` or an undeletable daily log only prints a warning and never blocks startup.
+- When memory is enabled, the model can call `memory_add` with `--scope general|daily|person:<name>|group:<name>` and `memory_search` for keyword search across all scopes. `memory_add` writes immediately and does not use the tool approval prompt.
+- `/memory` shows status, `/memory add [--scope=<scope>] <text>` appends a bullet, `/memory show [daily]` prints, `/memory search <query>` searches.
+- `gg memory search <query>` and `gg memory show [daily]` work without starting a session.
+- `memory.maxPromptTokens` limits curated memory injection (the file itself is never truncated); `memory.dailyLogTailTokens` limits the daily-log tail; `memory.dailyLogRetentionDays` prunes old daily logs (`0` keeps them forever).
+- Use `/memory show` or a text editor to review memory. Use `memory.enabled=false` or `--no-memory` to disable memory and hide the memory tools.
 
 Token usage:
 

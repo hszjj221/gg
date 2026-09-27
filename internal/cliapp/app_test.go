@@ -12,6 +12,7 @@ import (
 
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/config"
+	"github.com/hszjj221/gg/internal/memory"
 	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/skills"
 )
@@ -450,7 +451,7 @@ func TestRunMemoryAddToolWritesMemoryFileAndSessionMessages(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
 	}
-	content, err := os.ReadFile(filepath.Join(home, ".gg", "memory.md"))
+	content, err := os.ReadFile(filepath.Join(home, ".gg", "memory", "MEMORY.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1006,7 +1007,7 @@ func TestRunInjectsMemorySystemMessage(t *testing.T) {
 	if len(messages) != 3 || messages[0].Role != agent.RoleSystem || messages[1].Role != agent.RoleSystem || messages[2].Role != agent.RoleUser {
 		t.Fatalf("expected memory system and user messages, got %+v", messages)
 	}
-	if !strings.Contains(messages[1].Content, "User memory from ~/.gg/memory.md") || !strings.Contains(messages[1].Content, "Prefer concise Chinese replies") {
+	if !strings.Contains(messages[1].Content, "User memory from ") || !strings.Contains(messages[1].Content, ".gg/memory/MEMORY.md") || !strings.Contains(messages[1].Content, "Prefer concise Chinese replies") {
 		t.Fatalf("memory system message missing content:\n%s", messages[0].Content)
 	}
 }
@@ -1170,7 +1171,7 @@ func TestMemoryCommandShowsStatusWithoutCallingProviderOrWritingMessages(t *test
 	if providerCalled {
 		t.Fatalf("provider should not be called for /memory")
 	}
-	if !strings.Contains(stdout.String(), "memory: enabled=true") || !strings.Contains(stdout.String(), "memory.md") {
+	if !strings.Contains(stdout.String(), "memory: enabled=true") || !strings.Contains(stdout.String(), "MEMORY.md") {
 		t.Fatalf("unexpected memory status: %q", stdout.String())
 	}
 	loaded, err := session.Load(sessionPath)
@@ -1209,7 +1210,7 @@ func TestMemoryAddCommandWritesMarkdownWithoutCallingProvider(t *testing.T) {
 	if !strings.Contains(stdout.String(), "memory added") {
 		t.Fatalf("unexpected memory add output: %q", stdout.String())
 	}
-	content, err := os.ReadFile(filepath.Join(home, ".gg", "memory.md"))
+	content, err := os.ReadFile(filepath.Join(home, ".gg", "memory", "MEMORY.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1371,6 +1372,17 @@ func writeAppMemory(t *testing.T, home, content string) {
 	}
 }
 
+// newCLITestMemoryStore returns a memory store rooted at the test home's
+// memory dir, creating the layout first.
+func newCLITestMemoryStore(t *testing.T, home string) *memory.Store {
+	t.Helper()
+	store := memory.NewStore(filepath.Join(home, ".gg", "memory"))
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
 func containsMessage(messages []agent.Message, text string) bool {
 	for _, message := range messages {
 		if strings.Contains(message.Content, text) {
@@ -1378,6 +1390,18 @@ func containsMessage(messages []agent.Message, text string) bool {
 		}
 	}
 	return false
+}
+
+// systemText concatenates all system message contents, preserving order.
+func systemText(messages []agent.Message) string {
+	var b strings.Builder
+	for _, message := range messages {
+		if message.Role == agent.RoleSystem {
+			b.WriteString(message.Content)
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
 }
 
 func hasTool(tools []agent.ToolDefinition, name string) bool {
@@ -1645,5 +1669,129 @@ func writeAppConfig(t *testing.T, home, content string) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRunInjectsProfileBeforeMemory(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	writeAppMemory(t, home, "# gg Memory\n\n- Prefer concise Chinese replies.\n")
+	if err := os.WriteFile(filepath.Join(home, ".gg", "USER.md"), []byte("- Name: Ada\n- Timezone: Asia/Shanghai\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	provider := &appFakeProvider{}
+
+	code := Run(context.Background(), []string{"-p", "--no-skills", "--api-key", "key", "--no-session", "check this"}, Options{
+		CWD:     dir,
+		HomeDir: home,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		ProviderFactory: func(config.Config) agent.Provider {
+			return provider
+		},
+	})
+
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	messages := provider.requests[0].Messages
+	if len(messages) != 4 {
+		t.Fatalf("expected coding, profile, memory and user messages, got %d: %+v", len(messages), messages)
+	}
+	if !strings.Contains(messages[1].Content, "User profile:") || !strings.Contains(messages[1].Content, "Ada") {
+		t.Fatalf("profile block missing or misplaced:\n%s", messages[1].Content)
+	}
+	if !strings.Contains(messages[2].Content, "Prefer concise Chinese replies") {
+		t.Fatalf("memory block missing or misplaced:\n%s", messages[2].Content)
+	}
+	if messages[3].Role != agent.RoleUser || messages[3].Content != "check this" {
+		t.Fatalf("user message misplaced: %+v", messages[3])
+	}
+}
+
+func TestRunInitScaffoldsPersonalLayer(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	var stdout, stderr strings.Builder
+
+	run := func() int {
+		stdout.Reset()
+		stderr.Reset()
+		return Run(context.Background(), []string{"init"}, Options{
+			CWD:     dir,
+			HomeDir: home,
+			Stdout:  &stdout,
+			Stderr:  &stderr,
+		})
+	}
+	if code := run(); code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	for _, path := range []string{
+		filepath.Join(home, ".gg", "USER.md"),
+		filepath.Join(home, ".gg", "memory", "MEMORY.md"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("gg init should create %s: %v", path, err)
+		}
+	}
+	// Idempotent: second run keeps the user's USER.md.
+	if err := os.WriteFile(filepath.Join(home, ".gg", "USER.md"), []byte("- Name: Ada\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := run(); code != 0 {
+		t.Fatalf("second init: expected exit 0, got %d: %s", code, stderr.String())
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".gg", "USER.md"))
+	if err != nil || string(data) != "- Name: Ada\n" {
+		t.Fatalf("init must not overwrite USER.md: %q", data)
+	}
+}
+
+func TestRunMemorySearchCommand(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	memDir := filepath.Join(home, ".gg", "memory")
+	if err := os.MkdirAll(memDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(memDir, "MEMORY.md"), []byte("- prefers concise reviews\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	code := Run(context.Background(), []string{"memory", "search", "concise"}, Options{
+		CWD:     dir,
+		HomeDir: home,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "MEMORY.md:1:") || !strings.Contains(stdout.String(), "concise") {
+		t.Fatalf("unexpected search output: %q", stdout.String())
+	}
+}
+
+func TestRunMemoryShowDailyCommand(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	store := newCLITestMemoryStore(t, home)
+	if err := store.AppendDaily("shipped the feature"); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	code := Run(context.Background(), []string{"memory", "show", "daily"}, Options{
+		CWD:     dir,
+		HomeDir: home,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "shipped the feature") {
+		t.Fatalf("unexpected daily output: %q", stdout.String())
 	}
 }

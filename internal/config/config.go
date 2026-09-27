@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/hszjj221/gg/internal/memory"
+	"github.com/hszjj221/gg/internal/userprofile"
 )
 
 const (
@@ -20,6 +23,9 @@ const (
 	DefaultTailTurns        = 6
 	DefaultSummaryMaxTokens = 1200
 	DefaultMemoryMaxTokens  = 1200
+
+	DefaultDailyLogTailTokens    = 500
+	DefaultDailyLogRetentionDays = 90
 
 	ProviderTypeOpenAICompatible = "openai-compatible"
 )
@@ -51,8 +57,11 @@ type ContextConfig struct {
 }
 
 type MemoryConfig struct {
-	Enabled         bool `json:"enabled"`
-	MaxPromptTokens int  `json:"maxPromptTokens"`
+	Enabled               bool   `json:"enabled"`
+	MaxPromptTokens       int    `json:"maxPromptTokens"`
+	Dir                   string `json:"dir"`
+	DailyLogTailTokens    int    `json:"dailyLogTailTokens"`
+	DailyLogRetentionDays int    `json:"dailyLogRetentionDays"`
 }
 
 type Config struct {
@@ -62,15 +71,20 @@ type Config struct {
 	// EmbedBaseURL/EmbedAPIKey optionally override the chat provider's
 	// endpoint for embeddings (used by `gg kb` and the kb_search tool).
 	// Resolved from GG_EMBED_BASE_URL / GG_EMBED_API_KEY.
-	EmbedBaseURL   string
-	EmbedAPIKey    string
-	Provider       string
-	ProviderType   string
-	Selection      string
-	Providers      map[string]ProviderConfig
-	Context        ContextConfig
-	Memory         MemoryConfig
-	MemoryPath     string
+	EmbedBaseURL string
+	EmbedAPIKey  string
+	Provider     string
+	ProviderType string
+	Selection    string
+	Providers    map[string]ProviderConfig
+	Context      ContextConfig
+	Memory       MemoryConfig
+	// MemoryPath is the legacy single-file memory location (~/.gg/memory.md),
+	// kept only for the one-time migration into Memory.Dir. New code uses
+	// Memory.Dir.
+	MemoryPath string
+	// UserFile is the user profile path (~/.gg/USER.md).
+	UserFile       string
 	SessionDir     string
 	KBDir          string
 	CWD            string
@@ -96,8 +110,11 @@ type contextFileConfig struct {
 }
 
 type memoryFileConfig struct {
-	Enabled         *bool `json:"enabled"`
-	MaxPromptTokens *int  `json:"maxPromptTokens"`
+	Enabled               *bool   `json:"enabled"`
+	MaxPromptTokens       *int    `json:"maxPromptTokens"`
+	Dir                   *string `json:"dir"`
+	DailyLogTailTokens    *int    `json:"dailyLogTailTokens"`
+	DailyLogRetentionDays *int    `json:"dailyLogRetentionDays"`
 }
 
 func Resolve(options Options) (Config, error) {
@@ -123,7 +140,7 @@ func Resolve(options Options) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	memoryConfig, err := resolveMemoryConfig(cfgFile.Memory, options.NoMemory)
+	memoryConfig, err := resolveMemoryConfig(home, cfgFile.Memory, options.NoMemory)
 	if err != nil {
 		return Config{}, err
 	}
@@ -133,6 +150,7 @@ func Resolve(options Options) (Config, error) {
 		Context:         contextConfig,
 		Memory:          memoryConfig,
 		MemoryPath:      filepath.Join(home, ".gg", "memory.md"),
+		UserFile:        userprofile.DefaultPath(home),
 		SessionDir:      sessionDir,
 		KBDir:           filepath.Join(home, ".gg", "kb"),
 		CWD:             cwd,
@@ -266,10 +284,13 @@ func resolveContextConfig(file contextFileConfig) (ContextConfig, error) {
 	return cfg, nil
 }
 
-func resolveMemoryConfig(file memoryFileConfig, disabledByCLI bool) (MemoryConfig, error) {
+func resolveMemoryConfig(home string, file memoryFileConfig, disabledByCLI bool) (MemoryConfig, error) {
 	cfg := MemoryConfig{
-		Enabled:         true,
-		MaxPromptTokens: DefaultMemoryMaxTokens,
+		Enabled:               true,
+		MaxPromptTokens:       DefaultMemoryMaxTokens,
+		Dir:                   memory.DefaultDir(home),
+		DailyLogTailTokens:    DefaultDailyLogTailTokens,
+		DailyLogRetentionDays: DefaultDailyLogRetentionDays,
 	}
 	if file.Enabled != nil {
 		cfg.Enabled = *file.Enabled
@@ -277,11 +298,29 @@ func resolveMemoryConfig(file memoryFileConfig, disabledByCLI bool) (MemoryConfi
 	if file.MaxPromptTokens != nil {
 		cfg.MaxPromptTokens = *file.MaxPromptTokens
 	}
+	if file.Dir != nil {
+		cfg.Dir = expandHome(home, *file.Dir)
+	}
+	if file.DailyLogTailTokens != nil {
+		cfg.DailyLogTailTokens = *file.DailyLogTailTokens
+	}
+	if file.DailyLogRetentionDays != nil {
+		cfg.DailyLogRetentionDays = *file.DailyLogRetentionDays
+	}
 	if disabledByCLI {
 		cfg.Enabled = false
 	}
 	if cfg.MaxPromptTokens <= 0 {
 		return MemoryConfig{}, fmt.Errorf("memory.maxPromptTokens must be greater than 0")
+	}
+	if cfg.DailyLogTailTokens < 0 {
+		return MemoryConfig{}, fmt.Errorf("memory.dailyLogTailTokens must not be negative")
+	}
+	if cfg.DailyLogRetentionDays < 0 {
+		return MemoryConfig{}, fmt.Errorf("memory.dailyLogRetentionDays must not be negative")
+	}
+	if strings.TrimSpace(cfg.Dir) == "" {
+		return MemoryConfig{}, fmt.Errorf("memory.dir must not be empty")
 	}
 	return cfg, nil
 }
@@ -308,6 +347,18 @@ func contains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// expandHome expands a leading "~/" in a configured path against home.
+// Paths without the prefix are returned unchanged.
+func expandHome(home, path string) string {
+	if path == "~" {
+		return home
+	}
+	if strings.HasPrefix(path, "~/") {
+		return filepath.Join(home, strings.TrimPrefix(path, "~/"))
+	}
+	return path
 }
 
 func resolveHomeDir(homeDir string) string {
