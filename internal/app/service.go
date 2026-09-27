@@ -11,6 +11,7 @@ import (
 
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/artifact"
+	"github.com/hszjj221/gg/internal/browser"
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/connector"
 	"github.com/hszjj221/gg/internal/connector/google"
@@ -519,6 +520,15 @@ func defaultTools(cfg config.Config, provider agent.Provider, readRoots []string
 				cfg.CWD,
 				filepath.Join(cfg.HomeDir, ".gg", "media"),
 			}),
+		)
+	}
+	// Browser tools need a local Chromium; they degrade to a clear error
+	// when none is installed.
+	if _, err := browser.FindChromium(); err == nil {
+		toolset = append(toolset,
+			tools.NewBrowserNavigateTool(),
+			tools.NewBrowserReadTool(),
+			tools.NewBrowserScreenshotTool(),
 		)
 	}
 	return toolset
