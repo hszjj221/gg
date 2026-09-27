@@ -25,12 +25,13 @@ import (
 
 // Session owns one headless Chromium + CDP connection.
 type Session struct {
-	cmd     *exec.Cmd
-	ws      *ws.Conn
-	mu      sync.Mutex
-	nextID  int64
-	pending map[int64]chan cdpResult
-	closed  bool
+	cmd        *exec.Cmd
+	ws         *ws.Conn
+	profileDir string
+	mu         sync.Mutex
+	nextID     int64
+	pending    map[int64]chan cdpResult
+	closed     bool
 }
 
 type cdpResult struct {
@@ -92,7 +93,8 @@ func FindChromium() (string, error) {
 }
 
 // Start launches headless Chromium with remote debugging and connects.
-// Callers must call Close.
+// The browser process is detached from ctx: it lives until Close is called,
+// so a session can span multiple agent turns. Callers must call Close.
 func Start(ctx context.Context) (*Session, error) {
 	bin, err := FindChromium()
 	if err != nil {
@@ -107,15 +109,23 @@ func Start(ctx context.Context) (*Session, error) {
 		os.RemoveAll(profileDir)
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, bin,
+	args := []string{
 		"--headless=new",
 		"--disable-gpu",
-		"--no-sandbox",
 		"--disable-dev-shm-usage",
 		"--remote-debugging-port=0",
-		"--user-data-dir="+profileDir,
+		"--user-data-dir=" + profileDir,
 		"about:blank",
-	)
+	}
+	// The sandbox is a meaningful security boundary when visiting arbitrary
+	// pages; only disable it when explicitly asked (e.g. containers where
+	// the kernel forbids sandboxing).
+	if os.Getenv("GG_BROWSER_NO_SANDBOX") == "1" {
+		args = append([]string{"--no-sandbox"}, args...)
+	}
+	// Detached from ctx: killing the browser is Close's job, not the
+	// caller's context cancellation.
+	cmd := exec.Command(bin, args...)
 	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		stderr.Close()
@@ -136,7 +146,7 @@ func Start(ctx context.Context) (*Session, error) {
 		os.RemoveAll(profileDir)
 		return nil, fmt.Errorf("browser: dial CDP: %w", err)
 	}
-	s := &Session{cmd: cmd, ws: conn, pending: map[int64]chan cdpResult{}}
+	s := &Session{cmd: cmd, ws: conn, profileDir: profileDir, pending: map[int64]chan cdpResult{}}
 	go s.readLoop()
 	// Enable the domains we use.
 	if _, err := s.call(ctx, "Page.enable", nil); err != nil {
@@ -295,32 +305,51 @@ func (s *Session) call(ctx context.Context, method string, params any) (json.Raw
 func (s *Session) Navigate(ctx context.Context, url string) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	if _, err := s.call(ctx, "Page.navigate", map[string]any{"url": url}); err != nil {
+	raw, err := s.call(ctx, "Page.navigate", map[string]any{"url": url})
+	if err != nil {
 		return err
 	}
-	// Poll document.readyState until complete.
+	// Surface navigation failures (DNS/TLS/refused): CDP reports them in
+	// the result's errorText, not as a protocol error.
+	var navRes struct {
+		LoaderID  string `json:"loaderId"`
+		ErrorText string `json:"errorText"`
+	}
+	if json.Unmarshal(raw, &navRes) == nil && navRes.ErrorText != "" {
+		return fmt.Errorf("browser: navigation to %s failed: %s", url, navRes.ErrorText)
+	}
+	// Wait for the NEW document: poll until readyState is complete AND the
+	// URL matches (the old document, e.g. about:blank, may already be
+	// "complete" before the new one commits). URLs are normalized for
+	// comparison (trailing slash, fragment).
 	for {
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("browser: navigation to %s timed out", url)
 		default:
 		}
-		raw, err := s.call(ctx, "Runtime.evaluate", map[string]any{
-			"expression": "document.readyState", "returnByValue": true,
-		})
-		if err != nil {
-			return err
+		state, uerr := s.Evaluate(ctx, "document.readyState")
+		if uerr != nil {
+			return uerr
 		}
-		var out struct {
-			Result struct {
-				Value string `json:"value"`
-			} `json:"result"`
+		href, herr := s.Evaluate(ctx, "location.href")
+		if herr != nil {
+			return herr
 		}
-		if json.Unmarshal(raw, &out) == nil && out.Result.Value == "complete" {
+		if state == `"complete"` && normalizeURL(strings.Trim(href, `"`)) == normalizeURL(url) {
 			return nil
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
+}
+
+// normalizeURL trims fragments and trailing slashes for navigation
+// comparison.
+func normalizeURL(u string) string {
+	if i := strings.Index(u, "#"); i >= 0 {
+		u = u[:i]
+	}
+	return strings.TrimSuffix(u, "/")
 }
 
 // Evaluate runs JS in the page and returns the JSON-encoded value.
@@ -413,6 +442,9 @@ func (s *Session) Close() error {
 	if s.cmd != nil && s.cmd.Process != nil {
 		_ = s.cmd.Process.Kill()
 		_, _ = s.cmd.Process.Wait()
+	}
+	if s.profileDir != "" {
+		os.RemoveAll(s.profileDir)
 	}
 	return nil
 }

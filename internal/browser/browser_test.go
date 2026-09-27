@@ -142,3 +142,30 @@ func TestPageTargetURLNone(t *testing.T) {
 		t.Fatal("expected error when no page target")
 	}
 }
+
+func TestNavigateSurfacesErrorText(t *testing.T) {
+	t.Helper()
+	ln, addr := listenTCP(t)
+	go serveFakeCDPWithNavigateError(ln, "net::ERR_NAME_NOT_RESOLVED")
+	t.Cleanup(func() { ln.Close() })
+	c, err := ws.Dial("ws://"+addr+"/cdp", 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Session{ws: c, pending: map[int64]chan cdpResult{}}
+	defer s.Close()
+	go s.readLoop()
+	err = s.Navigate(context.Background(), "https://nonexistent.invalid")
+	if err == nil || !strings.Contains(err.Error(), "ERR_NAME_NOT_RESOLVED") {
+		t.Fatalf("expected DNS error, got %v", err)
+	}
+}
+
+func TestNormalizeURL(t *testing.T) {
+	if normalizeURL("https://example.com/") != normalizeURL("https://example.com") {
+		t.Fatal("trailing slash should normalize")
+	}
+	if normalizeURL("https://example.com/#frag") != "https://example.com" {
+		t.Fatal("fragment should strip")
+	}
+}

@@ -7,7 +7,7 @@ import (
 )
 
 func TestBrowserNavigateRejectsNonHTTP(t *testing.T) {
-	tool := NewBrowserNavigateTool()
+	tool := NewBrowserNavigateTool(NewBrowserSessionPool())
 	for _, url := range []string{"file:///etc/passwd", "javascript:alert(1)", "ftp://x/y"} {
 		raw, _ := json.Marshal(map[string]string{"url": url})
 		res := tool.Execute(context.Background(), raw)
@@ -19,9 +19,9 @@ func TestBrowserNavigateRejectsNonHTTP(t *testing.T) {
 
 func TestBrowserToolDefinitions(t *testing.T) {
 	tools := []Tool{
-		NewBrowserNavigateTool(),
-		NewBrowserReadTool(),
-		NewBrowserScreenshotTool(),
+		NewBrowserNavigateTool(NewBrowserSessionPool()),
+		NewBrowserReadTool(NewBrowserSessionPool()),
+		NewBrowserScreenshotTool(NewBrowserSessionPool()),
 	}
 	seen := map[string]bool{}
 	for _, tool := range tools {

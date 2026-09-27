@@ -194,11 +194,21 @@ func (c *Conn) readFrame() (fin bool, opcode byte, payload []byte, err error) {
 }
 
 func (c *Conn) writeControl(opcode byte, payload []byte) error {
-	hdr := []byte{0x80 | opcode, byte(len(payload))}
+	// Clients must mask all frames, including control frames (RFC 6455 §5.3).
+	var mask [4]byte
+	if _, err := rand.Read(mask[:]); err != nil {
+		return err
+	}
+	hdr := []byte{0x80 | opcode, 0x80 | byte(len(payload))}
+	hdr = append(hdr, mask[:]...)
+	masked := make([]byte, len(payload))
+	for i := range payload {
+		masked[i] = payload[i] ^ mask[i%4]
+	}
 	if _, err := c.rw.Write(hdr); err != nil {
 		return err
 	}
-	if _, err := c.rw.Write(payload); err != nil {
+	if _, err := c.rw.Write(masked); err != nil {
 		return err
 	}
 	return c.rw.Flush()

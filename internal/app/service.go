@@ -523,12 +523,14 @@ func defaultTools(cfg config.Config, provider agent.Provider, readRoots []string
 		)
 	}
 	// Browser tools need a local Chromium; they degrade to a clear error
-	// when none is installed.
+	// when none is installed. The pool scopes one Chromium session to this
+	// Service (one conversation).
 	if _, err := browser.FindChromium(); err == nil {
+		pool := tools.NewBrowserSessionPool()
 		toolset = append(toolset,
-			tools.NewBrowserNavigateTool(),
-			tools.NewBrowserReadTool(),
-			tools.NewBrowserScreenshotTool(),
+			tools.NewBrowserNavigateTool(pool),
+			tools.NewBrowserReadTool(pool),
+			tools.NewBrowserScreenshotTool(pool),
 		)
 	}
 	return toolset
