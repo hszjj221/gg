@@ -95,6 +95,13 @@ func NewClient(store *connector.Store, cfg Config) (*Client, error) {
 			c.flowCfg.ClientID = tok.ClientID
 			c.flowCfg.ClientSecret = tok.ClientSecret
 		}
+	} else if c.flowCfg.ClientSecret == "" {
+		// Same client ID from config but no secret: pick up the secret
+		// saved at connect time, so refresh works for clients that
+		// require one.
+		if tok, err := store.Load(Name); err == nil && tok.ClientID == c.flowCfg.ClientID {
+			c.flowCfg.ClientSecret = tok.ClientSecret
+		}
 	}
 	c.http = &http.Client{Transport: &authTransport{client: c}}
 	if cfg.HTTPClient != nil {

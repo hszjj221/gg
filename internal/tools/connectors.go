@@ -205,7 +205,9 @@ func (t CalendarAgendaTool) Execute(ctx context.Context, raw json.RawMessage) To
 		end := e.End.In(t.loc)
 		if e.AllDay {
 			// All-day events need their date: the agenda can span days.
-			fmt.Fprintf(&b, "- %s \u2014 %s (all day)\n", e.Summary, start.Format("2006-01-02"))
+			// The date is date-only (parsed as midnight UTC); format in UTC
+			// so timezones west of UTC don't show the previous day.
+			fmt.Fprintf(&b, "- %s \u2014 %s (all day)\n", e.Summary, start.UTC().Format("2006-01-02"))
 		} else if start.Format("2006-01-02") == end.Format("2006-01-02") {
 			fmt.Fprintf(&b, "- %s \u2014 %s to %s\n",
 				e.Summary, start.Format("01-02 15:04"), end.Format("15:04"))
@@ -275,6 +277,11 @@ func (t CalendarCreateTool) ApprovalRequest(raw json.RawMessage) (agent.Approval
 }
 
 func (t CalendarCreateTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {
+	// A bad profile timezone must not silently fall back to time.Local and
+	// create the event at the wrong instant.
+	if t.tzErr != nil {
+		return errorResult(t.tzErr)
+	}
 	var input calendarCreateInput
 	if err := json.Unmarshal(raw, &input); err != nil {
 		return errorResult(fmt.Errorf("invalid calendar_create arguments: %w", err))
