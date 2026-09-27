@@ -106,6 +106,9 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	if parsed.Command == cli.CommandMedia {
 		return runMediaCommand(ctx, cfg, parsed.MediaArgs, stdout, stderr)
 	}
+	if parsed.Command == cli.CommandBrowser {
+		return runBrowserCommand(ctx, parsed.BrowserArgs, stdout, stderr)
+	}
 	personal, notice, err := app.SetupPersonal(cfg)
 	if err != nil {
 		fmt.Fprintln(stderr, err)

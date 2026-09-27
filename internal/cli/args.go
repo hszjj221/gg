@@ -51,6 +51,8 @@ type Args struct {
 	ConnectArgs []string
 	// MediaArgs carries the subcommand for `gg media ...`.
 	MediaArgs []string
+	// BrowserArgs carries the subcommand for `gg browser ...`.
+	BrowserArgs []string
 }
 
 type Command string
@@ -67,6 +69,7 @@ const (
 	CommandLibrary      Command = "library"
 	CommandConnect      Command = "connect"
 	CommandMedia        Command = "media"
+	CommandBrowser      Command = "browser"
 )
 
 func Parse(argv []string) (Args, error) {
@@ -208,6 +211,15 @@ func parseCommand(args *Args, rest []string) error {
 		} else {
 			args.Prompt = strings.Join(rest, " ")
 		}
+	case "browser":
+		// `gg browser` alone or with a known subcommand drives headless
+		// Chromium; anything else stays a prompt.
+		if len(rest) == 1 || isBrowserSubcommand(rest[1]) {
+			args.Command = CommandBrowser
+			args.BrowserArgs = rest[1:]
+		} else {
+			args.Prompt = strings.Join(rest, " ")
+		}
 	default:
 		args.Prompt = strings.Join(rest, " ")
 	}
@@ -245,6 +257,15 @@ func isLibrarySubcommand(word string) bool {
 func isMediaSubcommand(word string) bool {
 	switch word {
 	case "image", "tts", "stt":
+		return true
+	}
+	return false
+}
+
+// isBrowserSubcommand reports whether word is a `gg browser` subcommand.
+func isBrowserSubcommand(word string) bool {
+	switch word {
+	case "shot", "read":
 		return true
 	}
 	return false
@@ -359,6 +380,8 @@ Usage:
   gg media image "prompt"              generate image(s), save PNG(s)
   gg media tts "text"                  synthesize speech, save audio
   gg media stt <audio-file>             transcribe audio to text
+  gg browser shot <url>                screenshot a page with headless Chromium
+  gg browser read <url>                print a page's rendered text
 
 Running gg without a prompt starts the TUI interactive mode when stdin/stdout are terminals.
 

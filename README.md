@@ -271,6 +271,11 @@ Media & voice (OpenAI-compatible `/v1/images/generations`, `/v1/audio/speech`, `
 - `gg media image "prompt"`, `gg media tts "text"`, `gg media stt <audio-file>`. Defaults to the chat provider's base URL / API key; override with `GG_MEDIA_BASE_URL` / `GG_MEDIA_API_KEY` / `GG_MEDIA_{IMAGE,TTS,STT}_MODEL`. See `docs/media.md`.
 - The agent gets `image_generate` (needs approval), `tts`, and `stt` tools; generated files land in `~/.gg/media/`.
 
+Browser (headless Chromium over CDP, read + screenshot in this phase):
+
+- `gg browser shot <url>`, `gg browser read <url>`. Needs a local Chromium binary (`chromium` / `google-chrome`, or `GG_CHROMIUM`); only `http(s)` URLs are allowed. See `docs/browser.md`.
+- The agent gets `browser_navigate`, `browser_read`, `browser_screenshot` (only registered when Chromium is installed); screenshots land in `~/.gg/media/screenshots/`.
+
 ## Skills
 
 `gg` loads Codex-style skills from `.agents/skills` by default. Project skills in the current directory or its parents take precedence over global skills in `~/.agents/skills`.
