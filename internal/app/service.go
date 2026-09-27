@@ -555,7 +555,7 @@ func userLocation(profile userprofile.Profile) (*time.Location, error) {
 		if loc, err := time.LoadLocation(profile.Timezone); err == nil {
 			return loc, nil
 		}
-		return time.Local, fmt.Errorf("profile timezone %q is not a valid IANA name; fix it with gg profile or unset it", profile.Timezone)
+		return time.Local, fmt.Errorf("profile timezone %q is not a valid IANA name; edit ~/.gg/USER.md to fix or unset it", profile.Timezone)
 	}
 	return time.Local, nil
 }
