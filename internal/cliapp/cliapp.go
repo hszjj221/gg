@@ -31,6 +31,9 @@ type Options struct {
 	HomeDir         string
 	IsTerminal      func(any) bool
 	ProviderFactory func(config.Config) agent.Provider
+	// NoSkills mirrors cli.Args.NoSkills for subcommands that load skills
+	// themselves (e.g. `gg job run`).
+	NoSkills bool
 }
 
 func Run(ctx context.Context, argv []string, options Options) int {
@@ -86,6 +89,10 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	}
 	if parsed.Command == cli.CommandMemory {
 		return runMemoryCommand(cfg, parsed.MemoryArgs, stdout, stderr)
+	}
+	if parsed.Command == cli.CommandJob {
+		options.NoSkills = parsed.NoSkills
+		return runJobCommand(ctx, cfg, options, parsed.JobArgs, stdout, stderr)
 	}
 	personal, notice, err := app.SetupPersonal(cfg)
 	if err != nil {

@@ -49,6 +49,7 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		noSkills       bool
 		noMemory       bool
 		noContextFiles bool
+		noScheduler    bool
 		showVersion    bool
 	)
 	fs.StringVar(&httpAddress, "http", "", "serve HTTP on an address such as 127.0.0.1:8765; otherwise use stdio")
@@ -62,6 +63,7 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	fs.BoolVar(&noSkills, "no-skills", false, "disable skills discovery")
 	fs.BoolVar(&noMemory, "no-memory", false, "disable memory")
 	fs.BoolVar(&noContextFiles, "no-context-files", false, "disable AGENTS.md discovery")
+	fs.BoolVar(&noScheduler, "no-scheduler", false, "disable the background job scheduler")
 	fs.BoolVar(&showVersion, "version", false, "show version")
 	if err := fs.Parse(argv); err != nil {
 		return 2
@@ -128,6 +130,18 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		return 1
 	}
 	rpc := jsonrpc.NewHandlerWithContext(ctx, workspace)
+	cleanupPid, err := WritePidFile(cfg.HomeDir)
+	if err != nil {
+		fmt.Fprintln(stderr, "warning: "+err.Error())
+	} else {
+		defer cleanupPid()
+	}
+	if !noScheduler {
+		if err := startScheduler(ctx, cfg, workspace, stderr); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
 	if httpAddress == "" {
 		if err := stdio.NewServer(rpc, stdin, stdout).Serve(ctx); err != nil && ctx.Err() == nil {
 			fmt.Fprintln(stderr, err)

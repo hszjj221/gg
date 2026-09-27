@@ -20,6 +20,7 @@
 - 内置代码工具：`read`、`list`、`grep`、`bash`、`edit`、`write`
 - 用于聚焦代码库调研的同步只读 `subagent` 工具
 - 本地 RAG 知识库：`gg kb index` 索引 + agent 可调用的 `kb_search` 工具
+- 定时后台任务（`gg job ...`），在 `ggd` daemon 存活时触发
 - 可复用的 Go conversation runtime，同一套会话与 Agent 核心可供 TUI、Web 和桌面端使用
 - Bubble Tea TUI，以及共享 React UI 的 Web/Electron 客户端
 
@@ -239,6 +240,17 @@ Token 消耗：
 - `gg kb search <query>` 在命令行对索引做语义检索。
 - 默认知识库建成后，agent 会自动获得 `kb_search` 工具，用于回答关于已索引语料的问题。
 - `gg kb eval --cases docs/kb-eval-sample.jsonl` 评测检索 recall@k。架构说明见 `docs/rag.md`。
+
+定时任务：
+
+- `gg job add --cron "0 9 * * *" --name "morning brief" "总结今日日程"` 创建周期任务；`--at "2026-09-28 15:04"` 或 `--in 20m` 创建一次性任务。
+- 任务只在 `ggd` daemon 存活时触发（Linux/macOS；`ggd --no-scheduler` 可关闭调度循环）。CLI 本身不跑调度循环。
+- 每次触发会开一个全新 session（`scheduler/<job>-<time>`）跑一轮 agent，可用 `gg resume` 审计，记录见 `gg job log`。
+- 无人值守运行时，默认拒绝需要审批的工具；`job add` 时加 `--allow-all` 才会放行。只给可信任务开这个选项。
+- cron 是 5 字段分钟级；`--timezone` 设置 IANA 时区（默认取用户画像时区，再 fallback 本地）。daemon 重启不会补跑错过的 cron；已过期但从未运行的一次性任务会在启动时补跑一次。
+- 每个任务绑定创建时的 workspace（`gg job show` 可查）；daemon 只触发自己 workspace 的任务，在 A 仓库加的任务不会跑到 B 仓库里。每个 scheduler 目录只跑一个 `ggd`。
+- `gg job list [--all]`、`gg job show|pause|resume|remove <id|name>`、`gg job log [--job <id|name>] [--limit N]`、`gg job run <id|name>`（立即跑一次，不改变排期）。`gg job remove` 之后仍可用 id 查审计日志。
+- 状态存在 `~/.gg/scheduler/`（`jobs.json`、`runs.jsonl`），用文件锁保证 CLI 和 daemon 并发更新不损坏。状态文件仅 owner 可读写（0600），目录 0700，与 session、memory 一致。
 
 ## Skills
 

@@ -64,6 +64,11 @@ type MemoryConfig struct {
 	DailyLogRetentionDays int    `json:"dailyLogRetentionDays"`
 }
 
+// SchedulerConfig locates the scheduler's persisted state.
+type SchedulerConfig struct {
+	Dir string `json:"dir"`
+}
+
 type Config struct {
 	APIKey  string
 	BaseURL string
@@ -79,12 +84,15 @@ type Config struct {
 	Providers    map[string]ProviderConfig
 	Context      ContextConfig
 	Memory       MemoryConfig
+	Scheduler    SchedulerConfig
 	// MemoryPath is the legacy single-file memory location (~/.gg/memory.md),
 	// kept only for the one-time migration into Memory.Dir. New code uses
 	// Memory.Dir.
 	MemoryPath string
 	// UserFile is the user profile path (~/.gg/USER.md).
-	UserFile       string
+	UserFile string
+	// HomeDir is the resolved home directory (options.HomeDir or os.UserHomeDir).
+	HomeDir        string
 	SessionDir     string
 	KBDir          string
 	CWD            string
@@ -99,6 +107,7 @@ type fileConfig struct {
 	Providers map[string]ProviderConfig `json:"providers"`
 	Context   contextFileConfig         `json:"context"`
 	Memory    memoryFileConfig          `json:"memory"`
+	Scheduler schedulerFileConfig       `json:"scheduler"`
 }
 
 type contextFileConfig struct {
@@ -115,6 +124,10 @@ type memoryFileConfig struct {
 	Dir                   *string `json:"dir"`
 	DailyLogTailTokens    *int    `json:"dailyLogTailTokens"`
 	DailyLogRetentionDays *int    `json:"dailyLogRetentionDays"`
+}
+
+type schedulerFileConfig struct {
+	Dir *string `json:"dir"`
 }
 
 func Resolve(options Options) (Config, error) {
@@ -151,8 +164,10 @@ func Resolve(options Options) (Config, error) {
 		Memory:          memoryConfig,
 		MemoryPath:      filepath.Join(home, ".gg", "memory.md"),
 		UserFile:        userprofile.DefaultPath(home),
+		HomeDir:         home,
 		SessionDir:      sessionDir,
 		KBDir:           filepath.Join(home, ".gg", "kb"),
+		Scheduler:       resolveSchedulerConfig(home, cfgFile.Scheduler),
 		CWD:             cwd,
 		NoContextFiles:  options.NoContextFiles,
 		EmbedBaseURL:    os.Getenv("GG_EMBED_BASE_URL"),
@@ -282,6 +297,16 @@ func resolveContextConfig(file contextFileConfig) (ContextConfig, error) {
 		return ContextConfig{}, fmt.Errorf("context.summaryMaxTokens must be greater than 0")
 	}
 	return cfg, nil
+}
+
+// resolveSchedulerConfig locates the scheduler state dir, defaulting to
+// ~/.gg/scheduler. A configured dir supports the ~/ prefix like memory.dir.
+func resolveSchedulerConfig(home string, file schedulerFileConfig) SchedulerConfig {
+	dir := filepath.Join(home, ".gg", "scheduler")
+	if file.Dir != nil && strings.TrimSpace(*file.Dir) != "" {
+		dir = expandHome(home, *file.Dir)
+	}
+	return SchedulerConfig{Dir: dir}
 }
 
 func resolveMemoryConfig(home string, file memoryFileConfig, disabledByCLI bool) (MemoryConfig, error) {
