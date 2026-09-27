@@ -95,6 +95,10 @@ func runConnectGoogle(ctx context.Context, cfg config.Config, store *connector.S
 	if len(tok.Scopes) == 0 {
 		tok.Scopes = google.Scopes
 	}
+	// Persist the client credentials with the connection: a later agent
+	// process must be able to refresh without --client-id being passed again.
+	tok.ClientID = id
+	tok.ClientSecret = secret
 	if err := store.Save(google.Name, tok); err != nil {
 		fmt.Fprintln(stderr, "保存 token 失败：", err)
 		return 1

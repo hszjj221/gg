@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/hszjj221/gg/internal/connector"
 	"github.com/hszjj221/gg/internal/filelock"
@@ -88,6 +87,15 @@ func NewClient(store *connector.Store, cfg Config) (*Client, error) {
 			HTTPClient:   cfg.HTTPClient,
 		},
 	}
+	// The credentials given at connect time are persisted with the token:
+	// a later process (agent run, daemon) must be able to refresh even when
+	// no client id is configured via flag/env/file.
+	if c.flowCfg.ClientID == "" {
+		if tok, err := store.Load(Name); err == nil {
+			c.flowCfg.ClientID = tok.ClientID
+			c.flowCfg.ClientSecret = tok.ClientSecret
+		}
+	}
 	c.http = &http.Client{Transport: &authTransport{client: c}}
 	if cfg.HTTPClient != nil {
 		c.http.Transport = &authTransport{client: c, base: cfg.HTTPClient.Transport}
@@ -107,7 +115,7 @@ func (c *Client) ensureToken(ctx context.Context) error {
 		c.loaded = true
 	}
 	if c.token.Expired() {
-		if err := c.refreshLocked(ctx); err != nil {
+		if err := c.refreshLocked(ctx, false); err != nil {
 			return err
 		}
 	}
@@ -116,27 +124,66 @@ func (c *Client) ensureToken(ctx context.Context) error {
 
 // refreshLocked refreshes under a cross-process lock so concurrent
 // processes do not double-refresh. The in-process mutex is held too.
-func (c *Client) refreshLocked(ctx context.Context) error {
+// With force=true the token endpoint is always hit (401 path): the stored
+// token may look unexpired yet already be rejected by Google.
+// It never resurrects a removed connection: if the token file was deleted
+// (gg connect remove) or replaced (re-authorize --force) while the refresh
+// was in flight, the save is skipped.
+func (c *Client) refreshLocked(ctx context.Context, force bool) error {
 	unlock, err := filelock.Lock(c.store.Dir() + "/google-refresh.lock")
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	// Another process may have refreshed while we waited.
-	if tok, err := c.store.Load(Name); err == nil && !tok.Expired() {
-		c.token = tok
-		return nil
-	}
-	tok, err := connector.RefreshToken(ctx, c.flowCfg, c.token.RefreshToken)
+	stored, err := c.store.Load(Name)
 	if err != nil {
 		return err
 	}
-	tok.Scopes = Scopes
+	if stored.RefreshToken == "" {
+		return fmt.Errorf("connector %s has no refresh token; run gg connect %s again", Name, Name)
+	}
+	// Another process may have refreshed while we waited.
+	if !force && !stored.Expired() {
+		c.token = stored
+		return nil
+	}
+	if c.flowCfg.ClientID == "" {
+		return fmt.Errorf("missing Google OAuth client id; reconnect with gg connect google --client-id ID")
+	}
+	tok, err := connector.RefreshToken(ctx, c.flowCfg, stored.RefreshToken)
+	if err != nil {
+		return err
+	}
+	// Generation check: skip the save when the connection changed under us.
+	current, err := c.store.Load(Name)
+	if err != nil {
+		return fmt.Errorf("connector %s was disconnected during refresh; run gg connect %s again", Name, Name)
+	}
+	if current.RefreshToken != stored.RefreshToken {
+		// Re-authorized concurrently: adopt the newer token, never
+		// overwrite it with this stale refresh.
+		c.token = current
+		return nil
+	}
+	// Keep what the refresh response does not carry.
+	if len(tok.Scopes) == 0 {
+		tok.Scopes = stored.Scopes
+	}
+	tok.ClientID = stored.ClientID
+	tok.ClientSecret = stored.ClientSecret
 	if err := c.store.Save(Name, tok); err != nil {
 		return fmt.Errorf("save refreshed token: %w", err)
 	}
 	c.token = tok
 	return nil
+}
+
+// forceRefresh hits the token endpoint regardless of the stored expiry
+// (used after a 401).
+func (c *Client) forceRefresh(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.refreshLocked(ctx, true)
 }
 
 type authTransport struct {
@@ -161,6 +208,14 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	send := func(token string) (*http.Response, error) {
 		r2 := req.Clone(req.Context())
+		// Clone keeps the (already consumed) body; rebuild it for the retry.
+		if req.GetBody != nil {
+			body, err := req.GetBody()
+			if err != nil {
+				return nil, err
+			}
+			r2.Body = body
+		}
 		r2.Header.Set("Authorization", "Bearer "+token)
 		return t.baseRT().RoundTrip(r2)
 	}
@@ -172,11 +227,9 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return resp, nil
 	}
 	resp.Body.Close()
-	// One retry with a forced refresh.
-	t.client.mu.Lock()
-	t.client.token.Expiry = time.Now().Add(-time.Minute)
-	t.client.mu.Unlock()
-	if err := t.client.ensureToken(req.Context()); err != nil {
+	// One retry with a forced refresh: the stored token may look unexpired
+	// yet already be rejected, so bypass the expiry check.
+	if err := t.client.forceRefresh(req.Context()); err != nil {
 		return nil, err
 	}
 	t.client.mu.Lock()

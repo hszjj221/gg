@@ -153,13 +153,17 @@ func (t GmailSendTool) Execute(ctx context.Context, raw json.RawMessage) ToolRes
 type CalendarAgendaTool struct {
 	client *google.Client
 	loc    *time.Location
+	// tzErr is set when the profile timezone is configured but invalid: the
+	// tool refuses to run rather than silently interpreting wall-clock input
+	// in the wrong zone.
+	tzErr error
 }
 
-func NewCalendarAgendaTool(client *google.Client, loc *time.Location) CalendarAgendaTool {
+func NewCalendarAgendaTool(client *google.Client, loc *time.Location, tzErr error) CalendarAgendaTool {
 	if loc == nil {
 		loc = time.Local
 	}
-	return CalendarAgendaTool{client: client, loc: loc}
+	return CalendarAgendaTool{client: client, loc: loc, tzErr: tzErr}
 }
 
 func (t CalendarAgendaTool) Name() string { return "calendar_agenda" }
@@ -171,13 +175,16 @@ func (t CalendarAgendaTool) Definition() agent.ToolDefinition {
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"days": map[string]any{"type": "integer", "description": "Number of days from today (default 1)."},
+				"days": map[string]any{"type": "integer", "minimum": 1, "maximum": 30, "description": "Number of days from today (default 1, max 30)."},
 			},
 		},
 	}
 }
 
 func (t CalendarAgendaTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {
+	if t.tzErr != nil {
+		return errorResult(t.tzErr)
+	}
 	var input struct {
 		Days int `json:"days"`
 	}
@@ -194,11 +201,19 @@ func (t CalendarAgendaTool) Execute(ctx context.Context, raw json.RawMessage) To
 	}
 	var b strings.Builder
 	for _, e := range events {
+		start := e.Start.In(t.loc)
+		end := e.End.In(t.loc)
 		if e.AllDay {
-			fmt.Fprintf(&b, "- %s (all day)\n", e.Summary)
+			// All-day events need their date: the agenda can span days.
+			fmt.Fprintf(&b, "- %s \u2014 %s (all day)\n", e.Summary, start.Format("2006-01-02"))
+		} else if start.Format("2006-01-02") == end.Format("2006-01-02") {
+			fmt.Fprintf(&b, "- %s \u2014 %s to %s\n",
+				e.Summary, start.Format("01-02 15:04"), end.Format("15:04"))
 		} else {
-			fmt.Fprintf(&b, "- %s — %s to %s\n",
-				e.Summary, e.Start.In(t.loc).Format("01-02 15:04"), e.End.In(t.loc).Format("15:04"))
+			// Overnight: show the end date so it doesn't read as ending
+			// before it starts.
+			fmt.Fprintf(&b, "- %s \u2014 %s to %s\n",
+				e.Summary, start.Format("01-02 15:04"), end.Format("01-02 15:04"))
 		}
 	}
 	return textResult(strings.TrimSpace(b.String()))
@@ -208,13 +223,14 @@ func (t CalendarAgendaTool) Execute(ctx context.Context, raw json.RawMessage) To
 type CalendarCreateTool struct {
 	client *google.Client
 	loc    *time.Location
+	tzErr  error
 }
 
-func NewCalendarCreateTool(client *google.Client, loc *time.Location) CalendarCreateTool {
+func NewCalendarCreateTool(client *google.Client, loc *time.Location, tzErr error) CalendarCreateTool {
 	if loc == nil {
 		loc = time.Local
 	}
-	return CalendarCreateTool{client: client, loc: loc}
+	return CalendarCreateTool{client: client, loc: loc, tzErr: tzErr}
 }
 
 func (t CalendarCreateTool) Name() string { return "calendar_create" }

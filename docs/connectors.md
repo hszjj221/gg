@@ -31,6 +31,8 @@ gg 是开源软件，不能内置 Google OAuth 凭据。你需要自己创建一
 
 Desktop app 类型不需要 client secret（走 PKCE）。个人使用时，Google Cloud 项目保持"测试模式"即可（`gmail.send` 是敏感 scope，测试模式下自用足够；要公开发布再走 Google 验证）。
 
+> 注意：测试模式下 refresh token **7 天过期**（Google 规定，Gmail/Calendar 这类敏感 scope 不豁免）。7 天后需要重新 `gg connect google` 走一遍授权。长期使用请把 OAuth 同意屏幕设为"已发布"（需要 Google 验证，或保持测试用户列表里有你自己——发布后测试用户限制解除，token 不再 7 天过期）。
+
 Client ID 也可以写进 `~/.gg/config.json` 或环境变量，避免每次传 flag：
 
 ```json

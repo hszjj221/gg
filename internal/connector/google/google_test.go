@@ -281,13 +281,50 @@ func TestAutoRefresh(t *testing.T) {
 func TestAPIError(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/gmail/v1/users/me/messages", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(401)
-		w.Write([]byte(`{"error":{"code":401,"message":"Invalid credentials"}}`))
+		w.WriteHeader(403)
+		w.Write([]byte(`{"error":{"code":403,"message":"Insufficient permission"}}`))
 	})
 	c := testClient(t, mux, freshToken())
 	_, err := c.Search(context.Background(), "x", 1)
-	if err == nil || !strings.Contains(err.Error(), "Invalid credentials") {
+	if err == nil || !strings.Contains(err.Error(), "Insufficient permission") {
 		t.Fatalf("expected api error, got %v", err)
+	}
+}
+
+func TestAPIError401RefreshFailure(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(400)
+		w.Write([]byte(`{"error":"invalid_grant","error_description":"revoked"}`))
+	})
+	mux.HandleFunc("/gmail/v1/users/me/messages", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+		w.Write([]byte(`{"error":{"code":401,"message":"Invalid credentials"}}`))
+	})
+	api := httptest.NewServer(mux)
+	t.Cleanup(api.Close)
+	oldAPI, oldCal := APIBase, CalBase
+	APIBase, CalBase = api.URL, api.URL
+	t.Cleanup(func() { APIBase, CalBase = oldAPI, oldCal })
+
+	store, err := connector.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok := freshToken()
+	tok.ClientID = "cid"
+	if err := store.Save(Name, tok); err != nil {
+		t.Fatal(err)
+	}
+	c, err := NewClient(store, Config{TokenURL: api.URL + "/token", HTTPClient: api.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 401 triggers a forced refresh; the revoked refresh token surfaces
+	// invalid_grant instead of retrying with the dead token.
+	_, err = c.Search(context.Background(), "x", 1)
+	if err == nil || !strings.Contains(err.Error(), "invalid_grant") {
+		t.Fatalf("expected invalid_grant, got %v", err)
 	}
 }
 
@@ -302,5 +339,222 @@ func TestParseDateTime(t *testing.T) {
 	}
 	if _, err := ParseDateTime("tomorrow", loc); err == nil {
 		t.Fatal("expected error for garbage input")
+	}
+}
+
+func TestReadNestedMIME(t *testing.T) {
+	body := base64.RawURLEncoding.EncodeToString([]byte("nested hello"))
+	mux := http.NewServeMux()
+	mux.HandleFunc("/gmail/v1/users/me/messages/m1", func(w http.ResponseWriter, r *http.Request) {
+		// multipart/mixed -> multipart/alternative -> text/plain
+		json.NewEncoder(w).Encode(map[string]any{
+			"id": "m1",
+			"payload": map[string]any{
+				"headers":  []map[string]string{{"name": "Subject", "value": "nested"}},
+				"mimeType": "multipart/mixed",
+				"parts": []map[string]any{
+					{
+						"mimeType": "multipart/alternative",
+						"parts": []map[string]any{
+							{"mimeType": "text/plain", "body": map[string]string{"data": body}},
+							{"mimeType": "text/html", "body": map[string]string{"data": "aGk="}},
+						},
+					},
+					{"mimeType": "application/pdf", "body": map[string]string{"data": "e30="}},
+				},
+			},
+		})
+	})
+	c := testClient(t, mux, freshToken())
+	msg, err := c.Read(context.Background(), "m1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.Body != "nested hello" {
+		t.Fatalf("body = %q", msg.Body)
+	}
+}
+
+func TestSendRejectsHeaderInjection(t *testing.T) {
+	mux := http.NewServeMux()
+	c := testClient(t, mux, freshToken())
+	if _, err := c.Send(context.Background(), "a@b.c\r\nBcc: evil@x.y", "s", "b"); err == nil {
+		t.Fatal("expected error for CRLF in To")
+	}
+	if _, err := c.Send(context.Background(), "a@b.c", "s\r\nX-Extra: 1", "b"); err == nil {
+		t.Fatal("expected error for CRLF in Subject")
+	}
+	if _, err := c.Send(context.Background(), "not-an-address", "s", "b"); err == nil {
+		t.Fatal("expected error for invalid address")
+	}
+}
+
+func TestForceRefreshOn401(t *testing.T) {
+	refreshCalls := 0
+	sawBearer := ""
+	mux := http.NewServeMux()
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		refreshCalls++
+		json.NewEncoder(w).Encode(map[string]any{
+			"access_token": "at-fresh", "expires_in": 3600, "token_type": "Bearer",
+		})
+	})
+	mux.HandleFunc("/gmail/v1/users/me/messages", func(w http.ResponseWriter, r *http.Request) {
+		sawBearer = r.Header.Get("Authorization")
+		if strings.Contains(sawBearer, "at-stale") {
+			w.WriteHeader(401)
+			w.Write([]byte(`{"error":{"code":401,"message":"Invalid credentials"}}`))
+			return
+		}
+		w.Write([]byte(`{"messages":[]}`))
+	})
+	api := httptest.NewServer(mux)
+	t.Cleanup(api.Close)
+	oldAPI, oldCal := APIBase, CalBase
+	APIBase, CalBase = api.URL, api.URL
+	t.Cleanup(func() { APIBase, CalBase = oldAPI, oldCal })
+
+	store, err := connector.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Token looks UNEXPIRED but is rejected by the API: the 401 path must
+	// force a real refresh, not reuse the rejected token.
+	stale := connector.Token{
+		AccessToken: "at-stale", RefreshToken: "rt",
+		Expiry: time.Now().Add(time.Hour), Scopes: Scopes,
+		ClientID: "cid",
+	}
+	if err := store.Save(Name, stale); err != nil {
+		t.Fatal(err)
+	}
+	c, err := NewClient(store, Config{TokenURL: api.URL + "/token", HTTPClient: api.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Search(context.Background(), "x", 1); err != nil {
+		t.Fatal(err)
+	}
+	if refreshCalls != 1 {
+		t.Fatalf("refresh calls = %d, want 1", refreshCalls)
+	}
+	if !strings.Contains(sawBearer, "at-fresh") {
+		t.Fatalf("retry did not use the fresh token: %q", sawBearer)
+	}
+}
+
+func TestRefreshDoesNotResurrectAfterDisconnect(t *testing.T) {
+	mux := http.NewServeMux()
+	release := make(chan struct{})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		<-release // hold the refresh HTTP in flight
+		json.NewEncoder(w).Encode(map[string]any{
+			"access_token": "at-new", "expires_in": 3600, "token_type": "Bearer",
+		})
+	})
+	api := httptest.NewServer(mux)
+	t.Cleanup(api.Close)
+
+	store, err := connector.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := connector.Token{
+		AccessToken: "at-old", RefreshToken: "rt",
+		Expiry: time.Now().Add(-time.Hour), Scopes: Scopes, ClientID: "cid",
+	}
+	if err := store.Save(Name, stale); err != nil {
+		t.Fatal(err)
+	}
+	c, err := NewClient(store, Config{TokenURL: api.URL + "/token", HTTPClient: api.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- c.forceRefresh(context.Background()) }()
+	time.Sleep(200 * time.Millisecond)         // let the refresh HTTP start
+	if err := store.Remove(Name); err != nil { // user disconnects mid-refresh
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-done; err == nil {
+		t.Fatal("expected error when token was removed mid-refresh")
+	}
+	if _, err := store.Load(Name); err == nil {
+		t.Fatal("refresh resurrected the disconnected token")
+	}
+}
+
+func TestNewClientFallsBackToStoredCredentials(t *testing.T) {
+	store, err := connector.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(Name, connector.Token{
+		AccessToken: "at", RefreshToken: "rt", Expiry: time.Now().Add(time.Hour),
+		ClientID: "persisted-id", ClientSecret: "persisted-secret",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := NewClient(store, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.flowCfg.ClientID != "persisted-id" || c.flowCfg.ClientSecret != "persisted-secret" {
+		t.Fatalf("flowCfg = %+v", c.flowCfg)
+	}
+	// Explicit config still wins.
+	c2, err := NewClient(store, Config{ClientID: "explicit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c2.flowCfg.ClientID != "explicit" {
+		t.Fatalf("flowCfg = %+v", c2.flowCfg)
+	}
+}
+
+func TestAgendaPagination(t *testing.T) {
+	pages := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/calendar/v3/calendars/primary/events", func(w http.ResponseWriter, r *http.Request) {
+		pages++
+		out := map[string]any{
+			"items": []map[string]any{{
+				"id": "e1", "summary": "page",
+				"start": map[string]string{"dateTime": "2026-09-28T10:00:00+08:00"},
+				"end":   map[string]string{"dateTime": "2026-09-28T11:00:00+08:00"},
+			}},
+		}
+		if r.URL.Query().Get("pageToken") == "" {
+			out["nextPageToken"] = "tok2"
+		}
+		json.NewEncoder(w).Encode(out)
+	})
+	c := testClient(t, mux, freshToken())
+	events, err := c.Agenda(context.Background(), time.Now(), 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || pages != 2 {
+		t.Fatalf("events=%d pages=%d", len(events), pages)
+	}
+}
+
+func TestAgendaDaysClamp(t *testing.T) {
+	var gotMin, gotMax string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/calendar/v3/calendars/primary/events", func(w http.ResponseWriter, r *http.Request) {
+		gotMin, gotMax = r.URL.Query().Get("timeMin"), r.URL.Query().Get("timeMax")
+		w.Write([]byte(`{"items":[]}`))
+	})
+	c := testClient(t, mux, freshToken())
+	from := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
+	if _, err := c.Agenda(context.Background(), from, 99); err != nil {
+		t.Fatal(err)
+	}
+	min, _ := time.Parse(time.RFC3339, gotMin)
+	max, _ := time.Parse(time.RFC3339, gotMax)
+	if max.Sub(min) != 30*24*time.Hour {
+		t.Fatalf("window = %v to %v, want 30 days", min, max)
 	}
 }

@@ -23,6 +23,11 @@ type Token struct {
 	RefreshToken string    `json:"refresh_token"`
 	Expiry       time.Time `json:"expiry"`
 	Scopes       []string  `json:"scopes"`
+	// ClientID/ClientSecret are persisted so later processes can refresh
+	// without the user re-supplying --client-id. Same 0600 file as the
+	// refresh token; never printed by status or logs.
+	ClientID     string `json:"client_id,omitempty"`
+	ClientSecret string `json:"client_secret,omitempty"`
 }
 
 // Expired reports whether the access token should be refreshed, with a
