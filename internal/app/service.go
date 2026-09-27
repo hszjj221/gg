@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/hszjj221/gg/internal/connector/google"
 	"github.com/hszjj221/gg/internal/contextmgr"
 	"github.com/hszjj221/gg/internal/kb"
+	"github.com/hszjj221/gg/internal/media"
 	"github.com/hszjj221/gg/internal/memory"
 	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/skills"
@@ -500,7 +502,36 @@ func defaultTools(cfg config.Config, provider agent.Provider, readRoots []string
 			}
 		}
 	}
+	// Media tools degrade to absent when the provider base URL is missing.
+	if baseURL := firstNonEmpty(cfg.MediaBaseURL, cfg.BaseURL); baseURL != "" {
+		mclient := media.NewClient(media.Config{
+			BaseURL:    baseURL,
+			APIKey:     firstNonEmpty(cfg.MediaAPIKey, cfg.APIKey),
+			ImageModel: cfg.MediaImageModel,
+			TTSModel:   cfg.MediaTTSModel,
+			STTModel:   cfg.MediaSTTModel,
+			Dir:        filepath.Join(cfg.HomeDir, ".gg", "media"),
+		})
+		toolset = append(toolset,
+			tools.NewImageGenerateTool(mclient),
+			tools.NewTTSTool(mclient),
+			tools.NewSTTToolWithRoots(mclient, []string{
+				cfg.CWD,
+				filepath.Join(cfg.HomeDir, ".gg", "media"),
+			}),
+		)
+	}
 	return toolset
+}
+
+// firstNonEmpty returns the first non-empty string.
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // userLocation resolves the user's timezone for calendar tools. When the

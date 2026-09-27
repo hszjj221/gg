@@ -49,6 +49,8 @@ type Args struct {
 	LibraryArgs []string
 	// ConnectArgs carries the subcommand for `gg connect ...`.
 	ConnectArgs []string
+	// MediaArgs carries the subcommand for `gg media ...`.
+	MediaArgs []string
 }
 
 type Command string
@@ -64,6 +66,7 @@ const (
 	CommandArtifact     Command = "artifact"
 	CommandLibrary      Command = "library"
 	CommandConnect      Command = "connect"
+	CommandMedia        Command = "media"
 )
 
 func Parse(argv []string) (Args, error) {
@@ -196,6 +199,15 @@ func parseCommand(args *Args, rest []string) error {
 		} else {
 			args.Prompt = strings.Join(rest, " ")
 		}
+	case "media":
+		// `gg media` alone or with a known subcommand manages media;
+		// anything else stays a prompt.
+		if len(rest) == 1 || isMediaSubcommand(rest[1]) {
+			args.Command = CommandMedia
+			args.MediaArgs = rest[1:]
+		} else {
+			args.Prompt = strings.Join(rest, " ")
+		}
 	default:
 		args.Prompt = strings.Join(rest, " ")
 	}
@@ -224,6 +236,15 @@ func isArtifactSubcommand(word string) bool {
 func isLibrarySubcommand(word string) bool {
 	switch word {
 	case "add", "list", "remove", "path":
+		return true
+	}
+	return false
+}
+
+// isMediaSubcommand reports whether word is a `gg media` subcommand.
+func isMediaSubcommand(word string) bool {
+	switch word {
+	case "image", "tts", "stt":
 		return true
 	}
 	return false
@@ -335,6 +356,9 @@ Usage:
   gg library add <path> [--name NAME]
   gg library list
   gg connect google [--client-id ID]   connect Gmail + Google Calendar (OAuth)
+  gg media image "prompt"              generate image(s), save PNG(s)
+  gg media tts "text"                  synthesize speech, save audio
+  gg media stt <audio-file>             transcribe audio to text
 
 Running gg without a prompt starts the TUI interactive mode when stdin/stdout are terminals.
 
