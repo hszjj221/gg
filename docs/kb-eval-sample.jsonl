@@ -1,0 +1,14 @@
+# Sample eval cases for the gg knowledge base.
+# Build the index from the gg repo root first:
+#   gg kb index . --name default
+# Then run:
+#   gg kb eval --cases docs/kb-eval-sample.jsonl --top-k 5
+# A case passes when any top-k hit contains "expect" (case-insensitive).
+{"query": "how are chat sessions stored on disk?", "expect": "JSONL"}
+{"query": "what UI framework does the terminal interface use?", "expect": "Bubble Tea"}
+{"query": "which model APIs does gg support?", "expect": "OpenAI-compatible"}
+{"query": "how does the agent remember things across sessions?", "expect": "memory.md"}
+{"query": "how do I give the agent project-specific instructions?", "expect": "AGENTS.md"}
+{"query": "how can I list my previous sessions?", "expect": "sessions list"}
+{"query": "does gg have a web interface?", "expect": "Web"}
+{"query": "what tools can the agent use to edit code?", "expect": "edit"}

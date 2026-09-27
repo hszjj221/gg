@@ -19,6 +19,7 @@
 - 从 `~/.gg/memory.md` 加载简单 Markdown memory
 - 内置代码工具：`read`、`list`、`grep`、`bash`、`edit`、`write`
 - 用于聚焦代码库调研的同步只读 `subagent` 工具
+- 本地 RAG 知识库：`gg kb index` 索引 + agent 可调用的 `kb_search` 工具
 - 可复用的 Go conversation runtime，同一套会话与 Agent 核心可供 TUI、Web 和桌面端使用
 - Bubble Tea TUI，以及共享 React UI 的 Web/Electron 客户端
 
@@ -227,6 +228,13 @@ Token 消耗：
 - `gg --usage ...` 会在每次运行后把 token 消耗输出到 stderr。
 - provider 返回 usage 时，`gg` 会把它记录到 session。
 - 不返回 usage 的 provider 仍可使用，并会显示 0 token。
+
+知识库（RAG）：
+
+- `gg kb index <dir>` 把文本文件切分并 embedding，存为本地索引 `~/.gg/kb/<name>/index.json`（纯 Go，无向量数据库）。
+- `gg kb search <query>` 在命令行对索引做语义检索。
+- 默认知识库建成后，agent 会自动获得 `kb_search` 工具，用于回答关于已索引语料的问题。
+- `gg kb eval --cases docs/kb-eval-sample.jsonl` 评测检索 recall@k。架构说明见 `docs/rag.md`。
 
 ## Skills
 

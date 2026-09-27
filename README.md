@@ -19,6 +19,7 @@ English | [简体中文](README.zh-CN.md)
 - Simple Markdown memory from `~/.gg/memory.md`
 - Built-in coding tools: `read`, `list`, `grep`, `bash`, `edit`, `write`
 - Synchronous read-only `subagent` tool for focused codebase research
+- Local RAG knowledge base: `gg kb index` + agent-callable `kb_search` tool
 - Reusable Go conversation runtime shared by the TUI, Web, and desktop adapters
 - Bubble Tea TUI plus Web/Electron clients built from one React UI
 
@@ -227,6 +228,13 @@ Token usage:
 - `gg --usage ...` prints token usage to stderr after each run.
 - Usage is recorded in the session when the provider returns it.
 - Providers that do not return usage remain supported and report zero tokens.
+
+Knowledge base (RAG):
+
+- `gg kb index <dir>` chunks and embeds text files into a local index at `~/.gg/kb/<name>/index.json` (pure Go, no vector database).
+- `gg kb search <query>` runs semantic search over the index from the CLI.
+- Once the default knowledge base exists, the agent gains a `kb_search` tool for answering questions about the ingested corpus.
+- `gg kb eval --cases docs/kb-eval-sample.jsonl` measures retrieval recall@k. See `docs/rag.md` for the architecture.
 
 ## Skills
 

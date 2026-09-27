@@ -75,6 +75,9 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	if parsed.Command == cli.CommandSessionsList {
 		return runSessionsList(cfg, stdout, stderr)
 	}
+	if parsed.Command == cli.CommandKB {
+		return runKB(ctx, cfg, parsed, stdout, stderr)
+	}
 	if wantsSessionSelector(parsed) {
 		if !shouldRunTUI(stdin, stdout, isTerm) {
 			fmt.Fprintln(stderr, "session selector requires a terminal; use gg resume <id-or-path>")
