@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -116,7 +117,7 @@ func TestCalendarAgendaTool(t *testing.T) {
 		})
 	})
 	loc := time.FixedZone("CST", 8*3600)
-	tool := NewCalendarAgendaTool(mockGoogleClient(t, mux), loc)
+	tool := NewCalendarAgendaTool(mockGoogleClient(t, mux), loc, nil)
 	res := tool.Execute(context.Background(), json.RawMessage(`{}`))
 	if res.IsError {
 		t.Fatalf("error: %v", res.Content)
@@ -129,7 +130,7 @@ func TestCalendarAgendaTool(t *testing.T) {
 func TestCalendarCreateToolValidation(t *testing.T) {
 	mux := http.NewServeMux()
 	loc := time.FixedZone("CST", 8*3600)
-	tool := NewCalendarCreateTool(mockGoogleClient(t, mux), loc)
+	tool := NewCalendarCreateTool(mockGoogleClient(t, mux), loc, nil)
 	// End before start is rejected without hitting the API.
 	res := tool.Execute(context.Background(),
 		json.RawMessage(`{"title":"x","start":"2026-09-28 16:00","end":"2026-09-28 15:00"}`))
@@ -168,5 +169,53 @@ func TestConnectorToolsNotConnected(t *testing.T) {
 	}
 	if !strings.Contains(res.Content[0].Text, "gg connect") {
 		t.Fatalf("result = %q (want reconnect hint)", res.Content[0].Text)
+	}
+}
+
+func TestAgendaFormatting(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/calendar/v3/calendars/primary/events", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"items": []map[string]any{
+				{
+					"id": "e1", "summary": "Holiday",
+					"start": map[string]string{"date": "2026-09-29"},
+					"end":   map[string]string{"date": "2026-09-30"},
+				},
+				{
+					"id": "e2", "summary": "Deploy",
+					"start": map[string]string{"dateTime": "2026-09-28T23:00:00+08:00"},
+					"end":   map[string]string{"dateTime": "2026-09-29T01:00:00+08:00"},
+				},
+			},
+		})
+	})
+	loc := time.FixedZone("CST", 8*3600)
+	tool := NewCalendarAgendaTool(mockGoogleClient(t, mux), loc, nil)
+	res := tool.Execute(context.Background(), json.RawMessage(`{"days":3}`))
+	if res.IsError {
+		t.Fatalf("error: %v", res.Content)
+	}
+	text := res.Content[0].Text
+	// All-day events carry their date; overnight events show the end date.
+	if !strings.Contains(text, "Holiday") || !strings.Contains(text, "2026-09-29") {
+		t.Fatalf("all-day missing date: %q", text)
+	}
+	if !strings.Contains(text, "09-29 01:00") {
+		t.Fatalf("overnight missing end date: %q", text)
+	}
+}
+
+func TestCalendarInvalidTimezone(t *testing.T) {
+	mux := http.NewServeMux()
+	loc := time.FixedZone("CST", 8*3600)
+	tool := NewCalendarAgendaTool(mockGoogleClient(t, mux), loc,
+		errors.New(`profile timezone "UTC+8" is not a valid IANA name`))
+	res := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	if !res.IsError {
+		t.Fatal("expected error for invalid timezone")
+	}
+	if !strings.Contains(res.Content[0].Text, "UTC+8") {
+		t.Fatalf("result = %q", res.Content[0].Text)
 	}
 }

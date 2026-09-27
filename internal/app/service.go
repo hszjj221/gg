@@ -118,7 +118,8 @@ func (s *Service) run(ctx context.Context, prompt string, onEvent func(agent.Eve
 	}
 	provider := s.providerFactory(s.cfg)
 	summaryUsage := agent.Usage{}
-	runner := agent.NewRunnerWithOptions(provider, defaultTools(s.cfg, provider, s.skillSet.ReadRoots(), s.memStore, userLocation(s.profile)), agent.RunnerOptions{
+	loc, tzErr := userLocation(s.profile)
+	runner := agent.NewRunnerWithOptions(provider, defaultTools(s.cfg, provider, s.skillSet.ReadRoots(), s.memStore, loc, tzErr), agent.RunnerOptions{
 		Approver:      approver,
 		OnMessage:     s.persistMessage,
 		DrainMessages: s.queue.DrainSteering,
@@ -377,7 +378,8 @@ func (s *Service) contextStatus() string {
 	}
 	build := s.buildContext(system, agent.Message{})
 	var defs []agent.ToolDefinition
-	for _, tool := range defaultTools(s.cfg, nil, s.skillSet.ReadRoots(), s.memStore, userLocation(s.profile)) {
+	loc, tzErr := userLocation(s.profile)
+	for _, tool := range defaultTools(s.cfg, nil, s.skillSet.ReadRoots(), s.memStore, loc, tzErr) {
 		defs = append(defs, tool.Definition())
 	}
 	hasSummary := s.summary != nil && strings.TrimSpace(s.summary.Summary) != ""
@@ -424,7 +426,7 @@ func (s *Service) systemMessages() ([]agent.Message, error) {
 	return messages, nil
 }
 
-func defaultTools(cfg config.Config, provider agent.Provider, readRoots []string, memStore *memory.Store, loc *time.Location) []agent.Tool {
+func defaultTools(cfg config.Config, provider agent.Provider, readRoots []string, memStore *memory.Store, loc *time.Location, tzErr error) []agent.Tool {
 	toolset := []agent.Tool{
 		tools.NewReadToolWithOptions(cfg.CWD, tools.ReadOptions{ExtraRoots: readRoots}),
 		tools.NewListTool(cfg.CWD),
@@ -464,32 +466,55 @@ func defaultTools(cfg config.Config, provider agent.Provider, readRoots []string
 	}
 	// Connector tools degrade to absent when Google is not connected.
 	if cstore, err := connector.Open(cfg.Connectors.Dir); err == nil {
-		if _, err := cstore.Load(google.Name); err == nil {
+		if tok, err := cstore.Load(google.Name); err == nil {
 			if gclient, err := google.NewClient(cstore, google.Config{
 				ClientID:     cfg.Connectors.Google.ClientID,
 				ClientSecret: cfg.Connectors.Google.ClientSecret,
 			}); err == nil {
-				toolset = append(toolset,
-					tools.NewGmailSearchTool(gclient),
-					tools.NewGmailReadTool(gclient),
-					tools.NewGmailSendTool(gclient),
-					tools.NewCalendarAgendaTool(gclient, loc),
-					tools.NewCalendarCreateTool(gclient, loc),
-				)
+				// Register only the tools the user actually granted: a
+				// partial (granular-consent) grant must not advertise tools
+				// that would just 403.
+				has := func(scope string) bool {
+					for _, s := range tok.Scopes {
+						if s == scope {
+							return true
+						}
+					}
+					return false
+				}
+				if has(google.ScopeGmailRead) {
+					toolset = append(toolset,
+						tools.NewGmailSearchTool(gclient),
+						tools.NewGmailReadTool(gclient),
+					)
+				}
+				if has(google.ScopeGmailSend) {
+					toolset = append(toolset, tools.NewGmailSendTool(gclient))
+				}
+				if has(google.ScopeCalendar) {
+					toolset = append(toolset,
+						tools.NewCalendarAgendaTool(gclient, loc, tzErr),
+						tools.NewCalendarCreateTool(gclient, loc, tzErr),
+					)
+				}
 			}
 		}
 	}
 	return toolset
 }
 
-// userLocation resolves the user's timezone for calendar tools.
-func userLocation(profile userprofile.Profile) *time.Location {
+// userLocation resolves the user's timezone for calendar tools. When the
+// profile timezone is set but not a valid IANA name, it returns the error
+// so calendar tools refuse to run rather than silently interpreting
+// wall-clock input in the wrong zone.
+func userLocation(profile userprofile.Profile) (*time.Location, error) {
 	if profile.Timezone != "" {
 		if loc, err := time.LoadLocation(profile.Timezone); err == nil {
-			return loc
+			return loc, nil
 		}
+		return time.Local, fmt.Errorf("profile timezone %q is not a valid IANA name; fix it with gg profile or unset it", profile.Timezone)
 	}
-	return time.Local
+	return time.Local, nil
 }
 
 func appendUsage(store *session.Store, usage agent.Usage) error {

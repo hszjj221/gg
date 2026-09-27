@@ -23,62 +23,79 @@ type Event struct {
 
 // Agenda lists events on the primary calendar in [from, from+days).
 func (c *Client) Agenda(ctx context.Context, from time.Time, days int) ([]Event, error) {
-	if days <= 0 || days > 30 {
+	// Clamp instead of silently shrinking: a request for 31 days must not
+	// come back as a plausible-looking one-day agenda.
+	if days < 1 {
 		days = 1
 	}
+	if days > 30 {
+		days = 30
+	}
 	to := from.AddDate(0, 0, days)
-	q := url.Values{}
-	q.Set("timeMin", from.Format(time.RFC3339))
-	q.Set("timeMax", to.Format(time.RFC3339))
-	q.Set("singleEvents", "true")
-	q.Set("orderBy", "startTime")
-	q.Set("maxResults", "50")
-	u := CalBase + "/calendar/v3/calendars/primary/events?" + q.Encode()
-	resp, err := c.Get(ctx, u)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	var out struct {
-		Items []struct {
-			ID          string `json:"id"`
-			Summary     string `json:"summary"`
-			Description string `json:"description"`
-			Location    string `json:"location"`
-			Start       struct {
-				DateTime string `json:"dateTime"`
-				Date     string `json:"date"`
-			} `json:"start"`
-			End struct {
-				DateTime string `json:"dateTime"`
-				Date     string `json:"date"`
-			} `json:"end"`
-		} `json:"items"`
-		Error *apiError `json:"error"`
-	}
-	if err := decodeJSON(resp, &out); err != nil {
-		return nil, err
-	}
-	if out.Error != nil {
-		return nil, out.Error
-	}
-	events := make([]Event, 0, len(out.Items))
-	for _, it := range out.Items {
-		ev := Event{
-			ID:          it.ID,
-			Summary:     it.Summary,
-			Description: it.Description,
-			Location:    it.Location,
+	base := CalBase + "/calendar/v3/calendars/primary/events"
+	var events []Event
+	pageToken := ""
+	for {
+		q := url.Values{}
+		q.Set("timeMin", from.Format(time.RFC3339))
+		q.Set("timeMax", to.Format(time.RFC3339))
+		q.Set("singleEvents", "true")
+		q.Set("orderBy", "startTime")
+		q.Set("maxResults", "50")
+		if pageToken != "" {
+			q.Set("pageToken", pageToken)
 		}
-		if it.Start.DateTime != "" {
-			ev.Start, _ = time.Parse(time.RFC3339, it.Start.DateTime)
-			ev.End, _ = time.Parse(time.RFC3339, it.End.DateTime)
-		} else {
-			ev.AllDay = true
-			ev.Start, _ = time.Parse("2006-01-02", it.Start.Date)
-			ev.End, _ = time.Parse("2006-01-02", it.End.Date)
+		resp, err := c.Get(ctx, base+"?"+q.Encode())
+		if err != nil {
+			return nil, err
 		}
-		events = append(events, ev)
+		var out struct {
+			Items []struct {
+				ID          string `json:"id"`
+				Summary     string `json:"summary"`
+				Description string `json:"description"`
+				Location    string `json:"location"`
+				Start       struct {
+					DateTime string `json:"dateTime"`
+					Date     string `json:"date"`
+				} `json:"start"`
+				End struct {
+					DateTime string `json:"dateTime"`
+					Date     string `json:"date"`
+				} `json:"end"`
+			} `json:"items"`
+			NextPageToken string    `json:"nextPageToken"`
+			Error         *apiError `json:"error"`
+		}
+		err = decodeJSON(resp, &out)
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		if out.Error != nil {
+			return nil, out.Error
+		}
+		for _, it := range out.Items {
+			ev := Event{
+				ID:          it.ID,
+				Summary:     it.Summary,
+				Description: it.Description,
+				Location:    it.Location,
+			}
+			if it.Start.DateTime != "" {
+				ev.Start, _ = time.Parse(time.RFC3339, it.Start.DateTime)
+				ev.End, _ = time.Parse(time.RFC3339, it.End.DateTime)
+			} else {
+				ev.AllDay = true
+				ev.Start, _ = time.Parse("2006-01-02", it.Start.Date)
+				ev.End, _ = time.Parse("2006-01-02", it.End.Date)
+			}
+			events = append(events, ev)
+		}
+		if out.NextPageToken == "" {
+			break
+		}
+		pageToken = out.NextPageToken
 	}
 	return events, nil
 }

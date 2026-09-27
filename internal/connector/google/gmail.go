@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/mail"
 	"net/url"
 	"strings"
 )
@@ -61,6 +62,15 @@ func (c *Client) Search(ctx context.Context, query string, max int) ([]MessageSu
 	return summaries, nil
 }
 
+// messagePart is one node of a Gmail payload MIME tree.
+type messagePart struct {
+	MimeType string `json:"mimeType"`
+	Body     struct {
+		Data string `json:"data"`
+	} `json:"body"`
+	Parts []messagePart `json:"parts"`
+}
+
 // Read fetches and decodes one message.
 func (c *Client) Read(ctx context.Context, id string) (Message, error) {
 	u := APIBase + "/gmail/v1/users/me/messages/" + url.PathEscape(id) + "?format=full"
@@ -80,12 +90,7 @@ func (c *Client) Read(ctx context.Context, id string) (Message, error) {
 			Body struct {
 				Data string `json:"data"`
 			} `json:"body"`
-			Parts []struct {
-				MimeType string `json:"mimeType"`
-				Body     struct {
-					Data string `json:"data"`
-				} `json:"body"`
-			} `json:"parts"`
+			Parts []messagePart `json:"parts"`
 		} `json:"payload"`
 		Error *apiError `json:"error"`
 	}
@@ -106,23 +111,51 @@ func (c *Client) Read(ctx context.Context, id string) (Message, error) {
 			msg.Date = h.Value
 		}
 	}
-	// Prefer the first text/plain part, fall back to the top-level body.
-	body := ""
-	for _, p := range raw.Payload.Parts {
-		if strings.HasPrefix(p.MimeType, "text/plain") && p.Body.Data != "" {
-			body = decodeB64(p.Body.Data)
-			break
-		}
-	}
+	// Walk the MIME tree depth-first: real messages often nest text/plain
+	// inside multipart/alternative inside multipart/mixed. Prefer text/plain,
+	// fall back to the top-level body.
+	body := findTextPart(raw.Payload.Parts)
 	if body == "" && raw.Payload.Body.Data != "" {
 		body = decodeB64(raw.Payload.Body.Data)
 	}
-	msg.Body = strings.TrimSpace(body)
+	msg.Body = truncateBody(strings.TrimSpace(body))
 	return msg, nil
+}
+
+// findTextPart returns the decoded text/plain part, searching nested
+// multipart children recursively.
+func findTextPart(parts []messagePart) string {
+	for _, p := range parts {
+		if strings.HasPrefix(p.MimeType, "text/plain") && p.Body.Data != "" {
+			return decodeB64(p.Body.Data)
+		}
+		if s := findTextPart(p.Parts); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// maxBodyRunes bounds what is handed to the model; the API response itself
+// is decoded in full (up to maxResponseBytes).
+const maxBodyRunes = 12000
+
+func truncateBody(s string) string {
+	r := []rune(s)
+	if len(r) <= maxBodyRunes {
+		return s
+	}
+	return string(r[:maxBodyRunes]) + "\n\n[正文过长，已截断]"
 }
 
 // Send sends a plain-text email.
 func (c *Client) Send(ctx context.Context, to, subject, body string) (string, error) {
+	if strings.ContainsAny(to, "\r\n") || strings.ContainsAny(subject, "\r\n") {
+		return "", fmt.Errorf("to/subject must not contain line breaks")
+	}
+	if _, err := mail.ParseAddress(to); err != nil {
+		return "", fmt.Errorf("invalid to address: %w", err)
+	}
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "To: %s\r\nSubject: %s\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n%s", to, subject, body)
 	rawMsg := base64.RawURLEncoding.EncodeToString(buf.Bytes())
@@ -158,6 +191,11 @@ type apiError struct {
 
 func (e *apiError) Error() string { return fmt.Sprintf("google api: %d %s", e.Code, e.Message) }
 
+// maxResponseBytes bounds a single API response body: Gmail messages can be
+// several MiB, so the old 1 MiB cap broke large but valid messages. The body
+// handed to the model is truncated separately (truncateBody).
+const maxResponseBytes = 10 << 20
+
 func decodeJSON(resp *http.Response, v any) error {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -169,7 +207,7 @@ func decodeJSON(resp *http.Response, v any) error {
 		}
 		return fmt.Errorf("google api: http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
-	return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(v)
+	return json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(v)
 }
 
 func decodeB64(s string) string {
