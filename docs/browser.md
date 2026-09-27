@@ -17,8 +17,10 @@ gg 通过 **Chrome DevTools Protocol (CDP)** 驱动本地 headless Chromium。
 `google-chrome-stable` 顺序查找（macOS 看 `/Applications` 下的 Chrome/Chromium），
 或用 `GG_CHROMIUM` 直接指定二进制路径。找不到时工具返回明确错误，不静默失败。
 
-Chromium 以 `--headless=new --no-sandbox --remote-debugging-port=0` 启动，
-每个进程复用一个 session（懒启动）。
+Chromium 以 `--headless=new --remote-debugging-port=0` 启动（默认保留
+sandbox；仅当 `GG_BROWSER_NO_SANDBOX=1` 时禁用，用于容器等内核不支持
+sandbox 的环境）。每个会话（Service）复用一个 session（懒启动），
+会话间互不干扰；进程与临时 profile 随 session 关闭而清理。
 
 ## 安全边界
 

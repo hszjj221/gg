@@ -13,25 +13,45 @@ import (
 	"github.com/hszjj221/gg/internal/browser"
 )
 
-// browserSession is a process-wide lazy Chromium session shared by the
-// browser tools. The first tool call starts Chromium; it lives until the
-// process exits.
-var browserSession struct {
-	sync.Mutex
-	s *browser.Session
+// BrowserSessionPool holds one Chromium session shared by the browser tools
+// of a single conversation (Service). It is created per defaultTools call,
+// so different sessions never share a tab. The session is lazy: Chromium
+// starts on the first tool call and lives until Close.
+type BrowserSessionPool struct {
+	mu sync.Mutex
+	s  *browser.Session
 }
 
-func getBrowserSession(ctx context.Context) (*browser.Session, error) {
-	browserSession.Lock()
-	defer browserSession.Unlock()
-	if browserSession.s == nil {
+// NewBrowserSessionPool creates a pool. Call Close when the owning Service
+// is done (best-effort; the OS reaps the process on exit regardless).
+func NewBrowserSessionPool() *BrowserSessionPool {
+	return &BrowserSessionPool{}
+}
+
+// Get returns the shared session, starting Chromium on first use.
+func (p *BrowserSessionPool) Get(ctx context.Context) (*browser.Session, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.s == nil {
 		s, err := browser.Start(ctx)
 		if err != nil {
 			return nil, err
 		}
-		browserSession.s = s
+		p.s = s
 	}
-	return browserSession.s, nil
+	return p.s, nil
+}
+
+// Close shuts down the session if one was started.
+func (p *BrowserSessionPool) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.s == nil {
+		return nil
+	}
+	err := p.s.Close()
+	p.s = nil
+	return err
 }
 
 func screenshotDir() string {
@@ -43,9 +63,11 @@ func screenshotDir() string {
 }
 
 // BrowserNavigateTool loads a URL in headless Chromium.
-type BrowserNavigateTool struct{}
+type BrowserNavigateTool struct{ pool *BrowserSessionPool }
 
-func NewBrowserNavigateTool() BrowserNavigateTool { return BrowserNavigateTool{} }
+func NewBrowserNavigateTool(pool *BrowserSessionPool) BrowserNavigateTool {
+	return BrowserNavigateTool{pool: pool}
+}
 
 func (t BrowserNavigateTool) Name() string { return "browser_navigate" }
 
@@ -73,7 +95,7 @@ func (t BrowserNavigateTool) Execute(ctx context.Context, raw json.RawMessage) T
 	if !strings.HasPrefix(input.URL, "http://") && !strings.HasPrefix(input.URL, "https://") {
 		return errorResult(fmt.Errorf("browser_navigate: only http(s) URLs are allowed"))
 	}
-	s, err := getBrowserSession(ctx)
+	s, err := t.pool.Get(ctx)
 	if err != nil {
 		return errorResult(err)
 	}
@@ -88,9 +110,11 @@ func (t BrowserNavigateTool) Execute(ctx context.Context, raw json.RawMessage) T
 }
 
 // BrowserReadTool returns the rendered text of the current page.
-type BrowserReadTool struct{}
+type BrowserReadTool struct{ pool *BrowserSessionPool }
 
-func NewBrowserReadTool() BrowserReadTool { return BrowserReadTool{} }
+func NewBrowserReadTool(pool *BrowserSessionPool) BrowserReadTool {
+	return BrowserReadTool{pool: pool}
+}
 
 func (t BrowserReadTool) Name() string { return "browser_read" }
 
@@ -106,7 +130,7 @@ func (t BrowserReadTool) Definition() agent.ToolDefinition {
 }
 
 func (t BrowserReadTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {
-	s, err := getBrowserSession(ctx)
+	s, err := t.pool.Get(ctx)
 	if err != nil {
 		return errorResult(err)
 	}
@@ -118,9 +142,11 @@ func (t BrowserReadTool) Execute(ctx context.Context, raw json.RawMessage) ToolR
 }
 
 // BrowserScreenshotTool captures the current viewport as PNG.
-type BrowserScreenshotTool struct{}
+type BrowserScreenshotTool struct{ pool *BrowserSessionPool }
 
-func NewBrowserScreenshotTool() BrowserScreenshotTool { return BrowserScreenshotTool{} }
+func NewBrowserScreenshotTool(pool *BrowserSessionPool) BrowserScreenshotTool {
+	return BrowserScreenshotTool{pool: pool}
+}
 
 func (t BrowserScreenshotTool) Name() string { return "browser_screenshot" }
 
@@ -136,7 +162,7 @@ func (t BrowserScreenshotTool) Definition() agent.ToolDefinition {
 }
 
 func (t BrowserScreenshotTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {
-	s, err := getBrowserSession(ctx)
+	s, err := t.pool.Get(ctx)
 	if err != nil {
 		return errorResult(err)
 	}

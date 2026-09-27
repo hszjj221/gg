@@ -24,6 +24,10 @@ func listenTCP(t *testing.T) (net.Listener, string) {
 // serveFakeCDP accepts one connection, completes the WS handshake, then
 // answers CDP requests with canned results.
 func serveFakeCDP(ln net.Listener) {
+	serveFakeCDPWithNavigateError(ln, "")
+}
+
+func serveFakeCDPWithNavigateError(ln net.Listener, navigateError string) {
 	conn, err := ln.Accept()
 	if err != nil {
 		return
@@ -58,8 +62,14 @@ func serveFakeCDP(ln net.Listener) {
 		}
 		resp := cdpMessage{ID: req.ID}
 		switch req.Method {
-		case "Page.enable", "Runtime.enable", "Page.navigate":
+		case "Page.enable", "Runtime.enable":
 			resp.Result = json.RawMessage(`{}`)
+		case "Page.navigate":
+			if navigateError != "" {
+				resp.Result = json.RawMessage(`{"errorText":"` + navigateError + `"}`)
+			} else {
+				resp.Result = json.RawMessage(`{}`)
+			}
 		case "Runtime.evaluate":
 			var p struct {
 				Expression string `json:"expression"`
@@ -69,6 +79,8 @@ func serveFakeCDP(ln net.Listener) {
 			switch p.Expression {
 			case "document.readyState":
 				value = `"complete"`
+			case "location.href":
+				value = `"https://example.com"`
 			case "document.body ? document.body.innerText : ''":
 				value = `"Example Domain"`
 			case "document.title":
