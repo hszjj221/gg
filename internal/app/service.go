@@ -355,8 +355,20 @@ func defaultTools(cfg config.Config, provider agent.Provider, readRoots []string
 		toolset = append(toolset, tools.NewMemoryAddTool(cfg.MemoryPath))
 	}
 	if kb.Exists(cfg.KBDir, kb.DefaultName) {
+		// The query embedding must go to the same endpoint the index was
+		// built with; prefer dedicated embedding config, fall back to the
+		// chat provider. An endpoint mismatch is rejected at call time
+		// (fail closed) rather than silently querying the wrong service.
+		embedKey := cfg.EmbedAPIKey
+		if embedKey == "" {
+			embedKey = cfg.APIKey
+		}
+		embedBase := cfg.EmbedBaseURL
+		if embedBase == "" {
+			embedBase = cfg.BaseURL
+		}
 		toolset = append(toolset, tools.NewKBSearchTool(
-			cfg.KBDir, cfg.APIKey, cfg.BaseURL, tools.KBSearchOptions{},
+			cfg.KBDir, embedKey, embedBase, tools.KBSearchOptions{},
 		))
 	}
 	return toolset

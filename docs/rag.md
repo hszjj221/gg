@@ -61,6 +61,17 @@ gg kb index <dir>            gg kb search <query> / kb_search tool
 - **No index, no tool.** `kb_search` is registered only when
   `~/.gg/kb/default/index.json` exists, so users without a knowledge base see
   the same tool list as before.
+- **Query endpoint must match the build endpoint.** The manifest records which
+  embeddings endpoint built the index. If the agent/CLI is later configured
+  with a different endpoint, `kb_search` / `kb search` refuse to run (fail
+  closed) instead of querying the wrong service or ranking with incompatible
+  vectors. Query vectors are also rejected when their dimension does not match
+  the index.
+- **Private on disk.** The index contains full document text, so the KB
+  directory is created `0700` and `index.json` `0600`.
+- **UTF-8 sanitized on ingest.** Files are normalized to valid UTF-8 when
+  read, so a corrupt source file can neither hang the chunker nor break the
+  embeddings request payload.
 
 ## Usage
 
@@ -69,6 +80,14 @@ gg kb index <dir>            gg kb search <query> / kb_search tool
 export OPENAI_API_KEY=<key>          # or pass --embed-api-key
 gg kb index ./docs                   # -> ~/.gg/kb/default/index.json
 gg kb index ./docs --name api-docs --embed-model text-embedding-3-large
+
+# Dedicated embeddings endpoint (when the chat provider doesn't serve embeddings):
+# flags --embed-base-url / --embed-api-key, or env GG_EMBED_BASE_URL / GG_EMBED_API_KEY.
+# The same endpoint must be configured wherever you query (agent or CLI);
+# a mismatch fails closed with instructions instead of silently misbehaving.
+export GG_EMBED_BASE_URL=https://embed.example.com/v1
+export GG_EMBED_API_KEY=<key>
+gg kb index ./docs
 
 # Query manually
 gg kb search "how are sessions persisted?" --top-k 3

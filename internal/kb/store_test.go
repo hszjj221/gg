@@ -4,7 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func testIndex() *Index {
@@ -18,7 +20,7 @@ func testIndex() *Index {
 		{0, 1, 0},
 		{0.9, 0.1, 0},
 	}
-	ix, err := NewIndex("test", "m", chunks, vectors)
+	ix, err := NewIndex("test", "m", "", chunks, vectors)
 	if err != nil {
 		panic(err)
 	}
@@ -27,7 +29,10 @@ func testIndex() *Index {
 
 func TestSearchRanking(t *testing.T) {
 	ix := testIndex()
-	results := ix.Search([]float32{1, 0, 0}, 2)
+	results, err := ix.Search([]float32{1, 0, 0}, 2)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
 	if len(results) != 2 {
 		t.Fatalf("want 2 results, got %d", len(results))
 	}
@@ -41,8 +46,19 @@ func TestSearchRanking(t *testing.T) {
 
 func TestSearchTopKClamp(t *testing.T) {
 	ix := testIndex()
-	if got := ix.Search([]float32{1, 0, 0}, 99); len(got) != 3 {
+	got, err := ix.Search([]float32{1, 0, 0}, 99)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(got) != 3 {
 		t.Fatalf("want all 3 results, got %d", len(got))
+	}
+}
+
+func TestSearchDimMismatch(t *testing.T) {
+	ix := testIndex()
+	if _, err := ix.Search([]float32{1, 0}, 2); err == nil {
+		t.Fatal("want error when query dim does not match index dim")
 	}
 }
 
@@ -67,6 +83,66 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSaveRestrictivePermissions(t *testing.T) {
+	home := t.TempDir()
+	ix := testIndex()
+	if err := ix.Save(home); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	dirInfo, err := os.Stat(Dir(home, "test"))
+	if err != nil {
+		t.Fatalf("stat dir: %v", err)
+	}
+	if perm := dirInfo.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("want index dir 0700, got %o", perm)
+	}
+	fileInfo, err := os.Stat(IndexPath(home, "test"))
+	if err != nil {
+		t.Fatalf("stat file: %v", err)
+	}
+	if perm := fileInfo.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("want index file 0600, got %o", perm)
+	}
+}
+
+func TestNewIndexRecordsEmbedEndpoint(t *testing.T) {
+	chunks := []Chunk{{ID: "a", Source: "a", Text: "x"}}
+	ix, err := NewIndex("n", "m", "https://embed.example.com/v1/", chunks, [][]float32{{1, 2}})
+	if err != nil {
+		t.Fatalf("new index: %v", err)
+	}
+	if ix.EmbedBaseURL != "https://embed.example.com/v1" {
+		t.Fatalf("want normalized embed endpoint, got %q", ix.EmbedBaseURL)
+	}
+	// Round-trips through the manifest.
+	home := t.TempDir()
+	if err := ix.Save(home); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	loaded, err := Load(home, "n")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if loaded.EmbedBaseURL != ix.EmbedBaseURL {
+		t.Fatalf("want %q after round trip, got %q", ix.EmbedBaseURL, loaded.EmbedBaseURL)
+	}
+}
+
+func TestReadTextFileSanitizesUTF8(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bad.md")
+	os.WriteFile(path, []byte("ok \xff\xfe broken \x80 text"), 0o644)
+	text, err := readTextFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !utf8.ValidString(text) {
+		t.Fatalf("want valid UTF-8, got %q", text)
+	}
+	if !strings.Contains(text, "ok") || !strings.Contains(text, "text") {
+		t.Fatalf("want surrounding text preserved, got %q", text)
+	}
+}
+
 func TestLoadMissing(t *testing.T) {
 	if _, err := Load(t.TempDir(), "nope"); err == nil {
 		t.Fatal("want error loading missing index")
@@ -75,7 +151,7 @@ func TestLoadMissing(t *testing.T) {
 
 func TestNewIndexDimMismatch(t *testing.T) {
 	chunks := []Chunk{{ID: "a", Source: "a", Text: "x"}}
-	if _, err := NewIndex("n", "m", chunks, [][]float32{{1, 2}, {3}}); err == nil {
+	if _, err := NewIndex("n", "m", "", chunks, [][]float32{{1, 2}, {3}}); err == nil {
 		t.Fatal("want error on ragged vectors")
 	}
 }

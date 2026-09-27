@@ -56,9 +56,14 @@ type MemoryConfig struct {
 }
 
 type Config struct {
-	APIKey         string
-	BaseURL        string
-	Model          string
+	APIKey  string
+	BaseURL string
+	Model   string
+	// EmbedBaseURL/EmbedAPIKey optionally override the chat provider's
+	// endpoint for embeddings (used by `gg kb` and the kb_search tool).
+	// Resolved from GG_EMBED_BASE_URL / GG_EMBED_API_KEY.
+	EmbedBaseURL   string
+	EmbedAPIKey    string
 	Provider       string
 	ProviderType   string
 	Selection      string
@@ -132,6 +137,8 @@ func Resolve(options Options) (Config, error) {
 		KBDir:           filepath.Join(home, ".gg", "kb"),
 		CWD:             cwd,
 		NoContextFiles:  options.NoContextFiles,
+		EmbedBaseURL:    os.Getenv("GG_EMBED_BASE_URL"),
+		EmbedAPIKey:     os.Getenv("GG_EMBED_API_KEY"),
 		apiKeyOverride:  options.APIKey,
 		baseURLOverride: options.BaseURL,
 	}

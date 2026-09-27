@@ -38,18 +38,31 @@ type embedConfig struct {
 }
 
 func resolveEmbedConfig(cfg config.Config, args cli.Args) (embedConfig, error) {
+	// Precedence: explicit flag > dedicated embedding config > chat provider.
 	ec := embedConfig{
-		apiKey:  firstNonEmpty(args.KBEmbedKey, cfg.APIKey),
-		baseURL: firstNonEmpty(args.KBEmbedBase, cfg.BaseURL),
+		apiKey:  firstNonEmpty(args.KBEmbedKey, cfg.EmbedAPIKey, cfg.APIKey),
+		baseURL: firstNonEmpty(args.KBEmbedBase, cfg.EmbedBaseURL, cfg.BaseURL),
 		model:   firstNonEmpty(args.KBEmbedModel, defaultEmbedModel),
 	}
 	if ec.apiKey == "" {
-		return ec, fmt.Errorf("embeddings API key is required: set OPENAI_API_KEY or pass --embed-api-key")
+		return ec, fmt.Errorf("embeddings API key is required: set OPENAI_API_KEY, GG_EMBED_API_KEY, or pass --embed-api-key")
 	}
 	if ec.baseURL == "" {
-		return ec, fmt.Errorf("embeddings base URL is required: set OPENAI_BASE_URL or pass --embed-base-url")
+		return ec, fmt.Errorf("embeddings base URL is required: set OPENAI_BASE_URL, GG_EMBED_BASE_URL, or pass --embed-base-url")
 	}
 	return ec, nil
+}
+
+// checkEmbedEndpoint fails closed when the index was built with a different
+// embeddings endpoint than the one currently configured: querying the wrong
+// endpoint fails outright or, worse, returns vectors from an incompatible
+// model that silently corrupt rankings.
+func checkEmbedEndpoint(ix *kb.Index, baseURL string) error {
+	if ix.EmbedBaseURL != "" && !kb.SameEndpoint(ix.EmbedBaseURL, baseURL) {
+		return fmt.Errorf("embeddings endpoint mismatch: index was built with %s, but the current endpoint is %s; set GG_EMBED_BASE_URL=%s (and GG_EMBED_API_KEY) or rebuild the index",
+			ix.EmbedBaseURL, baseURL, ix.EmbedBaseURL)
+	}
+	return nil
 }
 
 func firstNonEmpty(vals ...string) string {
@@ -78,6 +91,7 @@ func runKBIndex(ctx context.Context, cfg config.Config, args cli.Args, stdout, s
 	emb := kb.NewOpenAIEmbedder(ec.apiKey, ec.baseURL, ec.model)
 	var filesDone, chunksDone int
 	ix, err := kb.BuildIndex(ctx, emb, name, args.KBPath, kb.BuildOptions{
+		EmbedBaseURL: ec.baseURL,
 		Progress: func(files, chunks int) {
 			filesDone, chunksDone = files, chunks
 			fmt.Fprintf(stderr, "\rindexing: %d files, %d chunks", files, chunks)
@@ -110,6 +124,10 @@ func runKBSearch(ctx context.Context, cfg config.Config, args cli.Args, stdout, 
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	if err := checkEmbedEndpoint(ix, ec.baseURL); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	// Always embed with the index's own model; mixing models corrupts scores.
 	emb := kb.NewOpenAIEmbedder(ec.apiKey, ec.baseURL, ix.Model)
 	vecs, err := emb.Embed(ctx, []string{args.KBQuery})
@@ -121,7 +139,11 @@ func runKBSearch(ctx context.Context, cfg config.Config, args cli.Args, stdout, 
 	if topK <= 0 {
 		topK = 5
 	}
-	results := ix.Search(vecs[0], topK)
+	results, err := ix.Search(vecs[0], topK)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	if len(results) == 0 {
 		fmt.Fprintln(stdout, "no matching passages found")
 		return 0
@@ -159,6 +181,10 @@ func runKBEval(ctx context.Context, cfg config.Config, args cli.Args, stdout, st
 		fmt.Fprintln(stderr, "kb eval: no cases in file")
 		return 2
 	}
+	if err := checkEmbedEndpoint(ix, ec.baseURL); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	emb := kb.NewOpenAIEmbedder(ec.apiKey, ec.baseURL, ix.Model)
 	topK := args.KBTopK
 	if topK <= 0 {
@@ -171,7 +197,11 @@ func runKBEval(ctx context.Context, cfg config.Config, args cli.Args, stdout, st
 			fmt.Fprintf(stderr, "case %d: embed failed: %v\n", i+1, err)
 			continue
 		}
-		results := ix.Search(vecs[0], topK)
+		results, err := ix.Search(vecs[0], topK)
+		if err != nil {
+			fmt.Fprintf(stderr, "case %d: search failed: %v\n", i+1, err)
+			continue
+		}
 		matched := ""
 		for _, r := range results {
 			if strings.Contains(strings.ToLower(r.Chunk.Text), strings.ToLower(c.Expect)) {

@@ -56,6 +56,12 @@ func ChunkText(source, text string, maxChars, overlap int) []Chunk {
 			for cut > 0 && !utf8.ValidString(p[:cut]) {
 				cut--
 			}
+			if cut == 0 {
+				// No nonempty valid-UTF-8 prefix (e.g. the paragraph starts
+				// with invalid bytes): consume one byte so the loop always
+				// makes progress instead of spinning forever.
+				cut = 1
+			}
 			chunks = append(chunks, Chunk{Source: source, Text: strings.TrimSpace(p[:cut])})
 			p = strings.TrimSpace(p[cut:])
 		}

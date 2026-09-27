@@ -90,3 +90,43 @@ func TestKBSearchToolDefinition(t *testing.T) {
 		t.Fatalf("definition name mismatch: %q", def.Name)
 	}
 }
+
+func TestKBSearchToolEndpointMismatch(t *testing.T) {
+	home := t.TempDir()
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "a.md"), []byte("# A\n\nSome content."), 0o644)
+	emb := stubEmbedder{dim: 8}
+	ix, err := kb.BuildIndex(context.Background(), emb, "", root,
+		kb.BuildOptions{EmbedBaseURL: "https://embed.example.com/v1"})
+	if err != nil {
+		t.Fatalf("build index: %v", err)
+	}
+	if err := ix.Save(home); err != nil {
+		t.Fatalf("save index: %v", err)
+	}
+	// Tool pointed at a different endpoint: must fail closed, not query it.
+	tool := NewKBSearchTool(home, "k", "https://chat.example.com/v1",
+		KBSearchOptions{Embedder: stubEmbedder{dim: 8}})
+	res := tool.Execute(context.Background(), json.RawMessage(`{"query":"content"}`))
+	if !res.IsError {
+		t.Fatal("want error on embeddings endpoint mismatch")
+	}
+	if !strings.Contains(res.Content[0].Text, "GG_EMBED_BASE_URL") {
+		t.Fatalf("want mismatch explanation, got: %s", res.Content[0].Text)
+	}
+}
+
+func TestKBSearchToolDimMismatch(t *testing.T) {
+	home := t.TempDir()
+	buildTestKB(t, home)
+	// Embedder returns the wrong dimension: must surface an error, not
+	// silently rank with truncated vectors.
+	tool := NewKBSearchTool(home, "", "", KBSearchOptions{Embedder: stubEmbedder{dim: 4}})
+	res := tool.Execute(context.Background(), json.RawMessage(`{"query":"how do I deploy"}`))
+	if !res.IsError {
+		t.Fatal("want error on query vector dimension mismatch")
+	}
+	if !strings.Contains(res.Content[0].Text, "dim") {
+		t.Fatalf("want dim explanation, got: %s", res.Content[0].Text)
+	}
+}

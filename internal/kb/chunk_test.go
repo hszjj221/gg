@@ -79,3 +79,19 @@ func TestChunkTextIDsUnique(t *testing.T) {
 		seen[c.ID] = true
 	}
 }
+
+func TestChunkTextInvalidUTF8Terminates(t *testing.T) {
+	// A single oversized paragraph of invalid bytes: the hard-split loop
+	// must consume input and terminate instead of spinning forever.
+	// (Run with -timeout; before the progress guard this hung.)
+	text := strings.Repeat("\xff\xfe", 1500)
+	chunks := ChunkText("bad.md", text, 200, 0)
+	if len(chunks) == 0 {
+		t.Fatal("want chunks for invalid-UTF-8 input, got none")
+	}
+	for _, c := range chunks {
+		if len(c.Text) > 200 {
+			t.Fatalf("chunk exceeds maxChars: %d", len(c.Text))
+		}
+	}
+}

@@ -85,6 +85,10 @@ func (t KBSearchTool) Execute(ctx context.Context, raw json.RawMessage) ToolResu
 	if err != nil {
 		return errorResult(fmt.Errorf("kb_search: %v; build one with `gg kb index <dir>`", err))
 	}
+	if ix.EmbedBaseURL != "" && !kb.SameEndpoint(ix.EmbedBaseURL, t.baseURL) {
+		return errorResult(fmt.Errorf("kb_search: index was built with embeddings endpoint %s, but the agent is configured with %s; set GG_EMBED_BASE_URL=%s (and GG_EMBED_API_KEY) or rebuild the index",
+			ix.EmbedBaseURL, t.baseURL, ix.EmbedBaseURL))
+	}
 	emb := t.embedder
 	if emb == nil {
 		// Embed the query with the exact model the index was built with;
@@ -95,7 +99,10 @@ func (t KBSearchTool) Execute(ctx context.Context, raw json.RawMessage) ToolResu
 	if err != nil {
 		return errorResult(fmt.Errorf("kb_search: embed query: %w", err))
 	}
-	results := ix.Search(vecs[0], topK)
+	results, err := ix.Search(vecs[0], topK)
+	if err != nil {
+		return errorResult(fmt.Errorf("kb_search: %w", err))
+	}
 	if len(results) == 0 {
 		return textResult("No matching passages found.")
 	}

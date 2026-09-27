@@ -35,6 +35,9 @@ type BuildOptions struct {
 	// MaxChars/Overlap tune chunking; zero values select the defaults.
 	MaxChars int
 	Overlap  int
+	// EmbedBaseURL records which embeddings endpoint is used; it is stored
+	// in the index manifest so query time can verify the endpoint matches.
+	EmbedBaseURL string
 	// Progress is called with (filesDone, chunksSoFar); may be nil.
 	Progress func(filesDone, chunksSoFar int)
 }
@@ -81,7 +84,7 @@ func BuildIndex(ctx context.Context, emb Embedder, name, root string, opts Build
 	if err != nil {
 		return nil, err
 	}
-	return NewIndex(name, emb.Model(), chunks, vectors)
+	return NewIndex(name, emb.Model(), opts.EmbedBaseURL, chunks, vectors)
 }
 
 // collectTextFiles returns indexable text files under root, skipping
@@ -140,5 +143,7 @@ func readTextFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return string(raw), nil
+	// Sanitize to valid UTF-8: the chunker assumes valid input, and some
+	// embedding endpoints reject invalid bytes in the JSON payload.
+	return strings.ToValidUTF8(string(raw), "\uFFFD"), nil
 }

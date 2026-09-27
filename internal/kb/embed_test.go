@@ -101,3 +101,20 @@ func TestOpenAIEmbedderEmpty(t *testing.T) {
 		t.Fatalf("want nil,nil for empty input, got %v,%v", vecs, err)
 	}
 }
+
+func TestSameEndpoint(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"https://x/v1", "https://x/v1", true},
+		{"https://x/v1/", "https://x/v1", true},
+		{"https://x/v1", "https://y/v1", false},
+		{"", "", true},
+	}
+	for _, c := range cases {
+		if got := SameEndpoint(c.a, c.b); got != c.want {
+			t.Fatalf("SameEndpoint(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}

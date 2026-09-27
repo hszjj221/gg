@@ -143,8 +143,8 @@ func parseKBCommand(args *Args, rest []string) error {
 	fs.IntVar(&args.KBTopK, "top-k", 5, "results per query")
 	fs.StringVar(&args.KBCases, "cases", "", "eval cases file (JSONL)")
 	fs.StringVar(&args.KBEmbedModel, "embed-model", "", "embedding model (default: text-embedding-3-small)")
-	fs.StringVar(&args.KBEmbedBase, "embed-base-url", "", "embeddings base URL (default: --base-url)")
-	fs.StringVar(&args.KBEmbedKey, "embed-api-key", "", "embeddings API key (default: --api-key)")
+	fs.StringVar(&args.KBEmbedBase, "embed-base-url", "", "embeddings base URL (default: GG_EMBED_BASE_URL or --base-url)")
+	fs.StringVar(&args.KBEmbedKey, "embed-api-key", "", "embeddings API key (default: GG_EMBED_API_KEY or --api-key)")
 	// Go's flag package stops at the first positional argument, so
 	// `gg kb index ./docs --name api` would misparse. Reorder first.
 	flagArgs, positional := splitKBArgs(rest[1:])
@@ -246,6 +246,6 @@ Knowledge base (RAG):
   --name <kb>              knowledge base name (default: default)
   --top-k <n>              results per query (default: 5)
   --embed-model <m>        embedding model (default: text-embedding-3-small)
-  --embed-base-url <url>   embeddings base URL (default: --base-url)
-  --embed-api-key <key>    embeddings API key (default: --api-key)`)
+  --embed-base-url <url>   embeddings base URL (default: GG_EMBED_BASE_URL or --base-url)
+  --embed-api-key <key>    embeddings API key (default: GG_EMBED_API_KEY or --api-key)`)
 }

@@ -127,3 +127,9 @@ func snippet(b []byte, n int) string {
 	}
 	return string(b[:n]) + "..."
 }
+
+// SameEndpoint reports whether two embeddings base URLs identify the same
+// endpoint, ignoring a trailing slash (the embedder normalizes the same way).
+func SameEndpoint(a, b string) bool {
+	return strings.TrimRight(a, "/") == strings.TrimRight(b, "/")
+}
