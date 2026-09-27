@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { API, ElectronTransport, protocolVersion, RPCError, WebTransport } from './transport';
+import { ArtifactsPane } from './Artifacts';
 import type { Approval, RunEvent, RunStatus, SessionSummary, SessionUpdate, Snapshot, TreeItem } from './types';
 
 interface ToolLog {
@@ -26,6 +27,7 @@ export function App() {
   const [showTree, setShowTree] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [view, setView] = useState<'chat' | 'artifacts'>('chat');
   const watchAbortRef = useRef<AbortController | null>(null);
   const watchGenerationRef = useRef(0);
 
@@ -335,6 +337,12 @@ export function App() {
           <button className="icon-button" onClick={createSession} title="新建会话" disabled={busy}>＋</button>
         </header>
         <div className="workspace-label" title={workspace}>{workspace}</div>
+        <div className="view-tabs" role="tablist" aria-label="视图切换">
+          <button role="tab" aria-selected={view === 'chat'} className={view === 'chat' ? 'active' : ''} onClick={() => setView('chat')}>会话</button>
+          {api?.supports('artifact') && (
+            <button role="tab" aria-selected={view === 'artifacts'} className={view === 'artifacts' ? 'active' : ''} onClick={() => setView('artifacts')}>文档</button>
+          )}
+        </div>
         <nav className="session-list" aria-label="会话列表">
           {sessions.map((session) => (
             <button
@@ -351,7 +359,9 @@ export function App() {
       </aside>
 
       <main className="conversation-pane">
-        {current ? (
+        {view === 'artifacts' ? (
+          api && <ArtifactsPane api={api} />
+        ) : current ? (
           <>
             <header className="topbar">
               <div className="title-editor">

@@ -13,7 +13,9 @@ import (
 
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/app"
+	"github.com/hszjj221/gg/internal/artifact"
 	"github.com/hszjj221/gg/internal/config"
+	"github.com/hszjj221/gg/internal/library"
 	"github.com/hszjj221/gg/internal/provider/openai"
 	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/skills"
@@ -124,6 +126,8 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		Repository:      session.NewFileRepository(cfg.SessionDir),
 		Profile:         personal.Profile,
 		MemoryStore:     personal.Store,
+		ArtifactStore:   openArtifactStore(stderr, cfg),
+		LibraryStore:    openLibraryStore(stderr, cfg),
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -213,4 +217,26 @@ func writerOr(value io.Writer, fallback io.Writer) io.Writer {
 		return value
 	}
 	return fallback
+}
+
+// openArtifactStore opens the artifact store, warning and degrading to nil
+// (methods then report "not available") instead of failing daemon startup.
+func openArtifactStore(stderr io.Writer, cfg config.Config) *artifact.Store {
+	store, err := artifact.Open(cfg.Artifacts.Dir)
+	if err != nil {
+		fmt.Fprintln(stderr, "warning: "+err.Error())
+		return nil
+	}
+	return store
+}
+
+// openLibraryStore opens the library store with the same degrade-to-nil
+// policy as the artifact store.
+func openLibraryStore(stderr io.Writer, cfg config.Config) *library.Store {
+	store, err := library.Open(cfg.Library.Dir)
+	if err != nil {
+		fmt.Fprintln(stderr, "warning: "+err.Error())
+		return nil
+	}
+	return store
 }

@@ -18,6 +18,9 @@ const allowedMethods = new Set([
   'run.cancel',
   'run.approve',
   'run.steer',
+  'artifact.list',
+  'artifact.get',
+  'artifact.publish',
 ]);
 
 class DaemonClient {

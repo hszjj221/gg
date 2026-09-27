@@ -6,7 +6,9 @@ import (
 	"fmt"
 
 	"github.com/hszjj221/gg/internal/agent"
+	"github.com/hszjj221/gg/internal/artifact"
 	"github.com/hszjj221/gg/internal/config"
+	"github.com/hszjj221/gg/internal/library"
 	"github.com/hszjj221/gg/internal/memory"
 	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/skills"
@@ -21,6 +23,8 @@ type WorkspaceOptions struct {
 	Manager         ManagerOptions
 	Profile         userprofile.Profile
 	MemoryStore     *memory.Store
+	ArtifactStore   *artifact.Store
+	LibraryStore    *library.Store
 }
 
 // Workspace is the application facade used by non-terminal transports. It
@@ -33,6 +37,8 @@ type Workspace struct {
 	manager         *Manager
 	profile         userprofile.Profile
 	memStore        *memory.Store
+	artifacts       *artifact.Store
+	libraryStore    *library.Store
 }
 
 type SessionSummary struct {
@@ -58,6 +64,8 @@ func NewWorkspace(options WorkspaceOptions) (*Workspace, error) {
 		manager:         NewManagerWithOptions(options.Manager),
 		profile:         options.Profile,
 		memStore:        options.MemoryStore,
+		artifacts:       options.ArtifactStore,
+		libraryStore:    options.LibraryStore,
 	}, nil
 }
 

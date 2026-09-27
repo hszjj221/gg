@@ -1,4 +1,4 @@
-import type { RunEvent, RunStatus, SessionSummary, SessionUpdate, Snapshot, SystemInfo, WaitResult } from './types';
+import type { ArtifactMeta, ArtifactPublishResult, ArtifactView, RunEvent, RunStatus, SessionSummary, SessionUpdate, Snapshot, SystemInfo, WaitResult } from './types';
 
 export const protocolVersion = '1.1';
 
@@ -236,6 +236,18 @@ export class API {
 
   steer(sessionId: string, text: string, followUp = false) {
     return this.transport.call<{ ok: boolean }>('run.steer', { sessionId, text, followUp });
+  }
+
+  listArtifacts() {
+    return this.transport.call<ArtifactMeta[]>('artifact.list');
+  }
+
+  getArtifact(artifactId: string) {
+    return this.transport.call<ArtifactView>('artifact.get', { artifactId });
+  }
+
+  publishArtifact(artifactId: string) {
+    return this.transport.call<ArtifactPublishResult>('artifact.publish', { artifactId });
   }
 }
 

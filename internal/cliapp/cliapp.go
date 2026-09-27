@@ -94,6 +94,12 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		options.NoSkills = parsed.NoSkills
 		return runJobCommand(ctx, cfg, options, parsed.JobArgs, stdout, stderr)
 	}
+	if parsed.Command == cli.CommandArtifact {
+		return runArtifactCommand(cfg, parsed.ArtifactArgs, stdout, stderr)
+	}
+	if parsed.Command == cli.CommandLibrary {
+		return runLibraryCommand(cfg, parsed.LibraryArgs, stdout, stderr)
+	}
 	personal, notice, err := app.SetupPersonal(cfg)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
