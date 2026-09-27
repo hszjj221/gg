@@ -11,6 +11,8 @@ import (
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/artifact"
 	"github.com/hszjj221/gg/internal/config"
+	"github.com/hszjj221/gg/internal/connector"
+	"github.com/hszjj221/gg/internal/connector/google"
 	"github.com/hszjj221/gg/internal/contextmgr"
 	"github.com/hszjj221/gg/internal/kb"
 	"github.com/hszjj221/gg/internal/memory"
@@ -116,7 +118,7 @@ func (s *Service) run(ctx context.Context, prompt string, onEvent func(agent.Eve
 	}
 	provider := s.providerFactory(s.cfg)
 	summaryUsage := agent.Usage{}
-	runner := agent.NewRunnerWithOptions(provider, defaultTools(s.cfg, provider, s.skillSet.ReadRoots(), s.memStore), agent.RunnerOptions{
+	runner := agent.NewRunnerWithOptions(provider, defaultTools(s.cfg, provider, s.skillSet.ReadRoots(), s.memStore, userLocation(s.profile)), agent.RunnerOptions{
 		Approver:      approver,
 		OnMessage:     s.persistMessage,
 		DrainMessages: s.queue.DrainSteering,
@@ -375,7 +377,7 @@ func (s *Service) contextStatus() string {
 	}
 	build := s.buildContext(system, agent.Message{})
 	var defs []agent.ToolDefinition
-	for _, tool := range defaultTools(s.cfg, nil, s.skillSet.ReadRoots(), s.memStore) {
+	for _, tool := range defaultTools(s.cfg, nil, s.skillSet.ReadRoots(), s.memStore, userLocation(s.profile)) {
 		defs = append(defs, tool.Definition())
 	}
 	hasSummary := s.summary != nil && strings.TrimSpace(s.summary.Summary) != ""
@@ -422,7 +424,7 @@ func (s *Service) systemMessages() ([]agent.Message, error) {
 	return messages, nil
 }
 
-func defaultTools(cfg config.Config, provider agent.Provider, readRoots []string, memStore *memory.Store) []agent.Tool {
+func defaultTools(cfg config.Config, provider agent.Provider, readRoots []string, memStore *memory.Store, loc *time.Location) []agent.Tool {
 	toolset := []agent.Tool{
 		tools.NewReadToolWithOptions(cfg.CWD, tools.ReadOptions{ExtraRoots: readRoots}),
 		tools.NewListTool(cfg.CWD),
@@ -460,7 +462,34 @@ func defaultTools(cfg config.Config, provider agent.Provider, readRoots []string
 			tools.NewArtifactEditTool(astore),
 		)
 	}
+	// Connector tools degrade to absent when Google is not connected.
+	if cstore, err := connector.Open(cfg.Connectors.Dir); err == nil {
+		if _, err := cstore.Load(google.Name); err == nil {
+			if gclient, err := google.NewClient(cstore, google.Config{
+				ClientID:     cfg.Connectors.Google.ClientID,
+				ClientSecret: cfg.Connectors.Google.ClientSecret,
+			}); err == nil {
+				toolset = append(toolset,
+					tools.NewGmailSearchTool(gclient),
+					tools.NewGmailReadTool(gclient),
+					tools.NewGmailSendTool(gclient),
+					tools.NewCalendarAgendaTool(gclient, loc),
+					tools.NewCalendarCreateTool(gclient, loc),
+				)
+			}
+		}
+	}
 	return toolset
+}
+
+// userLocation resolves the user's timezone for calendar tools.
+func userLocation(profile userprofile.Profile) *time.Location {
+	if profile.Timezone != "" {
+		if loc, err := time.LoadLocation(profile.Timezone); err == nil {
+			return loc
+		}
+	}
+	return time.Local
 }
 
 func appendUsage(store *session.Store, usage agent.Usage) error {

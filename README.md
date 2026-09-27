@@ -260,6 +260,12 @@ Artifacts and library:
 - The Web UI has an Artifacts tab: markdown renders as a document, HTML renders inside a sandboxed iframe (no scripts execute).
 - Creating or editing an artifact needs your approval in interactive mode, like file writes; unattended runs deny it unless `--allow-all` is set.
 
+Connectors (third-party services):
+
+- `gg connect google --client-id ID` runs an OAuth flow (localhost callback + PKCE) for Gmail and Google Calendar; tokens live in `~/.gg/connectors/google.json` (0600). See `docs/connectors.md` for the client setup.
+- Once connected, the agent gets `gmail_search` / `gmail_read` / `gmail_send` and `calendar_agenda` / `calendar_create`. Sending mail and creating events need your approval; unattended runs deny them unless `--allow-all` is set.
+- `gg connect list`, `gg connect status [google]`, `gg connect remove google`.
+
 ## Skills
 
 `gg` loads Codex-style skills from `.agents/skills` by default. Project skills in the current directory or its parents take precedence over global skills in `~/.agents/skills`.
