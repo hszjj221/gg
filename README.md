@@ -20,6 +20,7 @@ English | [简体中文](README.zh-CN.md)
 - Built-in coding tools: `read`, `list`, `grep`, `bash`, `edit`, `write`
 - Synchronous read-only `subagent` tool for focused codebase research
 - Local RAG knowledge base: `gg kb index` + agent-callable `kb_search` tool
+- Scheduled background jobs (`gg job ...`) that fire while the `ggd` daemon is alive
 - Reusable Go conversation runtime shared by the TUI, Web, and desktop adapters
 - Bubble Tea TUI plus Web/Electron clients built from one React UI
 
@@ -239,6 +240,17 @@ Knowledge base (RAG):
 - `gg kb search <query>` runs semantic search over the index from the CLI.
 - Once the default knowledge base exists, the agent gains a `kb_search` tool for answering questions about the ingested corpus.
 - `gg kb eval --cases docs/kb-eval-sample.jsonl` measures retrieval recall@k. See `docs/rag.md` for the architecture.
+
+Scheduled jobs:
+
+- `gg job add --cron "0 9 * * *" --name "morning brief" "Summarize today's calendar"` creates a recurring job; `--at "2026-09-28 15:04"` or `--in 20m` creates a one-shot job.
+- Jobs only fire while the `ggd` daemon is alive (Linux/macOS; `ggd --no-scheduler` disables the loop). The CLI never runs the scheduling loop itself.
+- Each firing runs one agent turn in a fresh session named `scheduler/<job>-<time>`, auditable with `gg resume` and recorded in `gg job log`.
+- Unattended runs deny tools that need approval by default; pass `--allow-all` at `job add` time to let the job use them. Only enable it for jobs you trust.
+- Cron uses the 5-field minute-level format; `--timezone` sets the IANA timezone (default: your profile timezone, then local). Restarting the daemon does not catch up missed cron firings; a past-due one-shot job that never ran fires once on startup.
+- Each job is bound to the workspace it was created from (`gg job show` displays it); a daemon only fires jobs for its own workspace, so a job added in repo A never runs in repo B. Run a single `ggd` per scheduler directory.
+- `gg job list [--all]`, `gg job show|pause|resume|remove <id|name>`, `gg job log [--job <id|name>] [--limit N]`, and `gg job run <id|name>` (fire once now without changing the schedule). The run log stays readable by id even after `gg job remove`.
+- State lives in `~/.gg/scheduler/` (`jobs.json`, `runs.jsonl`), guarded by a file lock so the CLI and daemon can update it concurrently. State files are owner-only (0600) and the directory is 0700, like sessions and memory.
 
 ## Skills
 

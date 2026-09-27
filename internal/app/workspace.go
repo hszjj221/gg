@@ -173,6 +173,15 @@ func (w *Workspace) StartTurn(ctx context.Context, sessionID, prompt string, req
 	return w.manager.StartTurn(ctx, sessionID, prompt, requireApproval)
 }
 
+// StartTurnWithApprover starts a turn with an explicit approver; see
+// Manager.StartTurnWithApprover.
+func (w *Workspace) StartTurnWithApprover(ctx context.Context, sessionID, prompt string, approver agent.Approver) (*Run, error) {
+	if _, err := w.service(sessionID); err != nil {
+		return nil, err
+	}
+	return w.manager.StartTurnWithApprover(ctx, sessionID, prompt, approver)
+}
+
 func (w *Workspace) WaitRun(ctx context.Context, runID string, afterSequence int64) ([]Event, bool, error) {
 	run, ok := w.manager.Run(runID)
 	if !ok {

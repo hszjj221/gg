@@ -351,6 +351,23 @@ func (m *Manager) Snapshots() []Snapshot {
 }
 
 func (m *Manager) StartTurn(parent context.Context, sessionID, prompt string, requireApproval bool) (*Run, error) {
+	return m.startTurn(parent, sessionID, prompt, func(run *Run) agent.Approver {
+		if requireApproval {
+			return runApprover{run: run}
+		}
+		return nil
+	})
+}
+
+// StartTurnWithApprover starts a turn with an explicit approver instead of the
+// interactive one. It exists for unattended execution (e.g. scheduled jobs)
+// where no human is available to answer approval prompts; callers pass a
+// policy approver such as scheduler.UnattendedApprover.
+func (m *Manager) StartTurnWithApprover(parent context.Context, sessionID, prompt string, approver agent.Approver) (*Run, error) {
+	return m.startTurn(parent, sessionID, prompt, func(*Run) agent.Approver { return approver })
+}
+
+func (m *Manager) startTurn(parent context.Context, sessionID, prompt string, approverFor func(*Run) agent.Approver) (*Run, error) {
 	m.mu.Lock()
 	m.pruneRunsLocked(m.options.Clock())
 	service, ok := m.sessions[sessionID]
@@ -371,10 +388,7 @@ func (m *Manager) StartTurn(parent context.Context, sessionID, prompt string, re
 
 	run.publish(Event{Type: EventRunStarted})
 	go func() {
-		var approver agent.Approver
-		if requireApproval {
-			approver = runApprover{run: run}
-		}
+		approver := approverFor(run)
 		result, err := service.Run(ctx, prompt, func(agentEvent agent.Event) {
 			event := agentEvent
 			run.publish(Event{Type: EventAgent, Agent: &event})

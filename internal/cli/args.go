@@ -41,6 +41,8 @@ type Args struct {
 	KBEmbedKey   string
 	// MemoryArgs carries the subcommand for `gg memory ...`.
 	MemoryArgs []string
+	// JobArgs carries the subcommand for `gg job ...`.
+	JobArgs []string
 }
 
 type Command string
@@ -52,6 +54,7 @@ const (
 	CommandKB           Command = "kb"
 	CommandInit         Command = "init"
 	CommandMemory       Command = "memory"
+	CommandJob          Command = "job"
 )
 
 func Parse(argv []string) (Args, error) {
@@ -148,10 +151,28 @@ func parseCommand(args *Args, rest []string) error {
 		} else {
 			args.Prompt = strings.Join(rest, " ")
 		}
+	case "job":
+		// `gg job` alone or with a known subcommand manages scheduled jobs;
+		// anything else stays a prompt so `gg job well done` keeps working.
+		if len(rest) == 1 || isJobSubcommand(rest[1]) {
+			args.Command = CommandJob
+			args.JobArgs = rest[1:]
+		} else {
+			args.Prompt = strings.Join(rest, " ")
+		}
 	default:
 		args.Prompt = strings.Join(rest, " ")
 	}
 	return nil
+}
+
+// isJobSubcommand reports whether word is a `gg job` subcommand.
+func isJobSubcommand(word string) bool {
+	switch word {
+	case "add", "list", "show", "pause", "resume", "remove", "log", "run":
+		return true
+	}
+	return false
 }
 
 // parseKBCommand parses `gg kb <sub> [options]` with its own flag set so
@@ -243,6 +264,8 @@ Usage:
   gg init
   gg memory search <query>
   gg memory show [daily]
+  gg job add --cron "0 9 * * *" --name NAME PROMPT
+  gg job list [--all]
 
 Running gg without a prompt starts the TUI interactive mode when stdin/stdout are terminals.
 
@@ -274,5 +297,15 @@ Knowledge base (RAG):
   --top-k <n>              results per query (default: 5)
   --embed-model <m>        embedding model (default: text-embedding-3-small)
   --embed-base-url <url>   embeddings base URL (default: GG_EMBED_BASE_URL or --base-url)
-  --embed-api-key <key>    embeddings API key (default: GG_EMBED_API_KEY or --api-key)`)
+  --embed-api-key <key>    embeddings API key (default: GG_EMBED_API_KEY or --api-key)
+
+Scheduled jobs (fire while the ggd daemon is alive):
+  gg job add --cron "0 9 * * *" --name NAME [--timezone TZ] [--allow-all] [--timeout 10m] PROMPT
+  gg job add --at "2026-09-28 15:04" --name NAME PROMPT
+  gg job add --in 20m --name NAME PROMPT
+  gg job list [--all]      list jobs (paused hidden unless --all)
+  gg job show <id|name>    show one job
+  gg job pause|resume|remove <id|name>
+  gg job log [--job <id|name>] [--limit N]
+  gg job run <id|name>     run once now without changing the schedule`)
 }
