@@ -252,6 +252,14 @@ Scheduled jobs:
 - `gg job list [--all]`, `gg job show|pause|resume|remove <id|name>`, `gg job log [--job <id|name>] [--limit N]`, and `gg job run <id|name>` (fire once now without changing the schedule). The run log stays readable by id even after `gg job remove`.
 - State lives in `~/.gg/scheduler/` (`jobs.json`, `runs.jsonl`), guarded by a file lock so the CLI and daemon can update it concurrently. State files are owner-only (0600) and the directory is 0700, like sessions and memory.
 
+Artifacts and library:
+
+- The agent can create versioned deliverables with the `artifact_create` / `artifact_edit` tools (markdown documents and standalone HTML pages). They live in `~/.gg/artifacts/<id>/` (`artifact.json` plus immutable `v1.md`, `v2.md`, …), directory 0700 / files 0600.
+- `gg artifact list`, `gg artifact show <id>`, `gg artifact publish <id>`, `gg artifact remove <id>`.
+- Publishing marks the latest version published and saves a copy into your library at `~/.gg/library/` (`gg library add <path> [--name NAME]`, `gg library list|remove|path <id|name>`). The library is your curated file collection: agent-generated files plus files you upload.
+- The Web UI has an Artifacts tab: markdown renders as a document, HTML renders inside a sandboxed iframe (no scripts execute).
+- Creating or editing an artifact needs your approval in interactive mode, like file writes; unattended runs deny it unless `--allow-all` is set.
+
 ## Skills
 
 `gg` loads Codex-style skills from `.agents/skills` by default. Project skills in the current directory or its parents take precedence over global skills in `~/.agents/skills`.

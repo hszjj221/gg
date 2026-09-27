@@ -100,6 +100,29 @@ export interface RunStatus {
   pendingApprovals: Approval[];
 }
 
+export interface ArtifactMeta {
+  id: string;
+  title: string;
+  type: 'markdown' | 'html';
+  created_at: string;
+  updated_at: string;
+  version: number;
+  published_version: number;
+}
+
+export interface ArtifactView {
+  meta: ArtifactMeta;
+  content: string;
+  version: number;
+  publishedVersion: number;
+}
+
+export interface ArtifactPublishResult {
+  id: string;
+  publishedVersion: number;
+  libraryName: string;
+}
+
 export interface DesktopBridge {
   invoke<T>(method: string, params?: Record<string, unknown>): Promise<{
     result?: T;

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
+	"github.com/hszjj221/gg/internal/artifact"
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/contextmgr"
 	"github.com/hszjj221/gg/internal/kb"
@@ -450,6 +451,14 @@ func defaultTools(cfg config.Config, provider agent.Provider, readRoots []string
 		toolset = append(toolset, tools.NewKBSearchTool(
 			cfg.KBDir, embedKey, embedBase, tools.KBSearchOptions{},
 		))
+	}
+	// Artifact tools degrade to absent when the store cannot be opened;
+	// everything else keeps working.
+	if astore, err := artifact.Open(cfg.Artifacts.Dir); err == nil {
+		toolset = append(toolset,
+			tools.NewArtifactCreateTool(astore),
+			tools.NewArtifactEditTool(astore),
+		)
 	}
 	return toolset
 }

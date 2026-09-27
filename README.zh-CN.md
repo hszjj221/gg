@@ -252,6 +252,14 @@ Token 消耗：
 - `gg job list [--all]`、`gg job show|pause|resume|remove <id|name>`、`gg job log [--job <id|name>] [--limit N]`、`gg job run <id|name>`（立即跑一次，不改变排期）。`gg job remove` 之后仍可用 id 查审计日志。
 - 状态存在 `~/.gg/scheduler/`（`jobs.json`、`runs.jsonl`），用文件锁保证 CLI 和 daemon 并发更新不损坏。状态文件仅 owner 可读写（0600），目录 0700，与 session、memory 一致。
 
+Artifacts 与 Library：
+
+- agent 可用 `artifact_create` / `artifact_edit` 工具创建带版本的可交付物（markdown 文档、独立 HTML 页面），存在 `~/.gg/artifacts/<id>/`（`artifact.json` + 不可变版本文件 `v1.md`、`v2.md`…），目录 0700 / 文件 0600。
+- `gg artifact list`、`gg artifact show <id>`、`gg artifact publish <id>`、`gg artifact remove <id>`。
+- 发布会把最新版本标记为已发布，并拷贝一份到 `~/.gg/library/`（`gg library add <path> [--name NAME]`、`gg library list|remove|path <id|name>`）。Library 是你的文件合集：agent 生成的 + 你自己上传的。
+- Web UI 有"文档"页签：markdown 渲染成文档，HTML 在沙箱 iframe 里渲染（不执行脚本）。
+- 交互模式下创建/编辑 artifact 需要你确认，和写文件一样；无人值守默认拒绝，除非开了 `--allow-all`。
+
 ## Skills
 
 `gg` 默认从 `.agents/skills` 加载 Codex 风格 skills。当前目录及其父目录中的项目 skills 优先于 `~/.agents/skills` 中的全局 skills。

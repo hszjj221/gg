@@ -32,6 +32,9 @@ flowchart LR
 | `internal/userprofile` | User profile (`~/.gg/USER.md`): load, parse, and render the "who you are" system block. |
 | `internal/memory` | Structured memory store (`~/.gg/memory/`): curated `MEMORY.md`, daily logs `YYYY-MM-DD.md`, `people/` and `groups/` notes, legacy `memory.md` migration, daily-log pruning, and keyword search. |
 | `internal/scheduler` | Cron/once job definitions, file-locked JSON store (`~/.gg/scheduler/`), the firing loop, and the unattended approval policy. The daemon provides the `Executor`; the core never imports the agent runtime except for the approver types. |
+| `internal/artifact` | Versioned agent-produced deliverables: `~/.gg/artifacts/<id>/` holds `artifact.json` plus immutable `v1.md`, `v2.md`, … Create/version/publish/remove; markdown and HTML types; owner-only permissions (0600 files, 0700 dir). Version allocation and publish marking are serialized with an flock on `artifacts.lock`. |
+| `internal/library` | The user's curated file collection (`~/.gg/library/`): flat files plus `index.json` (`id`, `name`, `source`, `size`, `added_at`). Accepts uploads (`Add`) and in-memory content (`AddBytes`, used by artifact publish). Mutations are serialized with an flock on `library.lock`; `index.json` is a reserved name and collisions are case-insensitive. |
+| `internal/filelock` | Cross-process exclusive file locking (flock) shared by the artifact and library stores; explicit error on platforms without flock. |
 | `internal/tui` | Bubble Tea state and rendering only; conversation DTOs come from the core. |
 | `ui/src` | Shared React interface and transport abstraction. |
 | `ui/electron` | Native window, workspace picker, sidecar lifecycle, and a narrow context-isolated IPC bridge. |
@@ -57,6 +60,16 @@ System prompt assembly order (after the coding instructions): user profile, cura
 4. **Approval policy**: `scheduler.UnattendedApprover` denies every approval-gated tool by default; a job created with `--allow-all` opts in. This is injected explicitly — the scheduler never relies on a nil approver, which the runner would treat as "allow everything".
 5. **Restart semantics**: cron jobs are rescheduled from the current time (missed firings are not caught up); a past-due once job that never ran fires once on daemon startup. The daemon writes `~/.gg/ggd.pid` so `gg job add` can warn when no daemon is alive to fire jobs.
 
+## Artifacts and library
+
+`internal/artifact` owns versioned deliverables; `internal/library` owns the user's file collection; the two meet at publish time:
+
+1. **Store**: `~/.gg/artifacts/<id>/artifact.json` (id, title, type, version, published_version, timestamps) plus immutable `v<n>.md` / `v<n>.html` files, all written atomically (temp file + rename). `artifact_edit` appends a full new version — never a diff merge — so every version stays reproducible. Supported types are `markdown` and `html`; content is capped at 1 MiB per version so artifacts cannot blow up the agent context. All read-modify-write cycles are serialized with an `flock` on `artifacts.lock` (via `internal/filelock`), so concurrent edits from the CLI and the daemon cannot allocate the same version number. `List` always returns a non-nil slice so JSON callers see `[]`, not `null`, on an empty store.
+2. **Agent tools**: `artifact_create(title, type, content)` and `artifact_edit(artifact_id, content)`, registered in `app.defaultTools` when the store opens. Both implement `ApprovalRequest` (title/type/size plus a before/after content preview) because they write outside the working directory; the unattended approver denies them unless the job opted into `--allow-all`.
+3. **Publish**: `gg artifact publish <id>` and the Web Publish button (JSON-RPC `artifact.publish`) share one flow in `app.Workspace.PublishArtifact`: the latest version's bytes are saved into the library first (`library.AddBytes` → `~/.gg/library/<slug>.<ext>`, source `artifact:<id>`), and only then is the artifact's `published_version` advanced. `Store.Publish(id, expectedVersion)` refuses with `ErrVersionChanged` when the artifact gained a newer version between the caller's read and the mark — the half-saved library copy is removed and the caller retries instead of recording a published version whose bytes were never saved.
+4. **Library**: `gg library add <path> [--name]` copies a regular file (≤ 50 MiB, enforced on the actual copied bytes, not the pre-copy stat) into `~/.gg/library/` with collision-safe naming; `index.json` is the source of truth and is updated atomically. Name collisions are detected case-insensitively (the macOS default filesystem is case-insensitive) and the reserved name `index.json` is rejected, so an upload can never overwrite or delete the index. All mutations run under an `flock` on `library.lock` so concurrent adds cannot reserve the same name or drop each other's entries. `library list|remove|path` manage entries by id or case-insensitive name.
+5. **Web**: `artifact.list` / `artifact.get` / `artifact.publish` over the existing JSON-RPC transport; `system.info` advertises the `artifact` capability and the Web client only shows the Artifacts tab when the connected daemon reports it. The React Artifacts tab renders markdown with `marked` and HTML inside `<iframe sandbox="">` (no scripts execute). The reader always shows the latest version (drafts added after publishing stay visible); the Publish button appears whenever `publishedVersion < version`. Trust boundary: artifact content comes from the local user's own agent or files, same trust as the chat transcript.
+
 ## Runtime model
 - A `Workspace` opens sessions by stable ID and never exposes session file paths over the network boundary.
 - A `Manager` owns open conversation services. Different sessions may run concurrently, while one session permits only one active run. Inactive sessions are evicted least-recently-used, and completed runs expire by count and age.
@@ -74,6 +87,7 @@ The transport-independent methods are:
 - `session.list`, `session.create`, `session.open`, `session.get`, `session.rename`
 - `session.action` with `tree`, `fork`, or `clone`
 - `run.start`, `run.wait`, `run.get`, `run.active`, `run.cancel`, `run.approve`, `run.steer`
+- `artifact.list`, `artifact.get`, `artifact.publish`
 
 stdio uses one JSON-RPC object per line and supports concurrent requests, which is required while one request is waiting for an approval. HTTP accepts JSON-RPC at `POST /rpc`; `GET /events` streams run events as SSE. HTTP mode requires a Bearer token and binds only to loopback unless `--allow-remote` is explicit. JSON-RPC 2.0 remains the wire format; `system.info.protocolVersion` independently versions gg methods, events, DTOs, and stable application error codes.
 

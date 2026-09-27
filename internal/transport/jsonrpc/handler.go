@@ -24,6 +24,7 @@ var capabilities = []string{
 	"session.clone",
 	"session.fork",
 	"session.tree",
+	"artifact",
 }
 
 type Request struct {
@@ -231,6 +232,30 @@ func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) 
 			return nil, invalidParams("sessionId and text are required")
 		}
 		return okResult(), h.workspace.Steer(params.SessionID, params.Text, params.FollowUp)
+	case "artifact.list":
+		return h.workspace.ListArtifacts()
+	case "artifact.get":
+		var params struct {
+			ArtifactID string `json:"artifactId"`
+		}
+		if err := decodeParams(raw, &params); err != nil {
+			return nil, err
+		}
+		if params.ArtifactID == "" {
+			return nil, invalidParams("artifactId is required")
+		}
+		return h.workspace.GetArtifact(params.ArtifactID)
+	case "artifact.publish":
+		var params struct {
+			ArtifactID string `json:"artifactId"`
+		}
+		if err := decodeParams(raw, &params); err != nil {
+			return nil, err
+		}
+		if params.ArtifactID == "" {
+			return nil, invalidParams("artifactId is required")
+		}
+		return h.workspace.PublishArtifact(params.ArtifactID)
 	default:
 		return nil, &Error{Code: -32601, Message: fmt.Sprintf("method %q not found", method)}
 	}

@@ -64,6 +64,16 @@ type MemoryConfig struct {
 	DailyLogRetentionDays int    `json:"dailyLogRetentionDays"`
 }
 
+// ArtifactConfig locates the artifact store's persisted state.
+type ArtifactConfig struct {
+	Dir string
+}
+
+// LibraryConfig locates the user's file library.
+type LibraryConfig struct {
+	Dir string
+}
+
 // SchedulerConfig locates the scheduler's persisted state.
 type SchedulerConfig struct {
 	Dir string `json:"dir"`
@@ -85,6 +95,8 @@ type Config struct {
 	Context      ContextConfig
 	Memory       MemoryConfig
 	Scheduler    SchedulerConfig
+	Artifacts    ArtifactConfig
+	Library      LibraryConfig
 	// MemoryPath is the legacy single-file memory location (~/.gg/memory.md),
 	// kept only for the one-time migration into Memory.Dir. New code uses
 	// Memory.Dir.
@@ -108,6 +120,8 @@ type fileConfig struct {
 	Context   contextFileConfig         `json:"context"`
 	Memory    memoryFileConfig          `json:"memory"`
 	Scheduler schedulerFileConfig       `json:"scheduler"`
+	Artifacts dirFileConfig             `json:"artifacts"`
+	Library   dirFileConfig             `json:"library"`
 }
 
 type contextFileConfig struct {
@@ -127,6 +141,11 @@ type memoryFileConfig struct {
 }
 
 type schedulerFileConfig struct {
+	Dir *string `json:"dir"`
+}
+
+// dirFileConfig is a generic {"dir": ...} file override for a state dir.
+type dirFileConfig struct {
 	Dir *string `json:"dir"`
 }
 
@@ -168,6 +187,8 @@ func Resolve(options Options) (Config, error) {
 		SessionDir:      sessionDir,
 		KBDir:           filepath.Join(home, ".gg", "kb"),
 		Scheduler:       resolveSchedulerConfig(home, cfgFile.Scheduler),
+		Artifacts:       ArtifactConfig{Dir: resolveStateDir(home, cfgFile.Artifacts.Dir, "artifacts")},
+		Library:         LibraryConfig{Dir: resolveStateDir(home, cfgFile.Library.Dir, "library")},
 		CWD:             cwd,
 		NoContextFiles:  options.NoContextFiles,
 		EmbedBaseURL:    os.Getenv("GG_EMBED_BASE_URL"),
@@ -299,14 +320,20 @@ func resolveContextConfig(file contextFileConfig) (ContextConfig, error) {
 	return cfg, nil
 }
 
+// resolveStateDir locates a ~/.gg/<name> state dir, honoring an optional
+// configured dir (~/ prefix supported).
+func resolveStateDir(home string, configured *string, name string) string {
+	dir := filepath.Join(home, ".gg", name)
+	if configured != nil && strings.TrimSpace(*configured) != "" {
+		dir = expandHome(home, *configured)
+	}
+	return dir
+}
+
 // resolveSchedulerConfig locates the scheduler state dir, defaulting to
 // ~/.gg/scheduler. A configured dir supports the ~/ prefix like memory.dir.
 func resolveSchedulerConfig(home string, file schedulerFileConfig) SchedulerConfig {
-	dir := filepath.Join(home, ".gg", "scheduler")
-	if file.Dir != nil && strings.TrimSpace(*file.Dir) != "" {
-		dir = expandHome(home, *file.Dir)
-	}
-	return SchedulerConfig{Dir: dir}
+	return SchedulerConfig{Dir: resolveStateDir(home, file.Dir, "scheduler")}
 }
 
 func resolveMemoryConfig(home string, file memoryFileConfig, disabledByCLI bool) (MemoryConfig, error) {

@@ -43,6 +43,10 @@ type Args struct {
 	MemoryArgs []string
 	// JobArgs carries the subcommand for `gg job ...`.
 	JobArgs []string
+	// ArtifactArgs carries the subcommand for `gg artifact ...`.
+	ArtifactArgs []string
+	// LibraryArgs carries the subcommand for `gg library ...`.
+	LibraryArgs []string
 }
 
 type Command string
@@ -55,6 +59,8 @@ const (
 	CommandInit         Command = "init"
 	CommandMemory       Command = "memory"
 	CommandJob          Command = "job"
+	CommandArtifact     Command = "artifact"
+	CommandLibrary      Command = "library"
 )
 
 func Parse(argv []string) (Args, error) {
@@ -160,6 +166,24 @@ func parseCommand(args *Args, rest []string) error {
 		} else {
 			args.Prompt = strings.Join(rest, " ")
 		}
+	case "artifact":
+		// `gg artifact` alone or with a known subcommand manages artifacts;
+		// anything else stays a prompt.
+		if len(rest) == 1 || isArtifactSubcommand(rest[1]) {
+			args.Command = CommandArtifact
+			args.ArtifactArgs = rest[1:]
+		} else {
+			args.Prompt = strings.Join(rest, " ")
+		}
+	case "library":
+		// `gg library` alone or with a known subcommand manages the file
+		// library; anything else stays a prompt.
+		if len(rest) == 1 || isLibrarySubcommand(rest[1]) {
+			args.Command = CommandLibrary
+			args.LibraryArgs = rest[1:]
+		} else {
+			args.Prompt = strings.Join(rest, " ")
+		}
 	default:
 		args.Prompt = strings.Join(rest, " ")
 	}
@@ -170,6 +194,24 @@ func parseCommand(args *Args, rest []string) error {
 func isJobSubcommand(word string) bool {
 	switch word {
 	case "add", "list", "show", "pause", "resume", "remove", "log", "run":
+		return true
+	}
+	return false
+}
+
+// isArtifactSubcommand reports whether word is a `gg artifact` subcommand.
+func isArtifactSubcommand(word string) bool {
+	switch word {
+	case "list", "show", "publish", "remove":
+		return true
+	}
+	return false
+}
+
+// isLibrarySubcommand reports whether word is a `gg library` subcommand.
+func isLibrarySubcommand(word string) bool {
+	switch word {
+	case "add", "list", "remove", "path":
 		return true
 	}
 	return false
@@ -266,6 +308,11 @@ Usage:
   gg memory show [daily]
   gg job add --cron "0 9 * * *" --name NAME PROMPT
   gg job list [--all]
+  gg artifact list
+  gg artifact show <id>
+  gg artifact publish <id>
+  gg library add <path> [--name NAME]
+  gg library list
 
 Running gg without a prompt starts the TUI interactive mode when stdin/stdout are terminals.
 
@@ -307,5 +354,17 @@ Scheduled jobs (fire while the ggd daemon is alive):
   gg job show <id|name>    show one job
   gg job pause|resume|remove <id|name>
   gg job log [--job <id|name>] [--limit N]
-  gg job run <id|name>     run once now without changing the schedule`)
+  gg job run <id|name>     run once now without changing the schedule
+
+Artifacts (agent-produced deliverables, ~/.gg/artifacts):
+  gg artifact list          list artifacts
+  gg artifact show <id>     show metadata and latest version content
+  gg artifact publish <id>  publish latest version and save it to the library
+  gg artifact remove <id>   delete an artifact and all its versions
+
+Library (your file collection, ~/.gg/library):
+  gg library add <path> [--name NAME]   copy a file into the library
+  gg library list          list library files
+  gg library remove <id|name>
+  gg library path <id|name>  print the stored file path`)
 }

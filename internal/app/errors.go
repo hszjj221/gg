@@ -15,6 +15,7 @@ const (
 	ErrorEventHistoryExpired ErrorCode = "event_history_expired"
 	ErrorSessionConflict     ErrorCode = "session_conflict"
 	ErrorInvalidAction       ErrorCode = "invalid_action"
+	ErrorArtifactNotFound    ErrorCode = "artifact_not_found"
 )
 
 // AppError carries a stable code while retaining the original cause for
