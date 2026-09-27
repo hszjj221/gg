@@ -143,7 +143,7 @@ func TestProjectInstructionsReloadAndCanBeDisabled(t *testing.T) {
 	if _, err := e.Run(context.Background(), "first", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	text := provider.requests[0].Messages[0].Content
+	text := systemText(provider.requests[0].Messages)
 	if strings.Index(text, "parent convention") < 0 || strings.Index(text, "parent convention") > strings.Index(text, "child convention") {
 		t.Fatalf("wrong instruction order: %s", text)
 	}

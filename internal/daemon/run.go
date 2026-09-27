@@ -107,11 +107,21 @@ func Run(ctx context.Context, argv []string, options Options) int {
 			return openai.NewClient(openai.Config{APIKey: cfg.APIKey, BaseURL: cfg.BaseURL, Model: cfg.Model})
 		}
 	}
+	personal, notice, err := app.SetupPersonal(cfg)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if notice != "" {
+		fmt.Fprintln(stderr, "note: "+notice)
+	}
 	workspace, err := app.NewWorkspace(app.WorkspaceOptions{
 		Config:          cfg,
 		ProviderFactory: providerFactory,
 		Skills:          skillSet,
 		Repository:      session.NewFileRepository(cfg.SessionDir),
+		Profile:         personal.Profile,
+		MemoryStore:     personal.Store,
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)

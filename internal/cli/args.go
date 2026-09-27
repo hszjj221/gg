@@ -39,6 +39,8 @@ type Args struct {
 	KBEmbedModel string
 	KBEmbedBase  string
 	KBEmbedKey   string
+	// MemoryArgs carries the subcommand for `gg memory ...`.
+	MemoryArgs []string
 }
 
 type Command string
@@ -48,6 +50,8 @@ const (
 	CommandSessionsList Command = "sessions-list"
 	CommandResume       Command = "resume"
 	CommandKB           Command = "kb"
+	CommandInit         Command = "init"
+	CommandMemory       Command = "memory"
 )
 
 func Parse(argv []string) (Args, error) {
@@ -68,7 +72,7 @@ func Parse(argv []string) (Args, error) {
 	fs.BoolVar(&args.Resume, "r", false, "select a session to resume")
 	fs.BoolVar(&args.Usage, "usage", false, "print token usage to stderr")
 	fs.BoolVar(&args.NoSkills, "no-skills", false, "disable .agents/skills discovery")
-	fs.BoolVar(&args.NoMemory, "no-memory", false, "disable ~/.gg/memory.md")
+	fs.BoolVar(&args.NoMemory, "no-memory", false, "disable memory (~/.gg/memory/)")
 	fs.BoolVar(&args.NoContextFiles, "no-context-files", false, "disable AGENTS.md discovery")
 	fs.StringVar(&args.Approval, "approval", "auto", "tool approval mode: auto, never, or on-request")
 	fs.StringVar(&args.APIKey, "api-key", "", "API key")
@@ -123,6 +127,26 @@ func parseCommand(args *Args, rest []string) error {
 		args.Command = CommandKB
 		if err := parseKBCommand(args, rest[1:]); err != nil {
 			return err
+		}
+	case "init":
+		// Only a bare `gg init` is a command; anything longer stays a prompt
+		// so e.g. `gg init a repo` keeps working as before.
+		if len(rest) == 1 {
+			args.Command = CommandInit
+		} else {
+			args.Prompt = strings.Join(rest, " ")
+		}
+	case "memory":
+		// Only `gg memory search|show ...` is a command; other prompts
+		// starting with "memory" keep working as before.
+		if len(rest) >= 2 && (rest[1] == "search" || rest[1] == "show") {
+			if rest[1] == "show" && len(rest) > 3 {
+				return fmt.Errorf("usage: gg memory show [daily]")
+			}
+			args.Command = CommandMemory
+			args.MemoryArgs = rest[1:]
+		} else {
+			args.Prompt = strings.Join(rest, " ")
 		}
 	default:
 		args.Prompt = strings.Join(rest, " ")
@@ -216,6 +240,9 @@ Usage:
   gg kb index <dir> [--name <kb>] [embedding options]
   gg kb search <query> [--name <kb>] [--top-k <n>]
   gg kb eval --cases <file> [--name <kb>] [--top-k <n>]
+  gg init
+  gg memory search <query>
+  gg memory show [daily]
 
 Running gg without a prompt starts the TUI interactive mode when stdin/stdout are terminals.
 
@@ -233,7 +260,7 @@ Options:
   -n, --name <name>        set the session display name
   --usage                  print token usage to stderr
   --no-skills              disable .agents/skills discovery
-  --no-memory              disable ~/.gg/memory.md
+  --no-memory              disable memory (~/.gg/memory/)
   --no-context-files       disable AGENTS.md discovery
   --approval <mode>        tool approval mode: auto, never, on-request (default: auto)
   -h, --help               show help

@@ -105,8 +105,8 @@ func TestLoadTruncatesSnapshotWithoutChangingFile(t *testing.T) {
 }
 
 func TestSystemPromptIncludesMemoryContent(t *testing.T) {
-	prompt := SystemPrompt(Snapshot{Content: "- Prefer small changes."})
-	if !strings.Contains(prompt, "User memory from ~/.gg/memory.md:") || !strings.Contains(prompt, "Prefer small changes") {
+	prompt := SystemPrompt(Snapshot{Path: "/home/u/.gg/memory/MEMORY.md", Content: "- Prefer small changes."})
+	if !strings.Contains(prompt, "User memory from /home/u/.gg/memory/MEMORY.md:") || !strings.Contains(prompt, "Prefer small changes") {
 		t.Fatalf("unexpected system prompt: %q", prompt)
 	}
 }

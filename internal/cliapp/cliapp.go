@@ -8,15 +8,18 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/app"
 	"github.com/hszjj221/gg/internal/cli"
 	"github.com/hszjj221/gg/internal/config"
+	"github.com/hszjj221/gg/internal/memory"
 	"github.com/hszjj221/gg/internal/provider/openai"
 	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/skills"
 	"github.com/hszjj221/gg/internal/tui"
+	"github.com/hszjj221/gg/internal/userprofile"
 )
 
 type Options struct {
@@ -77,6 +80,20 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	}
 	if parsed.Command == cli.CommandKB {
 		return runKB(ctx, cfg, parsed, stdout, stderr)
+	}
+	if parsed.Command == cli.CommandInit {
+		return runInit(cfg, stdout, stderr)
+	}
+	if parsed.Command == cli.CommandMemory {
+		return runMemoryCommand(cfg, parsed.MemoryArgs, stdout, stderr)
+	}
+	personal, notice, err := app.SetupPersonal(cfg)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if notice != "" {
+		fmt.Fprintln(stderr, "note: "+notice)
 	}
 	if wantsSessionSelector(parsed) {
 		if !shouldRunTUI(stdin, stdout, isTerm) {
@@ -140,6 +157,8 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		Summary:         loaded.LastSummary,
 		Skills:          skillSet,
 		ModelRecorded:   modelRecorded,
+		Profile:         personal.Profile,
+		MemoryStore:     personal.Store,
 	})
 
 	if parsed.Prompt != "" {
@@ -261,6 +280,82 @@ func runSessionsList(cfg config.Config, stdout io.Writer, stderr io.Writer) int 
 		return 1
 	}
 	return 0
+}
+
+// runInit scaffolds the personal layer: the ~/.gg/USER.md profile template
+// and the ~/.gg/memory/ directory layout. It is idempotent.
+func runInit(cfg config.Config, stdout io.Writer, stderr io.Writer) int {
+	personal, notice, err := app.SetupPersonal(cfg)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	_ = personal
+	if err := userprofile.WriteTemplate(cfg.UserFile); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "initialized personal layer:\n  profile: %s\n  memory:  %s\n", cfg.UserFile, cfg.Memory.Dir)
+	if notice != "" {
+		fmt.Fprintf(stdout, "  note: %s\n", notice)
+	}
+	fmt.Fprintf(stdout, "edit %s to tell gg about yourself.\n", cfg.UserFile)
+	return 0
+}
+
+// runMemoryCommand implements `gg memory search <query>` and
+// `gg memory show [daily]`.
+func runMemoryCommand(cfg config.Config, memArgs []string, stdout io.Writer, stderr io.Writer) int {
+	if !cfg.Memory.Enabled {
+		fmt.Fprintln(stderr, "memory is disabled")
+		return 1
+	}
+	personal, _, err := app.SetupPersonal(cfg)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	store := personal.Store
+	if len(memArgs) == 0 {
+		fmt.Fprintln(stderr, "usage: gg memory <search <query>|show [daily]>")
+		return 2
+	}
+	switch memArgs[0] {
+	case "search":
+		query := strings.Join(memArgs[1:], " ")
+		if strings.TrimSpace(query) == "" {
+			fmt.Fprintln(stderr, "usage: gg memory search <query>")
+			return 2
+		}
+		hits, err := store.Search(query, "all")
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if len(hits) == 0 {
+			fmt.Fprintln(stdout, "no memory matches")
+			return 0
+		}
+		for _, hit := range hits {
+			fmt.Fprintf(stdout, "%s:%d: %s\n", hit.Path, hit.Line, hit.Snippet)
+		}
+		return 0
+	case "show":
+		path := store.CuratedPath()
+		if len(memArgs) > 1 && memArgs[1] == "daily" {
+			path = store.DailyPath(time.Now())
+		}
+		content, err := memory.Show(path)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		fmt.Fprintln(stdout, content)
+		return 0
+	default:
+		fmt.Fprintln(stderr, "usage: gg memory <search <query>|show [daily]>")
+		return 2
+	}
 }
 
 func runInteractive(

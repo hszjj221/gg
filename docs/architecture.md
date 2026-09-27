@@ -29,14 +29,24 @@ flowchart LR
 | `internal/transport/httpapi` | Bearer-protected RPC plus replayable SSE events for browser deployments. |
 | `internal/daemon` and `cmd/ggd` | Composition root for config, provider, repository, workspace, and transports. |
 | `internal/cliapp` | CLI/TUI composition only. Business behavior delegates to `app.Service`. |
+| `internal/userprofile` | User profile (`~/.gg/USER.md`): load, parse, and render the "who you are" system block. |
+| `internal/memory` | Structured memory store (`~/.gg/memory/`): curated `MEMORY.md`, daily logs `YYYY-MM-DD.md`, `people/` and `groups/` notes, legacy `memory.md` migration, daily-log pruning, and keyword search. |
 | `internal/tui` | Bubble Tea state and rendering only; conversation DTOs come from the core. |
 | `ui/src` | Shared React interface and transport abstraction. |
 | `ui/electron` | Native window, workspace picker, sidecar lifecycle, and a narrow context-isolated IPC bridge. |
 
 Dependencies point inward: UI and transports depend on application use cases; the application layer depends on agent and persistence abstractions; the core never imports a UI or network package.
 
-## Runtime model
+## Personal layer (profile + memory)
 
+`app.SetupPersonal(cfg)` runs at every CLI and daemon startup and wires the personal layer into the system prompt:
+
+1. `internal/userprofile`: loads `~/.gg/USER.md` (created by `gg init`; missing file is fine, failures never block startup) and renders a compact "who you are" block: name/call name, timezone, language, notes.
+2. `internal/memory`: ensures `~/.gg/memory/`, migrates a legacy `~/.gg/memory.md` into `memory/MEMORY.md` (legacy file renamed to `memory.md.bak`, never overwritten when curated content already exists), prunes expired daily logs, and snapshots prompt content.
+
+System prompt assembly order (after the coding instructions): user profile, curated memory (`MEMORY.md`), today's daily-log tail (`YYYY-MM-DD.md`), then project instructions (AGENTS.md) and skills. Tool surface: `memory_add` accepts `scope=general|daily|person:<name>|group:<name>` (default general); `memory_search` does case-insensitive keyword search across scopes and returns up to 10 `path:line: snippet` hits. Both are hidden when memory is disabled.
+
+## Runtime model
 - A `Workspace` opens sessions by stable ID and never exposes session file paths over the network boundary.
 - A `Manager` owns open conversation services. Different sessions may run concurrently, while one session permits only one active run. Inactive sessions are evicted least-recently-used, and completed runs expire by count and age.
 - Each turn receives a run ID. Events carry a monotonically increasing sequence number and remain replayable through `run.wait` or `/events` within a bounded retention window. SSE frames include sequence IDs and idle heartbeats, so Web clients can reconnect with exponential backoff and resume from the last event. A client that falls behind receives `event_history_expired` and reloads the session snapshot.

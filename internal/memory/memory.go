@@ -60,6 +60,10 @@ func Append(path, text string) error {
 	defer file.Close()
 
 	var b strings.Builder
+	// A freshly created file gets a header. Note EnsureLayout deliberately
+	// creates MEMORY.md empty (no header): an empty-with-header file would
+	// look like real content to LoadCurated and get injected into the prompt.
+	// This branch only triggers when the file was deleted after setup.
 	if !exists {
 		b.WriteString("# gg Memory\n\n")
 	} else if data, err := os.ReadFile(path); err == nil && len(data) > 0 && !strings.HasSuffix(string(data), "\n") {
@@ -106,7 +110,7 @@ func SystemPrompt(snapshot Snapshot) string {
 	if content == "" {
 		return ""
 	}
-	return "User memory from ~/.gg/memory.md:\n" + content
+	return "User memory from " + snapshot.Path + ":\n" + content
 }
 
 func EstimateText(text string) int {
