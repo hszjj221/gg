@@ -266,6 +266,11 @@ Connectors (third-party services):
 - Once connected, the agent gets `gmail_search` / `gmail_read` / `gmail_send` and `calendar_agenda` / `calendar_create`. Sending mail and creating events need your approval; unattended runs deny them unless `--allow-all` is set.
 - `gg connect list`, `gg connect status [google]`, `gg connect remove google`.
 
+Media & voice (OpenAI-compatible `/v1/images/generations`, `/v1/audio/speech`, `/v1/audio/transcriptions`):
+
+- `gg media image "prompt"`, `gg media tts "text"`, `gg media stt <audio-file>`. Defaults to the chat provider's base URL / API key; override with `GG_MEDIA_BASE_URL` / `GG_MEDIA_API_KEY` / `GG_MEDIA_{IMAGE,TTS,STT}_MODEL`. See `docs/media.md`.
+- The agent gets `image_generate` (needs approval), `tts`, and `stt` tools; generated files land in `~/.gg/media/`.
+
 ## Skills
 
 `gg` loads Codex-style skills from `.agents/skills` by default. Project skills in the current directory or its parents take precedence over global skills in `~/.agents/skills`.

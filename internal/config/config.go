@@ -103,16 +103,23 @@ type Config struct {
 	// Resolved from GG_EMBED_BASE_URL / GG_EMBED_API_KEY.
 	EmbedBaseURL string
 	EmbedAPIKey  string
-	Provider     string
-	ProviderType string
-	Selection    string
-	Providers    map[string]ProviderConfig
-	Context      ContextConfig
-	Memory       MemoryConfig
-	Scheduler    SchedulerConfig
-	Artifacts    ArtifactConfig
-	Library      LibraryConfig
-	Connectors   ConnectorConfig
+	// Media* optionally override the chat provider's endpoint for media
+	// (image/TTS/STT). Resolved from GG_MEDIA_* env vars.
+	MediaBaseURL    string
+	MediaAPIKey     string
+	MediaImageModel string
+	MediaTTSModel   string
+	MediaSTTModel   string
+	Provider        string
+	ProviderType    string
+	Selection       string
+	Providers       map[string]ProviderConfig
+	Context         ContextConfig
+	Memory          MemoryConfig
+	Scheduler       SchedulerConfig
+	Artifacts       ArtifactConfig
+	Library         LibraryConfig
+	Connectors      ConnectorConfig
 	// MemoryPath is the legacy single-file memory location (~/.gg/memory.md),
 	// kept only for the one-time migration into Memory.Dir. New code uses
 	// Memory.Dir.
@@ -221,6 +228,11 @@ func Resolve(options Options) (Config, error) {
 		NoContextFiles:  options.NoContextFiles,
 		EmbedBaseURL:    os.Getenv("GG_EMBED_BASE_URL"),
 		EmbedAPIKey:     os.Getenv("GG_EMBED_API_KEY"),
+		MediaBaseURL:    os.Getenv("GG_MEDIA_BASE_URL"),
+		MediaAPIKey:     os.Getenv("GG_MEDIA_API_KEY"),
+		MediaImageModel: os.Getenv("GG_MEDIA_IMAGE_MODEL"),
+		MediaTTSModel:   os.Getenv("GG_MEDIA_TTS_MODEL"),
+		MediaSTTModel:   os.Getenv("GG_MEDIA_STT_MODEL"),
 		apiKeyOverride:  options.APIKey,
 		baseURLOverride: options.BaseURL,
 	}
