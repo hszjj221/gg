@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -84,6 +85,9 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 }
 
 func TestSaveRestrictivePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits are not enforced on Windows")
+	}
 	home := t.TempDir()
 	ix := testIndex()
 	if err := ix.Save(home); err != nil {
