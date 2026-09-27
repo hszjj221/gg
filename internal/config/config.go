@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/hszjj221/gg/internal/memory"
@@ -110,16 +111,22 @@ type Config struct {
 	MediaImageModel string
 	MediaTTSModel   string
 	MediaSTTModel   string
-	Provider        string
-	ProviderType    string
-	Selection       string
-	Providers       map[string]ProviderConfig
-	Context         ContextConfig
-	Memory          MemoryConfig
-	Scheduler       SchedulerConfig
-	Artifacts       ArtifactConfig
-	Library         LibraryConfig
-	Connectors      ConnectorConfig
+	// TelegramBotToken enables the Telegram channel in the daemon.
+	// Resolved from GG_TELEGRAM_BOT_TOKEN.
+	TelegramBotToken string
+	// TelegramAllowChats restricts which chat IDs the bot answers.
+	// Resolved from GG_TELEGRAM_ALLOW_CHATS (comma-separated integers).
+	TelegramAllowChats []int64
+	Provider           string
+	ProviderType       string
+	Selection          string
+	Providers          map[string]ProviderConfig
+	Context            ContextConfig
+	Memory             MemoryConfig
+	Scheduler          SchedulerConfig
+	Artifacts          ArtifactConfig
+	Library            LibraryConfig
+	Connectors         ConnectorConfig
 	// MemoryPath is the legacy single-file memory location (~/.gg/memory.md),
 	// kept only for the one-time migration into Memory.Dir. New code uses
 	// Memory.Dir.
@@ -212,29 +219,31 @@ func Resolve(options Options) (Config, error) {
 	}
 
 	cfg := Config{
-		Providers:       cfgFile.Providers,
-		Context:         contextConfig,
-		Memory:          memoryConfig,
-		MemoryPath:      filepath.Join(home, ".gg", "memory.md"),
-		UserFile:        userprofile.DefaultPath(home),
-		HomeDir:         home,
-		SessionDir:      sessionDir,
-		KBDir:           filepath.Join(home, ".gg", "kb"),
-		Scheduler:       resolveSchedulerConfig(home, cfgFile.Scheduler),
-		Artifacts:       ArtifactConfig{Dir: resolveStateDir(home, cfgFile.Artifacts.Dir, "artifacts")},
-		Library:         LibraryConfig{Dir: resolveStateDir(home, cfgFile.Library.Dir, "library")},
-		Connectors:      resolveConnectorConfig(home, cfgFile.Connectors),
-		CWD:             cwd,
-		NoContextFiles:  options.NoContextFiles,
-		EmbedBaseURL:    os.Getenv("GG_EMBED_BASE_URL"),
-		EmbedAPIKey:     os.Getenv("GG_EMBED_API_KEY"),
-		MediaBaseURL:    os.Getenv("GG_MEDIA_BASE_URL"),
-		MediaAPIKey:     os.Getenv("GG_MEDIA_API_KEY"),
-		MediaImageModel: os.Getenv("GG_MEDIA_IMAGE_MODEL"),
-		MediaTTSModel:   os.Getenv("GG_MEDIA_TTS_MODEL"),
-		MediaSTTModel:   os.Getenv("GG_MEDIA_STT_MODEL"),
-		apiKeyOverride:  options.APIKey,
-		baseURLOverride: options.BaseURL,
+		Providers:          cfgFile.Providers,
+		Context:            contextConfig,
+		Memory:             memoryConfig,
+		MemoryPath:         filepath.Join(home, ".gg", "memory.md"),
+		UserFile:           userprofile.DefaultPath(home),
+		HomeDir:            home,
+		SessionDir:         sessionDir,
+		KBDir:              filepath.Join(home, ".gg", "kb"),
+		Scheduler:          resolveSchedulerConfig(home, cfgFile.Scheduler),
+		Artifacts:          ArtifactConfig{Dir: resolveStateDir(home, cfgFile.Artifacts.Dir, "artifacts")},
+		Library:            LibraryConfig{Dir: resolveStateDir(home, cfgFile.Library.Dir, "library")},
+		Connectors:         resolveConnectorConfig(home, cfgFile.Connectors),
+		CWD:                cwd,
+		NoContextFiles:     options.NoContextFiles,
+		EmbedBaseURL:       os.Getenv("GG_EMBED_BASE_URL"),
+		EmbedAPIKey:        os.Getenv("GG_EMBED_API_KEY"),
+		MediaBaseURL:       os.Getenv("GG_MEDIA_BASE_URL"),
+		MediaAPIKey:        os.Getenv("GG_MEDIA_API_KEY"),
+		MediaImageModel:    os.Getenv("GG_MEDIA_IMAGE_MODEL"),
+		MediaTTSModel:      os.Getenv("GG_MEDIA_TTS_MODEL"),
+		MediaSTTModel:      os.Getenv("GG_MEDIA_STT_MODEL"),
+		TelegramBotToken:   os.Getenv("GG_TELEGRAM_BOT_TOKEN"),
+		TelegramAllowChats: parseInt64List(os.Getenv("GG_TELEGRAM_ALLOW_CHATS")),
+		apiKeyOverride:     options.APIKey,
+		baseURLOverride:    options.BaseURL,
 	}
 	return cfg.WithSelection(first(options.Model, cfgFile.Default))
 }
@@ -486,6 +495,22 @@ func first(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// parseInt64List parses a comma-separated list of integers (e.g. Telegram
+// chat IDs); malformed entries are skipped.
+func parseInt64List(s string) []int64 {
+	var out []int64
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if n, err := strconv.ParseInt(part, 10, 64); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 func mustGetwd() string {
