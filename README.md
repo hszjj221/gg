@@ -276,6 +276,10 @@ Browser (headless Chromium over CDP, read + screenshot in this phase):
 - `gg browser shot <url>`, `gg browser read <url>`. Needs a local Chromium binary (`chromium` / `google-chrome`, or `GG_CHROMIUM`); only `http(s)` URLs are allowed. See `docs/browser.md`.
 - The agent gets `browser_navigate`, `browser_read`, `browser_screenshot` (only registered when Chromium is installed); screenshots land in `~/.gg/media/screenshots/`.
 
+Telegram channel (daemon):
+
+- Set `GG_TELEGRAM_BOT_TOKEN` and `GG_TELEGRAM_ALLOW_CHATS` (comma-separated chat IDs), then run `ggd`. Text and voice messages are answered per-chat; voice goes through STT → agent → text + TTS reply. Approval-gated tools are denied over Telegram. See `docs/telegram.md`.
+
 ## Skills
 
 `gg` loads Codex-style skills from `.agents/skills` by default. Project skills in the current directory or its parents take precedence over global skills in `~/.agents/skills`.

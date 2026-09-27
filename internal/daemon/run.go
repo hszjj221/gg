@@ -146,6 +146,12 @@ func Run(ctx context.Context, argv []string, options Options) int {
 			return 1
 		}
 	}
+	if cfg.TelegramBotToken != "" {
+		if err := startTelegram(ctx, cfg, workspace, stderr); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
 	if httpAddress == "" {
 		if err := stdio.NewServer(rpc, stdin, stdout).Serve(ctx); err != nil && ctx.Err() == nil {
 			fmt.Fprintln(stderr, err)
