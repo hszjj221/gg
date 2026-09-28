@@ -38,6 +38,24 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	stdin := readerOr(options.Stdin, os.Stdin)
 	stdout := writerOr(options.Stdout, os.Stdout)
 	stderr := writerOr(options.Stderr, os.Stderr)
+	// Service management subcommands run before flag parsing: they take no
+	// daemon flags of their own. install-service bakes everything after an
+	// optional "--" separator into the service's start command.
+	if len(argv) > 0 {
+		home := resolveHome(options.HomeDir)
+		switch argv[0] {
+		case "install-service":
+			args := argv[1:]
+			if len(args) > 0 && args[0] == "--" {
+				args = args[1:]
+			}
+			return installService(stdout, stderr, home, args)
+		case "uninstall-service":
+			return uninstallService(stdout, stderr, home)
+		case "status":
+			return daemonStatus(stdout, home)
+		}
+	}
 	fs := flag.NewFlagSet("ggd", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var (
