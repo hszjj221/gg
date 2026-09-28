@@ -95,6 +95,11 @@ func (t BrowserNavigateTool) Execute(ctx context.Context, raw json.RawMessage) T
 	if !strings.HasPrefix(input.URL, "http://") && !strings.HasPrefix(input.URL, "https://") {
 		return errorResult(fmt.Errorf("browser_navigate: only http(s) URLs are allowed"))
 	}
+	// SSRF guard: the model chooses URLs, so refuse non-public targets
+	// (cloud metadata, localhost, intranet) before Chromium ever connects.
+	if err := browser.CheckPublicURL(ctx, input.URL); err != nil {
+		return errorResult(err)
+	}
 	s, err := t.pool.Get(ctx)
 	if err != nil {
 		return errorResult(err)
