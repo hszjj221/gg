@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
 )
@@ -318,5 +319,92 @@ func TestClientFallsBackWhenStreamingUsageIsUnsupported(t *testing.T) {
 
 	if msg.Content != "ok" || !msg.Usage.IsZero() || requests != 2 {
 		t.Fatalf("unexpected fallback result: content=%q usage=%+v requests=%d", msg.Content, msg.Usage, requests)
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	if got := parseRetryAfter("120"); got != 120*time.Second {
+		t.Errorf("delta-seconds: got %v", got)
+	}
+	if got := parseRetryAfter("  30 "); got != 30*time.Second {
+		t.Errorf("padded delta-seconds: got %v", got)
+	}
+	future := time.Now().Add(90 * time.Second).UTC().Format(http.TimeFormat)
+	if got := parseRetryAfter(future); got < 85*time.Second || got > 90*time.Second {
+		t.Errorf("http-date: got %v", got)
+	}
+	for _, v := range []string{"", "soon", "-5", "0"} {
+		if got := parseRetryAfter(v); got != 0 {
+			t.Errorf("parseRetryAfter(%q) = %v, want 0", v, got)
+		}
+	}
+	past := time.Now().Add(-time.Minute).UTC().Format(http.TimeFormat)
+	if got := parseRetryAfter(past); got != 0 {
+		t.Errorf("past http-date: got %v", got)
+	}
+}
+
+func TestRetryDelayBounds(t *testing.T) {
+	plain := errors.New("boom")
+	for i := 0; i < 200; i++ {
+		if d := retryDelay(0, plain); d < 0 || d > retryBaseDelay {
+			t.Fatalf("attempt 0: delay %v out of [0, %v]", d, retryBaseDelay)
+		}
+		if d := retryDelay(1, plain); d < 0 || d > 2*retryBaseDelay {
+			t.Fatalf("attempt 1: delay %v out of [0, %v]", d, 2*retryBaseDelay)
+		}
+	}
+	// Overflow-safe: huge attempt still caps at retryMaxDelay.
+	for i := 0; i < 50; i++ {
+		if d := retryDelay(100, plain); d < 0 || d > retryMaxDelay {
+			t.Fatalf("attempt 100: delay %v out of [0, %v]", d, retryMaxDelay)
+		}
+	}
+}
+
+func TestRetryDelayHonorsRetryAfter(t *testing.T) {
+	err := apiError{statusCode: http.StatusTooManyRequests, retryAfter: 2 * time.Second}
+	if d := retryDelay(0, err); d != 2*time.Second {
+		t.Errorf("server Retry-After must win: got %v", d)
+	}
+	err.retryAfter = time.Hour
+	if d := retryDelay(0, err); d != maxRetryAfter {
+		t.Errorf("Retry-After must be capped at %v: got %v", maxRetryAfter, d)
+	}
+	// Absent header falls back to backoff.
+	err.retryAfter = 0
+	if d := retryDelay(0, err); d < 0 || d > retryBaseDelay {
+		t.Errorf("absent Retry-After should use backoff: got %v", d)
+	}
+}
+
+func TestClientHonorsRetryAfterHeader(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "rate limited", http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{APIKey: "test-key", BaseURL: server.URL + "/v1", Model: "gpt-test", HTTPClient: server.Client()})
+	start := time.Now()
+	msg, err := client.Complete(context.Background(), agent.Request{Messages: []agent.Message{{Role: agent.RoleUser, Content: "hi"}}}, nil)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.Content != "ok" || requests != 2 {
+		t.Fatalf("unexpected result: content=%q requests=%d", msg.Content, requests)
+	}
+	// The server asked for 1s; jittered backoff alone would usually be far less.
+	if elapsed < 900*time.Millisecond {
+		t.Errorf("Retry-After: 1 was not honored, elapsed %v", elapsed)
 	}
 }
