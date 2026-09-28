@@ -6,9 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 )
 
 const defaultMaxTurns = 32
+
+// maxParallelToolCalls bounds how many tool executions run concurrently
+// within one assistant turn. Tool resolution and approval still happen
+// sequentially, in call order, before any execution starts, so approval
+// prompts never interleave.
+const maxParallelToolCalls = 4
 
 type RunnerOptions struct {
 	MaxTurns int
@@ -138,8 +145,9 @@ func (r *Runner) Run(ctx context.Context, messages []Message, onEvent func(Event
 			return reply, nil
 		}
 
-		for _, call := range reply.ToolCalls {
-			result := r.executeToolCall(ctx, call, onEvent)
+		results := r.executeToolCalls(ctx, reply.ToolCalls, onEvent)
+		for i, call := range reply.ToolCalls {
+			result := results[i]
 			r.usage = r.usage.Add(result.Usage)
 			content := resultText(result)
 			toolMessage := Message{
@@ -178,11 +186,55 @@ func (r *Runner) record(message Message) error {
 	return nil
 }
 
-func (r *Runner) executeToolCall(ctx context.Context, call ToolCall, onEvent func(Event)) ToolResult {
+// pendingCall is a tool call that cleared the sequential resolve+approval
+// phase and is ready to execute, or already has its final result.
+type pendingCall struct {
+	call    ToolCall
+	tool    Tool
+	summary string
+	decided *ToolResult // non-nil: result determined, skip execution
+}
+
+// executeToolCalls runs one assistant message's tool calls: resolve and
+// approve sequentially in call order, execute approved calls with bounded
+// parallelism, and return results in the original call order so the
+// transcript is identical to sequential execution.
+func (r *Runner) executeToolCalls(ctx context.Context, calls []ToolCall, onEvent func(Event)) []ToolResult {
+	pending := make([]pendingCall, 0, len(calls))
+	for _, call := range calls {
+		tool, summary, decided := r.prepareToolCall(ctx, call, onEvent)
+		pending = append(pending, pendingCall{call: call, tool: tool, summary: summary, decided: decided})
+	}
+	results := make([]ToolResult, len(pending))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, maxParallelToolCalls)
+	for i, p := range pending {
+		if p.decided != nil {
+			results[i] = *p.decided
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			results[i] = r.startPreparedCall(ctx, p.tool, p.call, p.summary, onEvent)
+		}()
+	}
+	wg.Wait()
+	return results
+}
+
+// prepareToolCall resolves the tool and obtains approval, emitting the
+// start event. It returns the tool to execute, or a non-nil result when
+// the call is already decided (unknown tool, describe error, denied,
+// cancelled) — in that case the finish event is emitted here and the
+// call skips the execution phase.
+func (r *Runner) prepareToolCall(ctx context.Context, call ToolCall, onEvent func(Event)) (Tool, string, *ToolResult) {
 	if err := ctx.Err(); err != nil {
 		result := toolError(fmt.Errorf("tool not executed: %w", err))
 		emitToolFinish(onEvent, call, call.Name, result)
-		return result
+		return nil, "", &result
 	}
 	tool, ok := r.tools[call.Name]
 	if !ok {
@@ -190,7 +242,7 @@ func (r *Runner) executeToolCall(ctx context.Context, call ToolCall, onEvent fun
 		emitToolEvent(onEvent, Event{Type: EventToolCallStart, ToolCallID: call.ID, ToolName: call.Name, Summary: summary, Details: details})
 		result := toolError(fmt.Errorf("unknown tool %q", call.Name))
 		emitToolFinish(onEvent, call, summary, result)
-		return result
+		return nil, "", &result
 	}
 	req, reqErr := describeToolCall(tool, call)
 	summary := req.Summary
@@ -199,7 +251,7 @@ func (r *Runner) executeToolCall(ctx context.Context, call ToolCall, onEvent fun
 	if reqErr != nil {
 		result := toolError(fmt.Errorf("approval request for tool %q failed: %w", call.Name, reqErr))
 		emitToolFinish(onEvent, call, summary, result)
-		return result
+		return nil, "", &result
 	}
 	if r.approver != nil {
 		if _, ok := tool.(ApprovalDescriber); ok {
@@ -213,20 +265,37 @@ func (r *Runner) executeToolCall(ctx context.Context, call ToolCall, onEvent fun
 			if err != nil {
 				result := toolError(fmt.Errorf("approval failed for tool %q: %w", call.Name, err))
 				emitToolFinish(onEvent, call, summary, result)
-				return result
+				return nil, "", &result
 			}
 			if !decision.Allow {
 				result := toolError(fmt.Errorf("tool call %q denied by user", call.Name))
 				emitToolFinish(onEvent, call, summary, result)
-				return result
+				return nil, "", &result
 			}
 		}
 	}
 	if err := ctx.Err(); err != nil {
 		result := toolError(fmt.Errorf("tool not executed: %w", err))
 		emitToolFinish(onEvent, call, summary, result)
+		return nil, "", &result
+	}
+	return tool, summary, nil
+}
+
+// startPreparedCall runs an approved tool call unless ctx is already done:
+// executions that have not started yet never start after cancellation.
+// In-flight executions observe cancellation through their own ctx.
+func (r *Runner) startPreparedCall(ctx context.Context, tool Tool, call ToolCall, summary string, onEvent func(Event)) ToolResult {
+	if err := ctx.Err(); err != nil {
+		result := toolError(fmt.Errorf("tool not executed: %w", err))
+		emitToolFinish(onEvent, call, summary, result)
 		return result
 	}
+	return r.executePreparedCall(ctx, tool, call, summary, onEvent)
+}
+
+// executePreparedCall runs an approved tool call and emits its finish event.
+func (r *Runner) executePreparedCall(ctx context.Context, tool Tool, call ToolCall, summary string, onEvent func(Event)) ToolResult {
 	result := tool.Execute(ctx, call.Arguments)
 	emitToolFinish(onEvent, call, summary, result)
 	return result
