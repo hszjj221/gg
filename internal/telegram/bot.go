@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -31,6 +32,7 @@ type Bot struct {
 	offset     int64
 	seen       map[int64]time.Time // update_id -> first seen (replay guard)
 	stderr     io.Writer
+	logger     *slog.Logger
 
 	// per-chat serialization: one in-flight turn per chat.
 	chats   map[int64]*chatState
@@ -54,6 +56,9 @@ type Config struct {
 	// Nil defaults to os.Stderr; the daemon injects its stderr writer so
 	// all channel output goes through one place.
 	Stderr io.Writer
+	// Logger, when set, takes over the bot's own log lines (structured).
+	// Nil keeps the legacy Stderr lines.
+	Logger *slog.Logger
 }
 
 // New validates the config and returns a Bot. A nil Media client disables
@@ -86,6 +91,7 @@ func New(cfg Config) (*Bot, error) {
 		seen:       make(map[int64]time.Time),
 		chats:      make(map[int64]*chatState),
 		stderr:     cfg.Stderr,
+		logger:     cfg.Logger,
 	}
 	if b.stderr == nil {
 		b.stderr = os.Stderr
@@ -125,7 +131,11 @@ func (b *Bot) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("telegram: verify token: %w", err)
 	}
-	fmt.Fprintf(b.stderr, "telegram: bot @%s polling\n", me)
+	if b.logger != nil {
+		b.logger.Info("bot polling", "channel", "telegram", "username", me)
+	} else {
+		fmt.Fprintf(b.stderr, "telegram: bot @%s polling\n", me)
+	}
 
 	backoff := time.Second
 	for {

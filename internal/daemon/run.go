@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -116,8 +117,9 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	logger := newLogger(stderr)
 	if notice != "" {
-		fmt.Fprintln(stderr, "note: "+notice)
+		logger.Info("startup notice", "notice", notice)
 	}
 	workspace, err := app.NewWorkspace(app.WorkspaceOptions{
 		Config:          cfg,
@@ -126,27 +128,27 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		Repository:      session.NewFileRepository(cfg.SessionDir),
 		Profile:         personal.Profile,
 		MemoryStore:     personal.Store,
-		ArtifactStore:   openArtifactStore(stderr, cfg),
-		LibraryStore:    openLibraryStore(stderr, cfg),
+		ArtifactStore:   openArtifactStore(logger, cfg),
+		LibraryStore:    openLibraryStore(logger, cfg),
 	})
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		logger.Error("open workspace", "error", err)
 		return 1
 	}
 	rpc := jsonrpc.NewHandlerWithContext(ctx, workspace)
 	cleanupPid, err := WritePidFile(cfg.HomeDir)
 	if err != nil {
-		fmt.Fprintln(stderr, "warning: "+err.Error())
+		logger.Warn("pid file", "error", err)
 	} else {
 		defer cleanupPid()
 	}
 	if err := startChannels(ctx, channelDeps{
 		cfg:         cfg,
 		workspace:   workspace,
-		stderr:      stderr,
+		logger:      logger,
 		noScheduler: noScheduler,
 	}); err != nil {
-		fmt.Fprintln(stderr, err)
+		logger.Error("start channels", "error", err)
 		return 1
 	}
 	if httpAddress == "" {
@@ -174,7 +176,7 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	fmt.Fprintf(stderr, "ggd listening on http://%s\n", listener.Addr())
+	logger.Info("http listening", "addr", listener.Addr().String())
 	errCh := make(chan error, 1)
 	go func() { errCh <- server.Serve(listener) }()
 	select {
@@ -182,13 +184,13 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
-			fmt.Fprintln(stderr, err)
+			logger.Error("http shutdown", "error", err)
 			return 1
 		}
 		return 0
 	case err := <-errCh:
 		if err != nil && err != http.ErrServerClosed {
-			fmt.Fprintln(stderr, err)
+			logger.Error("http serve", "error", err)
 			return 1
 		}
 		return 0
@@ -224,10 +226,10 @@ func writerOr(value io.Writer, fallback io.Writer) io.Writer {
 
 // openArtifactStore opens the artifact store, warning and degrading to nil
 // (methods then report "not available") instead of failing daemon startup.
-func openArtifactStore(stderr io.Writer, cfg config.Config) *artifact.Store {
+func openArtifactStore(logger *slog.Logger, cfg config.Config) *artifact.Store {
 	store, err := artifact.Open(cfg.Artifacts.Dir)
 	if err != nil {
-		fmt.Fprintln(stderr, "warning: "+err.Error())
+		logger.Warn("artifact store unavailable", "error", err)
 		return nil
 	}
 	return store
@@ -235,10 +237,10 @@ func openArtifactStore(stderr io.Writer, cfg config.Config) *artifact.Store {
 
 // openLibraryStore opens the library store with the same degrade-to-nil
 // policy as the artifact store.
-func openLibraryStore(stderr io.Writer, cfg config.Config) *library.Store {
+func openLibraryStore(logger *slog.Logger, cfg config.Config) *library.Store {
 	store, err := library.Open(cfg.Library.Dir)
 	if err != nil {
-		fmt.Fprintln(stderr, "warning: "+err.Error())
+		logger.Warn("library store unavailable", "error", err)
 		return nil
 	}
 	return store

@@ -22,6 +22,31 @@ func (fakeProvider) Complete(context.Context, agent.Request, func(agent.Event)) 
 	return agent.AssistantMessage{Message: agent.Message{Role: agent.RoleAssistant, Content: "ok"}, StopReason: agent.StopReasonEndTurn}, nil
 }
 
+func TestHTTPHandlerHealthzNeedsNoAuth(t *testing.T) {
+	handler := testHandler(t, "secret")
+	// No Authorization header: /healthz is the unauthenticated liveness probe.
+	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"ok":true`) {
+		t.Fatalf("healthz response: status=%d body=%s", response.Code, response.Body.String())
+	}
+	// /health stays behind the bearer-token gate.
+	request = httptest.NewRequest(http.MethodGet, "/health", nil)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("health without token: status=%d, want unauthorized", response.Code)
+	}
+	// /healthz rejects non-GET.
+	request = httptest.NewRequest(http.MethodPost, "/healthz", nil)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("healthz POST: status=%d, want 405", response.Code)
+	}
+}
+
 func TestHTTPHandlerRequiresBearerToken(t *testing.T) {
 	handler := testHandler(t, "secret")
 	request := httptest.NewRequest(http.MethodGet, "/health", nil)
