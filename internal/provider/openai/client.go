@@ -8,15 +8,28 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
 )
 
-var retryDelays = []time.Duration{250 * time.Millisecond, 500 * time.Millisecond}
+const (
+	// maxRetries bounds the retry budget: 1 initial attempt + 2 retries.
+	maxRetries = 2
+	// retryBaseDelay is the backoff base; the actual delay is
+	// base*2^attempt with full jitter, so concurrent clients don't
+	// synchronize their retries into a thundering herd.
+	retryBaseDelay = 250 * time.Millisecond
+	retryMaxDelay  = 8 * time.Second
+	// maxRetryAfter caps a server-sent Retry-After so a misbehaving
+	// endpoint can't park the client indefinitely.
+	maxRetryAfter = 60 * time.Second
+)
 
 type Config struct {
 	APIKey     string
@@ -62,10 +75,10 @@ func (c *Client) Complete(ctx context.Context, req agent.Request, onEvent func(a
 		if err == nil {
 			return reply, nil
 		}
-		if attempt >= len(retryDelays) || !isRetryableError(err) {
+		if attempt >= maxRetries || !isRetryableError(err) {
 			return reply, err
 		}
-		if err := sleepContext(ctx, retryDelays[attempt]); err != nil {
+		if err := sleepContext(ctx, retryDelay(attempt, err)); err != nil {
 			return agent.AssistantMessage{}, err
 		}
 		attempt++
@@ -103,7 +116,12 @@ func (c *Client) complete(ctx context.Context, req agent.Request, onEvent func(a
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		return agent.AssistantMessage{}, apiError{statusCode: resp.StatusCode, status: resp.Status, body: strings.TrimSpace(string(data))}
+		return agent.AssistantMessage{}, apiError{
+			statusCode: resp.StatusCode,
+			status:     resp.Status,
+			body:       strings.TrimSpace(string(data)),
+			retryAfter: parseRetryAfter(resp.Header.Get("Retry-After")),
+		}
 	}
 	return parseStream(resp.Body, onEvent)
 }
@@ -124,6 +142,9 @@ type apiError struct {
 	statusCode int
 	status     string
 	body       string
+	// retryAfter is the server's Retry-After instruction, 0 when the
+	// header is absent or unparseable.
+	retryAfter time.Duration
 }
 
 func (e apiError) Error() string {
@@ -149,6 +170,39 @@ func isRetryableError(err error) bool {
 	}
 	var transportErr transportError
 	return errors.As(err, &transportErr)
+}
+
+// retryDelay computes how long to wait before retry attempt (0-based).
+// A server-sent Retry-After wins, capped so a misbehaving endpoint can't
+// park the client; otherwise exponential backoff with full jitter.
+func retryDelay(attempt int, err error) time.Duration {
+	var apiErr apiError
+	if errors.As(err, &apiErr) && apiErr.retryAfter > 0 {
+		return min(apiErr.retryAfter, maxRetryAfter)
+	}
+	backoff := retryBaseDelay << attempt
+	if backoff > retryMaxDelay || backoff <= 0 {
+		backoff = retryMaxDelay
+	}
+	return time.Duration(rand.Int64N(int64(backoff) + 1))
+}
+
+// parseRetryAfter parses a Retry-After header value: either delta-seconds
+// or an HTTP date. Returns 0 when absent, unparseable, or in the past.
+func parseRetryAfter(value string) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(value); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(value); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
 }
 
 func sleepContext(ctx context.Context, d time.Duration) error {
