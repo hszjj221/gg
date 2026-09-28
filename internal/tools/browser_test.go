@@ -40,3 +40,29 @@ func TestBrowserToolDefinitions(t *testing.T) {
 		}
 	}
 }
+
+func TestBrowserSessionPoolCloseIsIdempotent(t *testing.T) {
+	pool := NewBrowserSessionPool()
+	// Closing a pool that never started Chromium must be a safe no-op.
+	if err := pool.Close(); err != nil {
+		t.Fatalf("Close on unused pool: %v", err)
+	}
+	if err := pool.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
+
+func TestBrowserToolsShareServicePool(t *testing.T) {
+	// All three browser tools must share the single Service-scoped pool.
+	// Separate pools per tool (or per turn) would start one Chromium each.
+	pool := NewBrowserSessionPool()
+	if got := NewBrowserNavigateTool(pool).pool; got != pool {
+		t.Fatal("browser_navigate does not share the Service pool")
+	}
+	if got := NewBrowserReadTool(pool).pool; got != pool {
+		t.Fatal("browser_read does not share the Service pool")
+	}
+	if got := NewBrowserScreenshotTool(pool).pool; got != pool {
+		t.Fatal("browser_screenshot does not share the Service pool")
+	}
+}

@@ -408,6 +408,9 @@ func (m *Manager) startTurn(parent context.Context, sessionID, prompt string, ap
 			delete(m.active, sessionID)
 		}
 		if errors.Is(err, session.ErrConflict) {
+			// The on-disk session was replaced elsewhere; drop the in-memory
+			// Service and release its Chromium session if one was started.
+			_ = service.Close()
 			delete(m.sessions, sessionID)
 			delete(m.sessionAccess, sessionID)
 		}
@@ -482,11 +485,15 @@ func (m *Manager) Remove(sessionID string) bool {
 	if m.active[sessionID] != "" {
 		return false
 	}
-	if _, ok := m.sessions[sessionID]; !ok {
+	service, ok := m.sessions[sessionID]
+	if !ok {
 		return false
 	}
 	delete(m.sessions, sessionID)
 	delete(m.sessionAccess, sessionID)
+	// Best-effort: release the removed Service's Chromium session if the
+	// browser tools started one.
+	_ = service.Close()
 	return true
 }
 
@@ -513,8 +520,12 @@ func (m *Manager) pruneSessionsLocked(protected string) {
 		if candidate == "" {
 			return
 		}
+		evicted := m.sessions[candidate]
 		delete(m.sessions, candidate)
 		delete(m.sessionAccess, candidate)
+		// Best-effort: release the evicted Service's Chromium session if the
+		// browser tools started one. Eviction must never fail because of it.
+		_ = evicted.Close()
 	}
 }
 

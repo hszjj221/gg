@@ -14,9 +14,9 @@ import (
 )
 
 // BrowserSessionPool holds one Chromium session shared by the browser tools
-// of a single conversation (Service). It is created per defaultTools call,
-// so different sessions never share a tab. The session is lazy: Chromium
-// starts on the first tool call and lives until Close.
+// of a single conversation (Service). It is created once per Service, not
+// per turn, so different sessions never share a tab. The session is lazy:
+// Chromium starts on the first tool call and lives until Close.
 type BrowserSessionPool struct {
 	mu sync.Mutex
 	s  *browser.Session
