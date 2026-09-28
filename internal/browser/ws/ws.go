@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -27,11 +28,13 @@ const (
 	opPong         = 0xA
 )
 
-// Conn is a single WebSocket connection.
+// Conn is a single WebSocket connection. Reads must happen from one
+// goroutine at a time; writes are serialized internally.
 type Conn struct {
-	rw     *bufio.ReadWriter
-	conn   net.Conn
-	closed bool
+	rw      *bufio.ReadWriter
+	conn    net.Conn
+	writeMu sync.Mutex
+	closed  bool
 }
 
 // Dial opens a WebSocket connection to a ws:// or wss:// URL.
@@ -86,8 +89,11 @@ func wsAcceptKey(key string) string {
 	return base64.StdEncoding.EncodeToString(h[:])
 }
 
-// WriteText sends one masked text message.
+// WriteText sends one masked text message. Concurrent writes are
+// serialized; a frame is never interleaved with another.
 func (c *Conn) WriteText(msg []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	if c.closed {
 		return fmt.Errorf("ws: connection closed")
 	}
