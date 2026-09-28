@@ -77,23 +77,26 @@ func waitRunSummary(ctx context.Context, w *app.Workspace, runID string) (string
 
 // startScheduler loads persisted jobs and runs the scheduling loop in the
 // background. Jobs fire as agent turns in the daemon's workspace.
-func startScheduler(ctx context.Context, cfg config.Config, workspace *app.Workspace, stderr io.Writer) error {
+func newSchedulerChannel(cfg config.Config, workspace *app.Workspace, stderr io.Writer) (Channel, error) {
 	store, err := scheduler.Open(cfg.Scheduler.Dir)
 	if err != nil {
-		return fmt.Errorf("open scheduler store: %w", err)
+		return nil, fmt.Errorf("open scheduler store: %w", err)
 	}
 	sched := scheduler.New(store, &daemonJobExecutor{workspace: workspace},
 		scheduler.WithWorkspaceDir(cfg.CWD),
 		scheduler.WithErrorReporter(func(err error) {
 			fmt.Fprintln(stderr, "scheduler:", err)
 		}))
-	go func() {
-		if err := sched.Run(ctx); err != nil {
-			fmt.Fprintln(stderr, "scheduler:", err)
-		}
-	}()
-	return nil
+	return &schedulerChannel{sched: sched}, nil
 }
+
+type schedulerChannel struct {
+	sched *scheduler.Scheduler
+}
+
+func (c *schedulerChannel) Name() string { return "scheduler" }
+
+func (c *schedulerChannel) Run(ctx context.Context) error { return c.sched.Run(ctx) }
 func sanitizeJobName(name string) string {
 	var b strings.Builder
 	lastDash := true // treat the start as a dash so leading junk is skipped

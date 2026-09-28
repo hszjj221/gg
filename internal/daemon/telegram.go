@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"path/filepath"
 
@@ -12,10 +11,9 @@ import (
 	"github.com/hszjj221/gg/internal/telegram"
 )
 
-// startTelegram launches the Telegram bot channel in the background when
-// GG_TELEGRAM_BOT_TOKEN is set. It returns nil immediately; the bot runs
-// until ctx is done.
-func startTelegram(ctx context.Context, cfg config.Config, workspace *app.Workspace, stderr io.Writer) error {
+// newTelegramChannel builds the Telegram bot channel. A construction error
+// is fatal to daemon startup.
+func newTelegramChannel(cfg config.Config, workspace *app.Workspace, stderr io.Writer) (Channel, error) {
 	var mclient *media.Client
 	if baseURL := nonEmpty(cfg.MediaBaseURL, cfg.BaseURL); baseURL != "" {
 		mclient = media.NewClient(media.Config{
@@ -33,17 +31,21 @@ func startTelegram(ctx context.Context, cfg config.Config, workspace *app.Worksp
 		Workspace:  workspace,
 		Media:      mclient,
 		HomeDir:    cfg.HomeDir,
+		Stderr:     stderr,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	go func() {
-		if err := bot.Run(ctx); err != nil {
-			fmt.Fprintln(stderr, "telegram: "+err.Error())
-		}
-	}()
-	return nil
+	return &telegramChannel{bot: bot}, nil
 }
+
+type telegramChannel struct {
+	bot *telegram.Bot
+}
+
+func (c *telegramChannel) Name() string { return "telegram" }
+
+func (c *telegramChannel) Run(ctx context.Context) error { return c.bot.Run(ctx) }
 
 func nonEmpty(values ...string) string {
 	for _, v := range values {
