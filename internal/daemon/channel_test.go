@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +14,7 @@ import (
 
 	"log/slog"
 
+	"github.com/hszjj221/gg/internal/app"
 	"github.com/hszjj221/gg/internal/config"
 )
 
@@ -155,6 +158,28 @@ func TestStartChannelsWithNothingConfigured(t *testing.T) {
 	}
 	if out.String() != "" {
 		t.Errorf("expected no output, got %q", out.String())
+	}
+}
+
+func TestStartChannelsLaunchesNothingWhenConstructionFails(t *testing.T) {
+	var out lockedBuffer
+	home := t.TempDir()
+	// HomeDir as a file makes telegram.New fail at MkdirAll, while the
+	// scheduler store opens fine — the Codex P2 scenario.
+	homeFile := filepath.Join(home, "home")
+	if err := os.WriteFile(homeFile, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{TelegramBotToken: "test-token", HomeDir: homeFile}
+	cfg.Scheduler.Dir = filepath.Join(home, "sched")
+	deps := channelDeps{cfg: cfg, workspace: &app.Workspace{}, logger: testLogger(&out)}
+	if err := startChannels(context.Background(), deps); err == nil {
+		t.Fatal("expected telegram construction error")
+	}
+	for _, rec := range logRecords(t, &out) {
+		if rec["msg"] == "channel starting" {
+			t.Errorf("no channel may launch when construction fails, got %q", out.String())
+		}
 	}
 }
 
