@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -29,6 +30,7 @@ type Bot struct {
 	mu         sync.Mutex
 	offset     int64
 	seen       map[int64]time.Time // update_id -> first seen (replay guard)
+	stderr     io.Writer
 
 	// per-chat serialization: one in-flight turn per chat.
 	chats   map[int64]*chatState
@@ -48,6 +50,10 @@ type Config struct {
 	// HomeDir is used for the offset file and voice downloads
 	// (~/.gg/telegram/).
 	HomeDir string
+	// Stderr receives the bot's own log lines (startup banner, ...).
+	// Nil defaults to os.Stderr; the daemon injects its stderr writer so
+	// all channel output goes through one place.
+	Stderr io.Writer
 }
 
 // New validates the config and returns a Bot. A nil Media client disables
@@ -79,6 +85,10 @@ func New(cfg Config) (*Bot, error) {
 		offsetFile: filepath.Join(dir, "offset"),
 		seen:       make(map[int64]time.Time),
 		chats:      make(map[int64]*chatState),
+		stderr:     cfg.Stderr,
+	}
+	if b.stderr == nil {
+		b.stderr = os.Stderr
 	}
 	b.offset = b.loadOffset()
 	return b, nil
@@ -115,7 +125,7 @@ func (b *Bot) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("telegram: verify token: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "telegram: bot @%s polling\n", me)
+	fmt.Fprintf(b.stderr, "telegram: bot @%s polling\n", me)
 
 	backoff := time.Second
 	for {

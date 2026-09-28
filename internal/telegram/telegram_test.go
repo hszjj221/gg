@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -247,5 +248,34 @@ func TestGetFileAndDownload(t *testing.T) {
 	data, _ := os.ReadFile(dst)
 	if string(data) != payload {
 		t.Fatalf("downloaded %q", data)
+	}
+}
+
+func TestStderrInjection(t *testing.T) {
+	home := t.TempDir()
+	var buf strings.Builder
+	b, err := New(Config{
+		Token:     "test-token",
+		Workspace: &app.Workspace{},
+		HomeDir:   home,
+		Stderr:    &buf,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.stderr != io.Writer(&buf) {
+		t.Fatal("injected stderr writer was not kept")
+	}
+	// Nil defaults to os.Stderr (back-compat).
+	b2, err := New(Config{
+		Token:     "test-token",
+		Workspace: &app.Workspace{},
+		HomeDir:   home,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b2.stderr == nil {
+		t.Fatal("nil Stderr must default to os.Stderr")
 	}
 }

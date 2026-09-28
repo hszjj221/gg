@@ -140,17 +140,14 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	} else {
 		defer cleanupPid()
 	}
-	if !noScheduler {
-		if err := startScheduler(ctx, cfg, workspace, stderr); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-	}
-	if cfg.TelegramBotToken != "" {
-		if err := startTelegram(ctx, cfg, workspace, stderr); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
+	if err := startChannels(ctx, channelDeps{
+		cfg:         cfg,
+		workspace:   workspace,
+		stderr:      stderr,
+		noScheduler: noScheduler,
+	}); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
 	}
 	if httpAddress == "" {
 		if err := stdio.NewServer(rpc, stdin, stdout).Serve(ctx); err != nil && ctx.Err() == nil {
