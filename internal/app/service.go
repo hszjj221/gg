@@ -54,6 +54,11 @@ type Service struct {
 	profile         userprofile.Profile
 	memStore        *memory.Store
 	queue           *agent.MessageQueue
+	// browserPool scopes one Chromium session to this Service (one
+	// conversation). It is created once here — not per turn — and closed
+	// via Close when the Service is retired, so daemon turns cannot leak
+	// headless Chromium processes.
+	browserPool     *tools.BrowserSessionPool
 }
 
 func NewService(options Options) *Service {
@@ -72,11 +77,19 @@ func NewService(options Options) *Service {
 		profile:         options.Profile,
 		memStore:        memStore,
 		queue:           &agent.MessageQueue{},
+		browserPool:     tools.NewBrowserSessionPool(),
 	}
 }
 
 func (s *Service) Queue() *agent.MessageQueue {
 	return s.queue
+}
+
+// Close releases resources held by the Service, currently the shared
+// Chromium session behind the browser tools. It is idempotent and safe to
+// call on a Service whose browser tools never started Chromium.
+func (s *Service) Close() error {
+	return s.browserPool.Close()
 }
 
 func (s *Service) HasSession() bool {
@@ -122,7 +135,7 @@ func (s *Service) run(ctx context.Context, prompt string, onEvent func(agent.Eve
 	provider := s.providerFactory(s.cfg)
 	summaryUsage := agent.Usage{}
 	loc, tzErr := userLocation(s.profile)
-	runner := agent.NewRunnerWithOptions(provider, defaultTools(s.cfg, provider, s.skillSet.ReadRoots(), s.memStore, loc, tzErr), agent.RunnerOptions{
+	runner := agent.NewRunnerWithOptions(provider, defaultTools(s.cfg, provider, s.skillSet.ReadRoots(), s.memStore, loc, tzErr, s.browserPool), agent.RunnerOptions{
 		Approver:      approver,
 		OnMessage:     s.persistMessage,
 		DrainMessages: s.queue.DrainSteering,
@@ -382,7 +395,7 @@ func (s *Service) contextStatus() string {
 	build := s.buildContext(system, agent.Message{})
 	var defs []agent.ToolDefinition
 	loc, tzErr := userLocation(s.profile)
-	for _, tool := range defaultTools(s.cfg, nil, s.skillSet.ReadRoots(), s.memStore, loc, tzErr) {
+	for _, tool := range defaultTools(s.cfg, nil, s.skillSet.ReadRoots(), s.memStore, loc, tzErr, s.browserPool) {
 		defs = append(defs, tool.Definition())
 	}
 	hasSummary := s.summary != nil && strings.TrimSpace(s.summary.Summary) != ""
@@ -429,7 +442,7 @@ func (s *Service) systemMessages() ([]agent.Message, error) {
 	return messages, nil
 }
 
-func defaultTools(cfg config.Config, provider agent.Provider, readRoots []string, memStore *memory.Store, loc *time.Location, tzErr error) []agent.Tool {
+func defaultTools(cfg config.Config, provider agent.Provider, readRoots []string, memStore *memory.Store, loc *time.Location, tzErr error, browserPool *tools.BrowserSessionPool) []agent.Tool {
 	toolset := []agent.Tool{
 		tools.NewReadToolWithOptions(cfg.CWD, tools.ReadOptions{ExtraRoots: readRoots}),
 		tools.NewListTool(cfg.CWD),
@@ -524,13 +537,13 @@ func defaultTools(cfg config.Config, provider agent.Provider, readRoots []string
 	}
 	// Browser tools need a local Chromium; they degrade to a clear error
 	// when none is installed. The pool scopes one Chromium session to this
-	// Service (one conversation).
+	// Service (one conversation) and is closed via Service.Close when the
+	// Service is retired.
 	if _, err := browser.FindChromium(); err == nil {
-		pool := tools.NewBrowserSessionPool()
 		toolset = append(toolset,
-			tools.NewBrowserNavigateTool(pool),
-			tools.NewBrowserReadTool(pool),
-			tools.NewBrowserScreenshotTool(pool),
+			tools.NewBrowserNavigateTool(browserPool),
+			tools.NewBrowserReadTool(browserPool),
+			tools.NewBrowserScreenshotTool(browserPool),
 		)
 	}
 	return toolset
