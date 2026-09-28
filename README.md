@@ -4,7 +4,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-`gg` is a minimal Go coding agent inspired by Pi. It runs as a small CLI, talks to OpenAI-compatible chat completion APIs, persists JSONL sessions, and gives the model a compact set of coding tools.
+`gg` is an open-source personal AI agent written in Go — a Muse-like assistant that lives in your terminal, browser, and messenger. It talks to OpenAI-compatible chat completion APIs, persists JSONL sessions, remembers who you are, and gives the model tools for coding, memory, scheduled jobs, third-party services, web browsing, and media.
 
 ## Features
 
@@ -23,6 +23,22 @@ English | [简体中文](README.zh-CN.md)
 - Scheduled background jobs (`gg job ...`) that fire while the `ggd` daemon is alive
 - Reusable Go conversation runtime shared by the CLI, Web, and desktop clients
 - Web and Electron clients built from one React UI, both talking to `ggd` over HTTP
+- Versioned artifacts and a personal library (`gg artifact ...`, `gg library ...`)
+- Third-party connectors: Google (Gmail + Calendar) over OAuth (`gg connect google`)
+- Media & voice: image generation, TTS, STT (`gg media ...`)
+- Headless-Chromium browsing over CDP: navigate, read, screenshot (`gg browser ...`)
+- Telegram channel: the `ggd` daemon answers text and voice messages per chat
+
+## Roadmap
+
+gg is being built toward an open-source, Muse-like personal agent. Work is tracked phase by phase:
+
+- [x] Phase 1 — Identity & memory: `~/.gg/USER.md` profile, curated + daily memory, `memory_add` / `memory_search`
+- [x] Phase 2 — Scheduler: cron and one-shot background jobs fired by the `ggd` daemon
+- [x] Phase 3 — Artifacts & library: versioned agent deliverables and a curated file library
+- [x] Phase 4 — Connectors: OAuth framework, Google (Gmail + Calendar) first
+- [x] Phase 5 — Multimodal & messaging: media/TTS/STT, headless browsing, Telegram channel
+- [ ] Phase 6 — Goals, Feed, Ideas
 
 ## Install
 

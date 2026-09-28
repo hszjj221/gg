@@ -4,7 +4,7 @@
 
 [English](README.md) | 简体中文
 
-`gg` 是一个受 Pi 启发的极简 Go coding agent。它以小型 CLI 形式运行，连接 OpenAI-compatible chat completion API，持久化 JSONL 会话，并为模型提供一组紧凑的代码工具。
+`gg` 是一款用 Go 编写的开源个人 AI agent——一个 Muse-like 的助手，住在你的终端、浏览器和聊天软件里。它连接 OpenAI-compatible chat completion API，持久化 JSONL 会话，记住你是谁，并给模型提供代码、记忆、定时任务、第三方服务、网页浏览和媒体等方面的工具。
 
 ## Features
 
@@ -23,6 +23,22 @@
 - 定时后台任务（`gg job ...`），在 `ggd` daemon 存活时触发
 - 可复用的 Go conversation runtime，同一套会话与 Agent 核心可供 CLI、Web 和桌面端使用
 - Web 与 Electron 客户端共享一套 React UI，都通过 HTTP 与 `ggd` 通信
+- 版本化 artifacts 与个人 library（`gg artifact ...`、`gg library ...`）
+- 第三方服务 connectors：Google（Gmail + Calendar）OAuth 接入（`gg connect google`）
+- 媒体与语音：图片生成、TTS、STT（`gg media ...`）
+- Headless Chromium 浏览（CDP）：导航、读取、截图（`gg browser ...`）
+- Telegram channel：`ggd` daemon 按 chat 回复文本和语音消息
+
+## Roadmap
+
+gg 的目标是做一款开源的 Muse-like 个人 agent，工作按阶段推进：
+
+- [x] Phase 1 — 身份与记忆：`~/.gg/USER.md` 个人画像、curated + daily 记忆、`memory_add` / `memory_search`
+- [x] Phase 2 — 定时任务：`ggd` daemon 触发的 cron / 一次性后台任务
+- [x] Phase 3 — Artifacts 与 library：版本化的 agent 交付物和精选文件库
+- [x] Phase 4 — Connectors：OAuth 框架，首批 Google（Gmail + Calendar）
+- [x] Phase 5 — 多模态与消息：媒体/TTS/STT、无头浏览、Telegram channel
+- [ ] Phase 6 — Goals、Feed、Ideas
 
 ## Install
 
