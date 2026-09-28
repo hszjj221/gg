@@ -137,6 +137,12 @@ func (b *Bot) Run(ctx context.Context) error {
 		fmt.Fprintf(b.stderr, "telegram: bot @%s polling\n", me)
 	}
 
+	// The offset advances only past fully handled updates (at-least-once):
+	// a crash re-delivers anything not yet acked instead of losing it.
+	// Duplicates are possible after a crash — the in-memory replay guard
+	// does not survive restarts — so handling must tolerate re-delivery.
+	acker := newOffsetAcker(b.currentOffset(), b.saveOffset)
+
 	backoff := time.Second
 	for {
 		select {
@@ -144,7 +150,7 @@ func (b *Bot) Run(ctx context.Context) error {
 			return nil
 		default:
 		}
-		updates, err := b.api.GetUpdates(ctx, b.currentOffset(), 30)
+		updates, err := b.api.GetUpdates(ctx, acker.frontier(), 30)
 		if err != nil {
 			var rl *RateLimitedError
 			if errors.As(err, &rl) {
@@ -160,13 +166,78 @@ func (b *Bot) Run(ctx context.Context) error {
 		}
 		backoff = time.Second
 		for _, u := range updates {
-			b.saveOffset(u.UpdateID + 1)
 			if b.isReplay(u.UpdateID) {
+				// Already dispatched in this process lifetime; the
+				// original worker will ack it. Marking here would ack
+				// an update whose handling has not finished.
 				continue
 			}
-			b.handleUpdate(ctx, u)
+			u := u
+			acker.add(u.UpdateID)
+			go func() {
+				b.handleUpdateSync(ctx, u)
+				// At-least-once: ack only fully handled updates. If our
+				// context was canceled mid-handling the turn did not
+				// complete, so leave the offset alone and let the next
+				// start re-deliver the update.
+				if ctx.Err() == nil {
+					acker.mark(u.UpdateID)
+				}
+			}()
 		}
 	}
+}
+
+// offsetAcker tracks per-update completion and advances a contiguous
+// acknowledgment frontier: the persisted offset moves only past updates
+// whose handling fully completed. Updates from different chats are handled
+// concurrently, so completions can arrive out of order; the offset waits
+// for every earlier update before moving.
+type offsetAcker struct {
+	mu      sync.Mutex
+	pending map[int64]bool // updateID -> handled
+	next    int64          // smallest unacked updateID
+	save    func(int64)
+}
+
+func newOffsetAcker(start int64, save func(int64)) *offsetAcker {
+	return &offsetAcker{pending: make(map[int64]bool), next: start, save: save}
+}
+
+// add registers an update as in-flight.
+func (a *offsetAcker) add(updateID int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.pending[updateID] = false
+}
+
+// mark records an update as handled and persists the offset past every
+// contiguous handled update. Marks for unknown or already-acked updates
+// (replays, duplicates) are ignored.
+func (a *offsetAcker) mark(updateID int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, ok := a.pending[updateID]; !ok {
+		return
+	}
+	a.pending[updateID] = true
+	moved := false
+	for a.pending[a.next] {
+		delete(a.pending, a.next)
+		a.next++
+		moved = true
+	}
+	if moved {
+		a.save(a.next)
+	}
+}
+
+// frontier returns the next expected updateID: the offset GetUpdates
+// should poll from.
+func (a *offsetAcker) frontier() int64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.next
 }
 
 func (b *Bot) currentOffset() int64 {
@@ -175,8 +246,10 @@ func (b *Bot) currentOffset() int64 {
 	return b.offset
 }
 
-// isReplay reports whether this update_id was seen recently (a stale update
-// re-delivered after a restart with a lost offset file).
+// isReplay reports whether this update_id was already dispatched in this
+// process lifetime. Because the offset only advances past fully handled
+// updates, a poll that runs before earlier updates finish re-delivers them;
+// the guard drops those duplicates so each update is dispatched once.
 func (b *Bot) isReplay(updateID int64) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -204,7 +277,10 @@ func (b *Bot) chatState(chatID int64) *chatState {
 	return st
 }
 
-func (b *Bot) handleUpdate(ctx context.Context, u Update) {
+// handleUpdateSync processes one update and returns only after the message
+// is fully handled. Updates from the same chat are serialized so two
+// messages never interleave agent turns; different chats run concurrently.
+func (b *Bot) handleUpdateSync(ctx context.Context, u Update) {
 	msg := u.Message
 	if msg == nil {
 		return
@@ -213,13 +289,9 @@ func (b *Bot) handleUpdate(ctx context.Context, u Update) {
 		return
 	}
 	st := b.chatState(msg.Chat.ID)
-	// Serialize per chat so two messages from the same chat never interleave
-	// agent turns; different chats run concurrently.
-	go func() {
-		st.mu.Lock()
-		defer st.mu.Unlock()
-		b.handleMessage(ctx, msg)
-	}()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	b.handleMessage(ctx, msg)
 }
 
 func (b *Bot) handleMessage(ctx context.Context, msg *Message) {
