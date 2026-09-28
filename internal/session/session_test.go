@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -414,4 +415,93 @@ func createSession(t *testing.T, sessionDir, cwd, filename, content string) stri
 		t.Fatal(err)
 	}
 	return path
+}
+
+// TestConcurrentAppendsKeepAtomicParent: usage/message/summary appends used
+// to read the session head (lastID) before acquiring the store lock, racing
+// with concurrent appends and failing with ErrConflict on a stale parent.
+// Parent selection is now atomic inside appendRecord, so hammering the store
+// from many goroutines must succeed without races or conflicts (P2).
+func TestConcurrentAppendsKeepAtomicParent(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(filepath.Join(dir, "session.jsonl"), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const workers = 8
+	const perWorker = 25
+	var wg sync.WaitGroup
+	errCh := make(chan error, workers*perWorker*3)
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; i < perWorker; i++ {
+				if err := store.AppendMessage(agent.Message{Role: agent.RoleUser, Content: "hello"}); err != nil {
+					errCh <- err
+				}
+				if err := store.AppendUsage(agent.Usage{PromptTokens: w*perWorker + i + 1}); err != nil {
+					errCh <- err
+				}
+				if err := store.AppendSummary("summary", i); err != nil {
+					errCh <- err
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatalf("concurrent append failed: %v", err)
+	}
+	// Integrity: every record must be present and parent onto a known
+	// record (no dangling or duplicate links).
+	loaded, err := Load(store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Entries) != workers*perWorker {
+		t.Fatalf("messages = %d, want %d", len(loaded.Entries), workers*perWorker)
+	}
+	if len(loaded.Usages) != workers*perWorker {
+		t.Fatalf("usage records = %d, want %d", len(loaded.Usages), workers*perWorker)
+	}
+	if len(loaded.Summaries) != workers*perWorker {
+		t.Fatalf("summaries = %d, want %d", len(loaded.Summaries), workers*perWorker)
+	}
+	ids := map[string]bool{}
+	for _, e := range loaded.Entries {
+		ids[e.ID] = true
+	}
+	for _, e := range loaded.Usages {
+		ids[e.ID] = true
+	}
+	for _, e := range loaded.Summaries {
+		ids[e.ID] = true
+	}
+	// Only the very first record of a fresh store may have a nil parent;
+	// every other record must parent onto a known record ID.
+	nilParents := 0
+	checkParent := func(id string, pid *string) {
+		t.Helper()
+		if pid == nil {
+			nilParents++
+			return
+		}
+		if !ids[*pid] {
+			t.Fatalf("record %q has dangling parent %q", id, *pid)
+		}
+	}
+	for _, e := range loaded.Entries {
+		checkParent(e.ID, e.ParentID)
+	}
+	for _, e := range loaded.Usages {
+		checkParent(e.ID, e.ParentID)
+	}
+	for _, e := range loaded.Summaries {
+		checkParent(e.ID, e.ParentID)
+	}
+	if nilParents != 1 {
+		t.Fatalf("%d records with nil parent, want exactly 1 (the first)", nilParents)
+	}
 }
