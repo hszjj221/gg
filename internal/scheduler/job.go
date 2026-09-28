@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -44,12 +45,16 @@ type Job struct {
 }
 
 // RunRecord is an append-only log entry for one job execution.
+// Statuses: running (dispatched, not finished), ok, error, timeout,
+// skipped (a previous run was still in flight), missed (the daemon was down
+// at the scheduled time), interrupted (the daemon stopped mid-run).
 type RunRecord struct {
+	ID          string    `json:"id,omitempty"`
 	JobID       string    `json:"job_id"`
 	JobName     string    `json:"job_name"`
 	StartedAt   time.Time `json:"started_at"`
 	FinishedAt  time.Time `json:"finished_at"`
-	Status      string    `json:"status"` // ok | error | timeout | skipped
+	Status      string    `json:"status"`
 	Summary     string    `json:"summary,omitempty"`
 	SessionPath string    `json:"session_path,omitempty"`
 }
@@ -62,6 +67,20 @@ func NewID() string {
 	var b [3]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// NewRunID returns a random identifier for one job execution, used to pair a
+// "running" record with its final outcome. Run IDs accumulate in an
+// unbounded history, so they carry 128 random bits: NewID's 24 bits would
+// reach ~50% collision probability after only a few thousand executions,
+// and a repeated ID would make UpdateRun complete the wrong (older) record,
+// leaving the new marker permanently "running".
+func NewRunID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("%d-%d", time.Now().UnixNano(), os.Getpid())
 	}
 	return hex.EncodeToString(b[:])
 }

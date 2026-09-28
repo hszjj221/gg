@@ -525,3 +525,123 @@ func TestReconcileOnStart(t *testing.T) {
 		t.Errorf("cron job next run not in the future: %+v", cronJob.NextRun)
 	}
 }
+
+func TestExecuteJobCompletesRunningRecord(t *testing.T) {
+	s := openTestStore(t)
+	exec := &fakeExecutor{}
+	sch := New(s, exec)
+
+	job, err := s.Add(Job{Name: "due", Kind: KindCron, Schedule: "* * * * *", Prompt: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-time.Second)
+	_ = s.Update(func(jobs *[]Job) error {
+		(*jobs)[0].NextRun = &past
+		return nil
+	})
+
+	if err := sch.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitForRunCount(t, s, job.ID, 1)
+
+	// One dispatch must leave exactly one record: the "running" marker is
+	// completed in place, not left dangling alongside the outcome.
+	recs, err := s.ReadRuns(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("run records = %d, want exactly 1 (got %+v)", len(recs), recs)
+	}
+	rec := recs[0]
+	if rec.ID == "" {
+		t.Error("completed record has no ID")
+	}
+	if rec.Status != "ok" {
+		t.Errorf("record status = %q, want ok", rec.Status)
+	}
+	if rec.FinishedAt.IsZero() || rec.FinishedAt.Before(rec.StartedAt) {
+		t.Errorf("bad finished time: %+v", rec)
+	}
+}
+
+func TestReconcileMarksInterruptedRuns(t *testing.T) {
+	s := openTestStore(t)
+	sch := New(s, &fakeExecutor{})
+
+	job, err := s.Add(Job{Name: "once", Kind: KindOnce, Schedule: time.Now().Add(-time.Hour).Format(time.RFC3339), Prompt: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a crash: the dispatch record was written, the process died
+	// before the outcome landed. RunCount stays 0.
+	if err := s.AppendRun(RunRecord{
+		ID: NewRunID(), JobID: job.ID, JobName: job.Name,
+		StartedAt: time.Now().Add(-time.Hour), Status: "running",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sch.reconcileOnStart(); err != nil {
+		t.Fatal(err)
+	}
+
+	recs, err := s.ReadRuns(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 || recs[0].Status != "interrupted" {
+		t.Fatalf("records after reconcile = %+v, want one interrupted", recs)
+	}
+	if recs[0].FinishedAt.IsZero() {
+		t.Error("interrupted record has no finish time")
+	}
+	// The once job never completed, so it must be re-armed to fire now.
+	jobs, _ := s.List()
+	if jobs[0].NextRun == nil || jobs[0].NextRun.After(time.Now().Add(time.Minute)) {
+		t.Errorf("interrupted once job not re-armed: %+v", jobs[0].NextRun)
+	}
+}
+
+func TestReconcileRecordsMissedCronFiring(t *testing.T) {
+	s := openTestStore(t)
+	sch := New(s, &fakeExecutor{})
+
+	if _, err := s.Add(Job{Name: "cron", Kind: KindCron, Schedule: "0 9 * * *", Prompt: "p"}); err != nil {
+		t.Fatal(err)
+	}
+	missed := time.Now().Add(-2 * time.Hour)
+	_ = s.Update(func(jobs *[]Job) error {
+		(*jobs)[0].NextRun = &missed
+		return nil
+	})
+
+	if err := sch.reconcileOnStart(); err != nil {
+		t.Fatal(err)
+	}
+
+	recs, err := s.ReadRuns(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 || recs[0].Status != "missed" {
+		t.Fatalf("records after reconcile = %+v, want one missed", recs)
+	}
+	if !recs[0].StartedAt.Equal(missed) {
+		t.Errorf("missed record started at %v, want the missed firing %v", recs[0].StartedAt, missed)
+	}
+	// Stale prompts are not replayed: the next run is in the future.
+	jobs, _ := s.List()
+	if jobs[0].NextRun == nil || !jobs[0].NextRun.After(time.Now()) {
+		t.Errorf("cron job not rescheduled to the future: %+v", jobs[0].NextRun)
+	}
+}
+
+func TestUpdateRunNotFound(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.UpdateRun("nope", func(*RunRecord) {}); err == nil {
+		t.Fatal("UpdateRun on missing id = nil, want error")
+	}
+}

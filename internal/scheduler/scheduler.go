@@ -199,9 +199,43 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 }
 
 // reconcileOnStart reschedules everything relative to now.
+//
+// Crash recovery happens here:
+//   - run records still marked "running" (dispatched but never completed)
+//     are marked "interrupted": the daemon stopped mid-run. A once job in
+//     this state has RunCount == 0, so it is re-armed below and retried;
+//     cron jobs simply continue on their refreshed schedule.
+//   - cron jobs whose NextRun already passed while the daemon was down get
+//     one "missed" record (stale prompts are not replayed, but the gap is
+//     visible in the run history).
 func (s *Scheduler) reconcileOnStart() error {
 	now := s.clock()
-	return s.store.Update(func(jobs *[]Job) error {
+	// Recovery failures are returned (not merely reported): the Run loop
+	// retries reconciliation until it succeeds, so dangling "running"
+	// records cannot be left behind permanently.
+	runs, err := s.store.ReadRuns(0)
+	if err != nil {
+		return fmt.Errorf("scheduler: read run records for recovery: %w", err)
+	}
+	for _, rec := range runs {
+		if rec.Status != "running" {
+			continue
+		}
+		rec := rec
+		if err := s.store.UpdateRun(rec.ID, func(r *RunRecord) {
+			r.Status = "interrupted"
+			r.FinishedAt = now
+			r.Summary = "daemon stopped while the run was in flight"
+		}); err != nil {
+			return fmt.Errorf("scheduler: mark run %s interrupted: %w", rec.ID, err)
+		}
+	}
+	// Missed firings are collected here and recorded after the update: the
+	// store lock is already held inside Update, and recordRun takes it
+	// again (flock is per-fd, so re-locking in this process would
+	// deadlock).
+	var missed []RunRecord
+	if err := s.store.Update(func(jobs *[]Job) error {
 		for i := range *jobs {
 			job := &(*jobs)[i]
 			if !job.Enabled {
@@ -224,10 +258,24 @@ func (s *Scheduler) reconcileOnStart() error {
 				}
 				continue
 			}
+			if job.NextRun != nil && job.NextRun.Before(now) {
+				missedAt := *job.NextRun
+				missed = append(missed, RunRecord{
+					ID: NewRunID(), JobID: job.ID, JobName: job.Name,
+					StartedAt: missedAt, FinishedAt: now, Status: "missed",
+					Summary: fmt.Sprintf("scheduled firing at %s missed: daemon was not running", missedAt.Format(time.RFC3339)),
+				})
+			}
 			job.RefreshNext(now)
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	for _, rec := range missed {
+		s.recordRun(rec)
+	}
+	return nil
 }
 
 func (s *Scheduler) nextFireTime() (time.Time, error) {
@@ -263,6 +311,14 @@ func (s *Scheduler) executeJob(ctx context.Context, job Job) {
 	defer cancel()
 
 	started := s.clock()
+	// Record the dispatch before executing: if this process crashes mid-run,
+	// the dangling "running" record lets the next startup mark the run as
+	// interrupted instead of losing it silently.
+	runID := NewRunID()
+	s.recordRun(RunRecord{
+		ID: runID, JobID: job.ID, JobName: job.Name,
+		StartedAt: started, Status: "running",
+	})
 	summary, sessionPath, err := s.exec.Execute(ectx, job)
 	finished := s.clock()
 
@@ -282,7 +338,17 @@ func (s *Scheduler) executeJob(ctx context.Context, job Job) {
 		rec.Status = "error"
 		rec.Summary = truncate(err.Error(), summaryLimit)
 	}
-	s.recordRun(rec)
+	if uerr := s.store.UpdateRun(runID, func(r *RunRecord) {
+		r.FinishedAt = rec.FinishedAt
+		r.Status = rec.Status
+		r.Summary = rec.Summary
+		r.SessionPath = rec.SessionPath
+	}); uerr != nil {
+		// The update raced with something unexpected (e.g. the log was
+		// rotated out of band); fall back to appending so the outcome is
+		// not lost.
+		s.recordRun(rec)
+	}
 
 	if err := s.store.Update(func(jobs *[]Job) error {
 		for i := range *jobs {
