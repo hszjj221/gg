@@ -4,20 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
-	"github.com/hszjj221/gg/internal/artifact"
-	"github.com/hszjj221/gg/internal/browser"
 	"github.com/hszjj221/gg/internal/config"
-	"github.com/hszjj221/gg/internal/connector"
-	"github.com/hszjj221/gg/internal/connector/google"
 	"github.com/hszjj221/gg/internal/contextmgr"
-	"github.com/hszjj221/gg/internal/kb"
-	"github.com/hszjj221/gg/internal/media"
 	"github.com/hszjj221/gg/internal/memory"
 	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/skills"
@@ -58,7 +51,11 @@ type Service struct {
 	// conversation). It is created once here — not per turn — and closed
 	// via Close when the Service is retired, so daemon turns cannot leak
 	// headless Chromium processes.
-	browserPool     *tools.BrowserSessionPool
+	browserPool *tools.BrowserSessionPool
+	// toolMemo caches per-Service tool resources (Chromium probe, shared
+	// media client) so turns don't redo static work. Lazily filled by
+	// buildTools; both call sites run with s.mu held.
+	toolMemo *ToolMemo
 }
 
 func NewService(options Options) *Service {
@@ -78,7 +75,31 @@ func NewService(options Options) *Service {
 		memStore:        memStore,
 		queue:           &agent.MessageQueue{},
 		browserPool:     tools.NewBrowserSessionPool(),
+		toolMemo:        &ToolMemo{},
 	}
+}
+
+// buildTools assembles the agent toolset for one turn via the provider
+// registry. Static resources (Chromium probe, media client) are memoized
+// per Service; dynamic state (connector token, model selection, config)
+// is re-read every turn so mid-session changes take effect.
+func (s *Service) buildTools(provider agent.Provider) []agent.Tool {
+	loc, tzErr := userLocation(s.profile)
+	tc := ToolContext{
+		Config:      s.cfg,
+		Provider:    provider,
+		ReadRoots:   s.skillSet.ReadRoots(),
+		MemStore:    s.memStore,
+		Location:    loc,
+		LocationErr: tzErr,
+		BrowserPool: s.browserPool,
+		Memoized:    s.toolMemo,
+	}
+	var out []agent.Tool
+	for _, p := range toolProviders {
+		out = append(out, p.Build(tc)...)
+	}
+	return out
 }
 
 func (s *Service) Queue() *agent.MessageQueue {
@@ -134,8 +155,7 @@ func (s *Service) run(ctx context.Context, prompt string, onEvent func(agent.Eve
 	}
 	provider := s.providerFactory(s.cfg)
 	summaryUsage := agent.Usage{}
-	loc, tzErr := userLocation(s.profile)
-	runner := agent.NewRunnerWithOptions(provider, defaultTools(s.cfg, provider, s.skillSet.ReadRoots(), s.memStore, loc, tzErr, s.browserPool), agent.RunnerOptions{
+	runner := agent.NewRunnerWithOptions(provider, s.buildTools(provider), agent.RunnerOptions{
 		Approver:      approver,
 		OnMessage:     s.persistMessage,
 		DrainMessages: s.queue.DrainSteering,
@@ -394,8 +414,7 @@ func (s *Service) contextStatus() string {
 	}
 	build := s.buildContext(system, agent.Message{})
 	var defs []agent.ToolDefinition
-	loc, tzErr := userLocation(s.profile)
-	for _, tool := range defaultTools(s.cfg, nil, s.skillSet.ReadRoots(), s.memStore, loc, tzErr, s.browserPool) {
+	for _, tool := range s.buildTools(nil) {
 		defs = append(defs, tool.Definition())
 	}
 	hasSummary := s.summary != nil && strings.TrimSpace(s.summary.Summary) != ""
@@ -440,113 +459,6 @@ func (s *Service) systemMessages() ([]agent.Message, error) {
 	messages = append(messages, project...)
 	messages = append(messages, skillSystemMessages(s.skillSet)...)
 	return messages, nil
-}
-
-func defaultTools(cfg config.Config, provider agent.Provider, readRoots []string, memStore *memory.Store, loc *time.Location, tzErr error, browserPool *tools.BrowserSessionPool) []agent.Tool {
-	toolset := []agent.Tool{
-		tools.NewReadToolWithOptions(cfg.CWD, tools.ReadOptions{ExtraRoots: readRoots}),
-		tools.NewListTool(cfg.CWD),
-		tools.NewGrepTool(cfg.CWD),
-		tools.NewBashTool(cfg.CWD, tools.BashOptions{}),
-		tools.NewEditTool(cfg.CWD),
-		tools.NewWriteTool(cfg.CWD),
-		tools.NewSubagentTool(cfg.CWD, provider, tools.SubagentOptions{}),
-	}
-	if cfg.Memory.Enabled {
-		toolset = append(toolset, tools.NewMemoryAddTool(memStore), tools.NewMemorySearchTool(memStore))
-	}
-	if kb.Exists(cfg.KBDir, kb.DefaultName) {
-		// The query embedding must go to the same endpoint the index was
-		// built with; prefer dedicated embedding config, fall back to the
-		// chat provider. An endpoint mismatch is rejected at call time
-		// (fail closed) rather than silently querying the wrong service.
-		embedKey := cfg.EmbedAPIKey
-		if embedKey == "" {
-			embedKey = cfg.APIKey
-		}
-		embedBase := cfg.EmbedBaseURL
-		if embedBase == "" {
-			embedBase = cfg.BaseURL
-		}
-		toolset = append(toolset, tools.NewKBSearchTool(
-			cfg.KBDir, embedKey, embedBase, tools.KBSearchOptions{},
-		))
-	}
-	// Artifact tools degrade to absent when the store cannot be opened;
-	// everything else keeps working.
-	if astore, err := artifact.Open(cfg.Artifacts.Dir); err == nil {
-		toolset = append(toolset,
-			tools.NewArtifactCreateTool(astore),
-			tools.NewArtifactEditTool(astore),
-		)
-	}
-	// Connector tools degrade to absent when Google is not connected.
-	if cstore, err := connector.Open(cfg.Connectors.Dir); err == nil {
-		if tok, err := cstore.Load(google.Name); err == nil {
-			if gclient, err := google.NewClient(cstore, google.Config{
-				ClientID:     cfg.Connectors.Google.ClientID,
-				ClientSecret: cfg.Connectors.Google.ClientSecret,
-			}); err == nil {
-				// Register only the tools the user actually granted: a
-				// partial (granular-consent) grant must not advertise tools
-				// that would just 403.
-				has := func(scope string) bool {
-					for _, s := range tok.Scopes {
-						if s == scope {
-							return true
-						}
-					}
-					return false
-				}
-				if has(google.ScopeGmailRead) {
-					toolset = append(toolset,
-						tools.NewGmailSearchTool(gclient),
-						tools.NewGmailReadTool(gclient),
-					)
-				}
-				if has(google.ScopeGmailSend) {
-					toolset = append(toolset, tools.NewGmailSendTool(gclient))
-				}
-				if has(google.ScopeCalendar) {
-					toolset = append(toolset,
-						tools.NewCalendarAgendaTool(gclient, loc, tzErr),
-						tools.NewCalendarCreateTool(gclient, loc, tzErr),
-					)
-				}
-			}
-		}
-	}
-	// Media tools degrade to absent when the provider base URL is missing.
-	if baseURL := firstNonEmpty(cfg.MediaBaseURL, cfg.BaseURL); baseURL != "" {
-		mclient := media.NewClient(media.Config{
-			BaseURL:    baseURL,
-			APIKey:     firstNonEmpty(cfg.MediaAPIKey, cfg.APIKey),
-			ImageModel: cfg.MediaImageModel,
-			TTSModel:   cfg.MediaTTSModel,
-			STTModel:   cfg.MediaSTTModel,
-			Dir:        filepath.Join(cfg.HomeDir, ".gg", "media"),
-		})
-		toolset = append(toolset,
-			tools.NewImageGenerateTool(mclient),
-			tools.NewTTSTool(mclient),
-			tools.NewSTTToolWithRoots(mclient, []string{
-				cfg.CWD,
-				filepath.Join(cfg.HomeDir, ".gg", "media"),
-			}),
-		)
-	}
-	// Browser tools need a local Chromium; they degrade to a clear error
-	// when none is installed. The pool scopes one Chromium session to this
-	// Service (one conversation) and is closed via Service.Close when the
-	// Service is retired.
-	if _, err := browser.FindChromium(); err == nil {
-		toolset = append(toolset,
-			tools.NewBrowserNavigateTool(browserPool),
-			tools.NewBrowserReadTool(browserPool),
-			tools.NewBrowserScreenshotTool(browserPool),
-		)
-	}
-	return toolset
 }
 
 // firstNonEmpty returns the first non-empty string.

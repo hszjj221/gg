@@ -16,7 +16,10 @@ const Version = "2.0"
 // contract independently from the JSON-RPC wire version.
 const ProtocolVersion = "1.1"
 
-var capabilities = []string{
+// capabilities lists transport-level features. Tool capabilities are
+// derived from app.ToolCapabilities so the advertised set cannot drift
+// from the tools actually registered.
+var capabilities = append([]string{
 	"run.approval",
 	"run.event-replay",
 	"run.reattach",
@@ -24,8 +27,7 @@ var capabilities = []string{
 	"session.clone",
 	"session.fork",
 	"session.tree",
-	"artifact",
-}
+}, app.ToolCapabilities()...)
 
 type Request struct {
 	JSONRPC string          `json:"jsonrpc"`
