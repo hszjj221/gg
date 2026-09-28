@@ -2,7 +2,7 @@ package daemon
 
 import (
 	"context"
-	"io"
+	"log/slog"
 	"path/filepath"
 
 	"github.com/hszjj221/gg/internal/app"
@@ -13,7 +13,7 @@ import (
 
 // newTelegramChannel builds the Telegram bot channel. A construction error
 // is fatal to daemon startup.
-func newTelegramChannel(cfg config.Config, workspace *app.Workspace, stderr io.Writer) (Channel, error) {
+func newTelegramChannel(cfg config.Config, workspace *app.Workspace, logger *slog.Logger) (Channel, error) {
 	var mclient *media.Client
 	if baseURL := nonEmpty(cfg.MediaBaseURL, cfg.BaseURL); baseURL != "" {
 		mclient = media.NewClient(media.Config{
@@ -31,7 +31,7 @@ func newTelegramChannel(cfg config.Config, workspace *app.Workspace, stderr io.W
 		Workspace:  workspace,
 		Media:      mclient,
 		HomeDir:    cfg.HomeDir,
-		Stderr:     stderr,
+		Logger:     logger,
 	})
 	if err != nil {
 		return nil, err

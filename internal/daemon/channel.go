@@ -3,7 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
-	"io"
+	"log/slog"
 
 	"github.com/hszjj221/gg/internal/app"
 	"github.com/hszjj221/gg/internal/config"
@@ -16,14 +16,14 @@ type Channel interface {
 	// Name identifies the channel in logs and error messages.
 	Name() string
 	// Run serves until ctx is done. Returning nil on cancellation is
-	// normal; any other error is reported to the daemon's stderr.
+	// normal; any other error is reported to the daemon's logger.
 	Run(ctx context.Context) error
 }
 
 type channelDeps struct {
 	cfg         config.Config
 	workspace   *app.Workspace
-	stderr      io.Writer
+	logger      *slog.Logger
 	noScheduler bool
 }
 
@@ -33,18 +33,18 @@ type channelDeps struct {
 // not take the daemon down with it.
 func startChannels(ctx context.Context, deps channelDeps) error {
 	if !deps.noScheduler {
-		ch, err := newSchedulerChannel(deps.cfg, deps.workspace, deps.stderr)
+		ch, err := newSchedulerChannel(deps.cfg, deps.workspace, deps.logger)
 		if err != nil {
 			return fmt.Errorf("scheduler: %w", err)
 		}
-		launchChannel(ctx, ch, deps.stderr)
+		launchChannel(ctx, ch, deps.logger)
 	}
 	if deps.cfg.TelegramBotToken != "" {
-		ch, err := newTelegramChannel(deps.cfg, deps.workspace, deps.stderr)
+		ch, err := newTelegramChannel(deps.cfg, deps.workspace, deps.logger)
 		if err != nil {
 			return fmt.Errorf("telegram: %w", err)
 		}
-		launchChannel(ctx, ch, deps.stderr)
+		launchChannel(ctx, ch, deps.logger)
 	}
 	return nil
 }
@@ -52,11 +52,11 @@ func startChannels(ctx context.Context, deps channelDeps) error {
 // launchChannel runs ch in the background until ctx is done. Runtime
 // failures are reported with the channel name; a nil return on context
 // cancellation is silent.
-func launchChannel(ctx context.Context, ch Channel, stderr io.Writer) {
-	fmt.Fprintf(stderr, "%s: starting\n", ch.Name())
+func launchChannel(ctx context.Context, ch Channel, logger *slog.Logger) {
+	logger.Info("channel starting", "channel", ch.Name())
 	go func() {
 		if err := ch.Run(ctx); err != nil && ctx.Err() == nil {
-			fmt.Fprintf(stderr, "%s: %s\n", ch.Name(), err)
+			logger.Error("channel failed", "channel", ch.Name(), "error", err)
 		}
 	}()
 }

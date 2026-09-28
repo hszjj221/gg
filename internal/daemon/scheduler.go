@@ -3,7 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
-	"io"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode"
@@ -18,10 +18,12 @@ import (
 // runs are auditable and can be reopened with gg resume.
 type daemonJobExecutor struct {
 	workspace *app.Workspace
+	logger    *slog.Logger
 }
 
 func (e *daemonJobExecutor) Execute(ctx context.Context, job scheduler.Job) (string, string, error) {
 	name := fmt.Sprintf("scheduler/%s-%s", sanitizeJobName(job.Name), time.Now().Format("20060102-150405"))
+	e.logger.Info("scheduled job started", "job", job.Name, "session", name)
 	snap, err := e.workspace.CreateSession(name)
 	if err != nil {
 		return "", "", fmt.Errorf("create scheduler session: %w", err)
@@ -40,6 +42,7 @@ func (e *daemonJobExecutor) Execute(ctx context.Context, job scheduler.Job) (str
 	if err != nil {
 		return "", snap.SessionPath, err
 	}
+	e.logger.Info("scheduled job finished", "job", job.Name, "session", name)
 	return summary, snap.SessionPath, nil
 }
 
@@ -77,15 +80,15 @@ func waitRunSummary(ctx context.Context, w *app.Workspace, runID string) (string
 
 // startScheduler loads persisted jobs and runs the scheduling loop in the
 // background. Jobs fire as agent turns in the daemon's workspace.
-func newSchedulerChannel(cfg config.Config, workspace *app.Workspace, stderr io.Writer) (Channel, error) {
+func newSchedulerChannel(cfg config.Config, workspace *app.Workspace, logger *slog.Logger) (Channel, error) {
 	store, err := scheduler.Open(cfg.Scheduler.Dir)
 	if err != nil {
 		return nil, fmt.Errorf("open scheduler store: %w", err)
 	}
-	sched := scheduler.New(store, &daemonJobExecutor{workspace: workspace},
+	sched := scheduler.New(store, &daemonJobExecutor{workspace: workspace, logger: logger},
 		scheduler.WithWorkspaceDir(cfg.CWD),
 		scheduler.WithErrorReporter(func(err error) {
-			fmt.Fprintln(stderr, "scheduler:", err)
+			logger.Error("scheduled job failed", "error", err)
 		}))
 	return &schedulerChannel{sched: sched}, nil
 }

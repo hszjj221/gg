@@ -30,6 +30,18 @@ func NewHandler(rpc *jsonrpc.Handler, workspace *app.Workspace, token string) *H
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// /healthz is the unauthenticated liveness probe (Kubernetes-style):
+	// it answers whether the process is alive and serving HTTP. It carries
+	// no sensitive data, so it sits outside the bearer-token gate. /health
+	// stays authenticated and reports API readiness (protocol version).
+	if r.URL.Path == "/healthz" {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		return
+	}
 	if !h.authorized(r) {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="gg"`)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
