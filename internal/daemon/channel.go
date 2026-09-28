@@ -28,22 +28,27 @@ type channelDeps struct {
 }
 
 // startChannels constructs and launches every configured channel. A
-// construction error is fatal — the daemon must not serve half-configured.
-// A channel that fails at runtime is reported and left stopped; it does
-// not take the daemon down with it.
+// construction error is fatal — the daemon must not serve half-configured,
+// so every channel is constructed before any of them is launched. A channel
+// that fails at runtime is reported and left stopped; it does not take the
+// daemon down with it.
 func startChannels(ctx context.Context, deps channelDeps) error {
+	var channels []Channel
 	if !deps.noScheduler {
 		ch, err := newSchedulerChannel(deps.cfg, deps.workspace, deps.logger)
 		if err != nil {
 			return fmt.Errorf("scheduler: %w", err)
 		}
-		launchChannel(ctx, ch, deps.logger)
+		channels = append(channels, ch)
 	}
 	if deps.cfg.TelegramBotToken != "" {
 		ch, err := newTelegramChannel(deps.cfg, deps.workspace, deps.logger)
 		if err != nil {
 			return fmt.Errorf("telegram: %w", err)
 		}
+		channels = append(channels, ch)
+	}
+	for _, ch := range channels {
 		launchChannel(ctx, ch, deps.logger)
 	}
 	return nil
