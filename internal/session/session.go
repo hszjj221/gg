@@ -317,6 +317,13 @@ func (s *Store) ParentID(id string) (*string, bool) {
 	if s == nil {
 		return nil, false
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.parentIDLocked(id)
+}
+
+// parentIDLocked requires s.mu to be held.
+func (s *Store) parentIDLocked(id string) (*string, bool) {
 	for _, record := range s.records {
 		if record.id() == id {
 			return record.parentID(), true
@@ -342,6 +349,8 @@ func (s *Store) State() Loaded {
 	if s == nil {
 		return Loaded{}
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	loaded := Loaded{Header: s.header, records: cloneRecords(s.records)}
 	_ = populateLoaded(&loaded, s.lastID)
 	return loaded
@@ -351,6 +360,8 @@ func (s *Store) TreeEntries() []TreeEntry {
 	if s == nil {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	active := make(map[string]bool)
 	for _, record := range pathRecords(s.records, s.lastID) {
 		active[record.id()] = true
@@ -417,7 +428,7 @@ func (s *Store) Fork(id *string) (*Store, error) {
 		return nil, err
 	}
 	if id != nil {
-		if _, ok := s.ParentID(*id); !ok {
+		if _, ok := s.parentIDLocked(*id); !ok {
 			return nil, fmt.Errorf("session entry %q not found", *id)
 		}
 	}
@@ -450,7 +461,7 @@ func (s *Store) AppendMessage(message agent.Message) error {
 	if message.Timestamp == 0 {
 		message.Timestamp = time.Now().UnixMilli()
 	}
-	entry := MessageEntry{Type: "message", ID: newID(), ParentID: cloneStringPtr(s.lastID), Timestamp: now(), Message: message}
+	entry := MessageEntry{Type: "message", ID: newID(), Timestamp: now(), Message: message}
 	return s.appendRecord(entryRecord{typ: "message", message: &entry})
 }
 
@@ -458,7 +469,7 @@ func (s *Store) AppendUsage(usage agent.Usage) error {
 	if s == nil || usage.IsZero() {
 		return nil
 	}
-	entry := UsageEntry{Type: "usage", ID: newID(), ParentID: cloneStringPtr(s.lastID), Timestamp: now(), Usage: usage}
+	entry := UsageEntry{Type: "usage", ID: newID(), Timestamp: now(), Usage: usage}
 	return s.appendRecord(entryRecord{typ: "usage", usage: &entry})
 }
 
@@ -466,7 +477,7 @@ func (s *Store) AppendModel(provider, model string) error {
 	if s == nil {
 		return nil
 	}
-	entry := ModelEntry{Type: "model", ID: newID(), ParentID: cloneStringPtr(s.lastID), Timestamp: now(), Provider: provider, Model: model, Selection: provider + ":" + model}
+	entry := ModelEntry{Type: "model", ID: newID(), Timestamp: now(), Provider: provider, Model: model, Selection: provider + ":" + model}
 	return s.appendRecord(entryRecord{typ: "model", model: &entry})
 }
 
@@ -474,7 +485,7 @@ func (s *Store) AppendSummary(summary string, throughMessageCount int) error {
 	if s == nil {
 		return nil
 	}
-	entry := SummaryEntry{Type: "summary", ID: newID(), ParentID: cloneStringPtr(s.lastID), Timestamp: now(), Summary: summary, ThroughMessageCount: throughMessageCount}
+	entry := SummaryEntry{Type: "summary", ID: newID(), Timestamp: now(), Summary: summary, ThroughMessageCount: throughMessageCount}
 	return s.appendRecord(entryRecord{typ: "summary", summary: &entry})
 }
 
@@ -483,7 +494,7 @@ func (s *Store) AppendName(name string) error {
 		return fmt.Errorf("session persistence is disabled")
 	}
 	name = strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ").Replace(name))
-	entry := SessionInfoEntry{Type: "session_info", ID: newID(), ParentID: cloneStringPtr(s.lastID), Timestamp: now(), Name: name}
+	entry := SessionInfoEntry{Type: "session_info", ID: newID(), Timestamp: now(), Name: name}
 	return s.appendRecord(entryRecord{typ: "session_info", info: &entry})
 }
 
@@ -497,6 +508,13 @@ func (s *Store) appendRecord(record entryRecord) error {
 	defer release()
 	if err := s.validateCurrentLocked(); err != nil {
 		return err
+	}
+	// Parent selection happens under the store lock so a concurrent
+	// rename/checkout cannot advance the head between choosing the parent
+	// and appending: the record always parents onto the head as of this
+	// append instead of failing with ErrConflict on a stale parent.
+	if record.typ != "head" {
+		record.setParentID(cloneStringPtr(s.lastID))
 	}
 	if record.typ != "head" && !sameID(record.parentID(), s.lastID) {
 		return fmt.Errorf("%w: in-memory session head advanced before append", ErrConflict)

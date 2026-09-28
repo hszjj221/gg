@@ -692,7 +692,10 @@ func TestCompactCommandWritesSummaryWithoutAppendingMessages(t *testing.T) {
 	}
 }
 
-func TestAutoCompactProviderErrorStopsMainRequest(t *testing.T) {
+// A failed summarization no longer kills the turn: auto-compact degrades
+// to hard truncation (explicit marker, prefix dropped) and the main request
+// proceeds.
+func TestAutoCompactProviderErrorFallsBackToTruncation(t *testing.T) {
 	dir := t.TempDir()
 	provider := &appContextProvider{err: errors.New("summarizer down")}
 	cfg := config.Config{
@@ -714,12 +717,21 @@ func TestAutoCompactProviderErrorStopsMainRequest(t *testing.T) {
 		true,
 	)
 
-	_, err := executor.Run(context.Background(), "new task", nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "context compaction failed") {
-		t.Fatalf("expected compaction error, got %v", err)
+	result, err := executor.Run(context.Background(), "new task", nil, nil)
+	if err != nil {
+		t.Fatalf("turn should proceed after truncation fallback, got: %v", err)
 	}
-	if len(provider.requests) != 1 || len(provider.requests[0].Tools) != 0 {
-		t.Fatalf("main request should not run after compaction error: %+v", provider.requests)
+	if result.Content != "final" {
+		t.Fatalf("expected main request to complete, got %q", result.Content)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("expected summary attempt + main request, got %d requests", len(provider.requests))
+	}
+	if len(provider.requests[0].Tools) != 0 {
+		t.Fatalf("first request should be the summary attempt (no tools)")
+	}
+	if len(provider.requests[1].Tools) == 0 {
+		t.Fatalf("second request should be the main request (with tools)")
 	}
 }
 

@@ -35,6 +35,13 @@ type Options struct {
 // Service owns the mutable state of one conversation. Mutating operations are
 // serialized so the same service can safely be used by terminal, desktop, and
 // network transports.
+//
+// Locking: mu guards cfg, store, history, summary, modelRecorded, and
+// toolMemo. It is held only for short, non-blocking critical sections —
+// never across provider network calls, tool execution, or approval. The
+// Manager serializes Run per session, so all mutations happen on the Run
+// goroutine; the lock exists for concurrent readers (Snapshot, session
+// actions) during a turn.
 type Service struct {
 	mu              sync.Mutex
 	cfg             config.Config
@@ -53,9 +60,15 @@ type Service struct {
 	// headless Chromium processes.
 	browserPool *tools.BrowserSessionPool
 	// toolMemo caches per-Service tool resources (Chromium probe, shared
-	// media client) so turns don't redo static work. Lazily filled by
-	// buildTools; both call sites run with s.mu held.
+	// media client) so turns don't redo static work. It synchronizes
+	// itself; callers don't need s.mu.
 	toolMemo *ToolMemo
+	// running is true while a turn is in flight. Session actions that
+	// replace the store and history (checkout, fork-switch, clone-switch)
+	// are rejected while it is set: the runner keeps persisting into the
+	// state the turn started with, so swapping underneath it would land
+	// the turn's messages on the wrong branch.
+	running bool
 }
 
 func NewService(options Options) *Service {
@@ -120,15 +133,29 @@ func (s *Service) HasSession() bool {
 }
 
 func (s *Service) Run(ctx context.Context, prompt string, onEvent func(agent.Event), approver agent.Approver) (Result, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	result, err := s.run(ctx, prompt, onEvent, approver)
-	result.TreeItems = treeItems(s.store)
+	result.TreeItems = s.treeItems()
 	return result, err
 }
 
+// treeItems reads the current store under mu; session.Store serializes its
+// own record access, so the lock is released before walking the tree.
+func (s *Service) treeItems() []TreeItem {
+	s.mu.Lock()
+	store := s.store
+	s.mu.Unlock()
+	return treeItems(store)
+}
+
 func (s *Service) run(ctx context.Context, prompt string, onEvent func(agent.Event), approver agent.Approver) (Result, error) {
+	s.mu.Lock()
+	s.running = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.running = false
+		s.mu.Unlock()
+	}()
 	if result, ok, err := s.handleControlCommand(ctx, prompt); ok || err != nil {
 		return result, err
 	}
@@ -167,7 +194,7 @@ func (s *Service) run(ctx context.Context, prompt string, onEvent func(agent.Eve
 	})
 	reply, runErr := runner.Run(ctx, nil, onEvent)
 	usage := summaryUsage.Add(runner.Usage())
-	persistErr := appendUsage(s.store, runner.Usage())
+	persistErr := s.appendUsage(runner.Usage())
 	return Result{Content: reply.Content, Usage: usage, ModelName: s.cfg.Selection}, errors.Join(runErr, persistErr)
 }
 
@@ -248,15 +275,17 @@ func (s *Service) handleModelCommand(prompt string) (Result, bool, error) {
 	if !ok || err != nil {
 		return Result{}, ok, err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if arg == "" {
-		return Result{Content: s.modelListText(), ModelName: s.cfg.Selection}, true, nil
+		return Result{Content: s.modelListTextLocked(), ModelName: s.cfg.Selection}, true, nil
 	}
 	next, err := s.cfg.WithSelection(arg)
 	if err != nil {
 		return Result{}, true, err
 	}
 	s.cfg = next
-	if err := s.appendCurrentModel(); err != nil {
+	if err := s.appendCurrentModelLocked(); err != nil {
 		return Result{}, true, err
 	}
 	s.modelRecorded = true
@@ -264,10 +293,12 @@ func (s *Service) handleModelCommand(prompt string) (Result, bool, error) {
 }
 
 func (s *Service) ensureModelRecorded() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.modelRecorded {
 		return nil
 	}
-	if err := s.appendCurrentModel(); err != nil {
+	if err := s.appendCurrentModelLocked(); err != nil {
 		return err
 	}
 	s.modelRecorded = true
@@ -275,6 +306,14 @@ func (s *Service) ensureModelRecorded() error {
 }
 
 func (s *Service) appendCurrentModel() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.appendCurrentModelLocked()
+}
+
+// appendCurrentModelLocked requires s.mu to be held. session.Store
+// serializes its own appends, so taking its lock under s.mu is safe.
+func (s *Service) appendCurrentModelLocked() error {
 	if s.store == nil {
 		return nil
 	}
@@ -282,6 +321,13 @@ func (s *Service) appendCurrentModel() error {
 }
 
 func (s *Service) modelListText() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.modelListTextLocked()
+}
+
+// modelListTextLocked requires s.mu to be held.
+func (s *Service) modelListTextLocked() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "current model: %s", s.cfg.Selection)
 	selections := s.cfg.AvailableSelections()
@@ -382,16 +428,31 @@ type compactResult struct {
 }
 
 func (s *Service) buildContext(systemMessages []agent.Message, user agent.Message) contextmgr.BuildResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buildContextLocked(systemMessages, user)
+}
+
+// buildContextLocked requires s.mu to be held. It is CPU-only: estimation
+// and message cloning, no I/O.
+func (s *Service) buildContextLocked(systemMessages []agent.Message, user agent.Message) contextmgr.BuildResult {
 	return contextmgr.Build(contextmgr.BuildInput{
 		System:  systemMessages,
 		History: s.history,
 		Current: user,
-		Summary: s.summaryState(),
+		Summary: s.summaryStateLocked(),
 		Config:  s.cfg.Context,
 	})
 }
 
 func (s *Service) summaryState() contextmgr.SummaryState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.summaryStateLocked()
+}
+
+// summaryStateLocked requires s.mu to be held.
+func (s *Service) summaryStateLocked() contextmgr.SummaryState {
 	if s.summary == nil {
 		return contextmgr.SummaryState{}
 	}
@@ -403,7 +464,12 @@ func (s *Service) summaryState() contextmgr.SummaryState {
 }
 
 func (s *Service) compactHistory(ctx context.Context, provider agent.Provider) (compactResult, error) {
-	_, through, _ := contextmgr.SummarizePrefix(s.history, s.summaryState(), s.cfg.Context.TailTurns)
+	s.mu.Lock()
+	history := s.history
+	state := s.summaryStateLocked()
+	tailTurns := s.cfg.Context.TailTurns
+	s.mu.Unlock()
+	_, through, _ := contextmgr.SummarizePrefix(history, state, tailTurns)
 	return s.compactThrough(ctx, provider, through)
 }
 

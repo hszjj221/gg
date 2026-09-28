@@ -3,6 +3,7 @@ package app
 import (
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
@@ -43,9 +44,10 @@ type ToolContext struct {
 	Memoized *ToolMemo
 }
 
-// ToolMemo caches per-Service tool resources across turns. All methods must
-// be called with the owning Service's mutex held.
+// ToolMemo caches per-Service tool resources across turns. It is safe for
+// concurrent use; callers do not need to hold the owning Service's mutex.
 type ToolMemo struct {
+	mu              sync.Mutex
 	chromiumResolved bool
 	chromiumOK       bool
 	mediaKey         string
@@ -57,6 +59,8 @@ type ToolMemo struct {
 // mid-conversation in practice, and re-scanning PATH every turn is pure
 // waste.
 func (m *ToolMemo) ChromiumOK() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if !m.chromiumResolved {
 		_, err := browser.FindChromium()
 		m.chromiumResolved = true
@@ -70,6 +74,8 @@ func (m *ToolMemo) ChromiumOK() bool {
 // the connection pool and force new TLS handshakes on every image/TTS/STT
 // call.
 func (m *ToolMemo) MediaClient(cfg config.Config) *media.Client {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	baseURL := firstNonEmpty(cfg.MediaBaseURL, cfg.BaseURL)
 	if baseURL == "" {
 		m.mediaClient = nil

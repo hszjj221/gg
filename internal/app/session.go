@@ -12,6 +12,9 @@ import (
 func (s *Service) HandleSessionAction(action SessionAction, entryID string) (SessionUpdate, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.running {
+		return SessionUpdate{}, fmt.Errorf("cannot change conversation branch while a run is in progress")
+	}
 
 	switch action {
 	case SessionActionTree:
@@ -38,6 +41,9 @@ func (s *Service) HandleSessionAction(action SessionAction, entryID string) (Ses
 func (s *Service) Checkout(entryID string) (SessionUpdate, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.running {
+		return SessionUpdate{}, fmt.Errorf("cannot change conversation branch while a run is in progress")
+	}
 	return s.checkoutLocked(entryID)
 }
 
