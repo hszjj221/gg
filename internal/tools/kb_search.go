@@ -10,10 +10,11 @@ import (
 	"github.com/hszjj221/gg/internal/kb"
 )
 
-// KBSearchTool performs semantic search over a local knowledge base built
-// with `gg kb index`. It is read-only: it embeds the query with the same
-// model recorded in the index manifest and returns the top-k chunks ranked
-// by cosine similarity.
+// KBSearchTool performs semantic search over the user's personal knowledge
+// base built with `gg kb index` (their own documents, notes, reference
+// material). It is read-only: it embeds the query with the same model
+// recorded in the index manifest and returns the top-k chunks ranked by
+// cosine similarity.
 type KBSearchTool struct {
 	kbDir    string
 	name     string
@@ -54,7 +55,7 @@ func (t KBSearchTool) Name() string { return "kb_search" }
 func (t KBSearchTool) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "kb_search",
-		Description: "Semantic search over the local knowledge base (built with `gg kb index`). Use it when the question is about project docs, design notes, or any ingested corpus rather than live code. Returns matching passages with source file and similarity score.",
+		Description: "Semantic search over the user's personal knowledge base (built with `gg kb index` from their own documents, notes, or reference material). Use it for questions about the user's documents. Not for live code or workspace files (use read/grep), and not for distilled facts about the user such as preferences or past conversations (use memory_search). Returns matching passages with source file and similarity score.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

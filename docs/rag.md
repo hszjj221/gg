@@ -1,9 +1,24 @@
-# RAG retrieval layer
+# Personal knowledge base (RAG)
 
-`gg` ships a minimal, dependency-free retrieval-augmented generation layer:
-a local knowledge base the agent can semantically search via the `kb_search`
-tool. No vector database, no extra services — one JSON file under
-`~/.gg/kb/<name>/index.json`.
+`gg` ships a minimal, dependency-free retrieval layer for the user's own
+documents: a personal knowledge base the agent can semantically search via
+the `kb_search` tool. No vector database, no extra services — one JSON file
+under `~/.gg/kb/<name>/index.json`. The index itself stays on the user's
+machine; note that during indexing, document text is sent to the configured
+embeddings provider (only the resulting vectors are stored locally).
+
+It complements long-term memory rather than duplicating it:
+
+| | Memory (`memory_search`) | Knowledge base (`kb_search`) |
+|---|---|---|
+| Content | Distilled facts about the user: preferences, people, daily logs | Text of the user's documents, notes, manuals, saved material (capped at 512 KiB per file) |
+| Size | Small, curated | Large, un-distilled |
+| Prompt | `MEMORY.md` injected (budgeted); people, groups, and older daily logs searched on demand | Searched on demand, never injected wholesale |
+| Query | Keyword | Semantic (embeddings) |
+
+Rule of thumb for the agent: "what does the user like / who is X / what did
+we discuss" → `memory_search`. "What does the user's document say about Y" →
+`kb_search`. "What does this code do" → `read` / `grep`, not the KB.
 
 ## Pipeline
 
@@ -42,7 +57,7 @@ gg kb index <dir>            gg kb search <query> / kb_search tool
 | Index build | `internal/kb/build.go` | Walks the tree, skips VCS/dependency/build dirs, allowlists text extensions, probes unknown files for binary content, caps files at 512 KiB. |
 | Vector store | `internal/kb/store.go` | JSON-persisted chunks + vectors with a manifest (name, model, dim, timestamp). Atomic write via temp file + rename. |
 | Search | `internal/kb/store.go` | Brute-force cosine similarity. Exact, dependency-free, fast enough for tens of thousands of chunks. |
-| Agent tool | `internal/tools/kb_search.go` | `kb_search(query, top_k)`; registered only when the default index exists, so the tool list stays clean. Embeds the query with the **index's own model** to avoid silent dimension/model mismatch. |
+| Agent tool | `internal/tools/kb_search.go` | `kb_search(query, top_k)`; registered only when the default index exists, so the tool list stays clean. The tool description steers the agent: user documents → `kb_search`, distilled user facts → `memory_search`, live code → `read`/`grep`. Embeds the query with the **index's own model** to avoid silent dimension/model mismatch. |
 | CLI | `internal/cliapp/kb.go` | `gg kb index|search|eval`. |
 
 ## Key design decisions
@@ -76,10 +91,11 @@ gg kb index <dir>            gg kb search <query> / kb_search tool
 ## Usage
 
 ```bash
-# Build (needs an embeddings-capable API key)
+# Index your own documents: notes, manuals, saved articles (plain-text formats)
+# (needs an embeddings-capable API key)
 export OPENAI_API_KEY=<key>          # or pass --embed-api-key
-gg kb index ./docs                   # -> ~/.gg/kb/default/index.json
-gg kb index ./docs --name api-docs --embed-model text-embedding-3-large
+gg kb index ~/Documents/notes        # -> ~/.gg/kb/default/index.json
+gg kb index ~/Documents/manuals --name manuals --embed-model text-embedding-3-large
 
 # Dedicated embeddings endpoint (when the chat provider doesn't serve embeddings):
 # flags --embed-base-url / --embed-api-key, or env GG_EMBED_BASE_URL / GG_EMBED_API_KEY.
@@ -90,7 +106,7 @@ export GG_EMBED_API_KEY=<key>
 gg kb index ./docs
 
 # Query manually
-gg kb search "how are sessions persisted?" --top-k 3
+gg kb search "what did my Tokyo trip notes say about hotels?" --top-k 3
 
 # In the agent: the kb_search tool appears automatically once the
 # default knowledge base exists.
@@ -102,7 +118,7 @@ gg kb eval --cases docs/kb-eval-sample.jsonl --top-k 5
 Cases file format (JSONL, `#` comments allowed):
 
 ```json
-{"query": "how are sessions persisted?", "expect": "JSONL"}
+{"query": "which hotel did I book in Tokyo?", "expect": "Park Hyatt"}
 ```
 
 A case passes when any top-k hit contains `expect` (case-insensitive).
