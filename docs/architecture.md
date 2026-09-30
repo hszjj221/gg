@@ -67,7 +67,7 @@ System prompt assembly order (after the coding instructions): user profile, cura
 `internal/artifact` owns versioned deliverables; `internal/library` owns the user's file collection; the two meet at publish time:
 
 1. **Store**: `~/.gg/artifacts/<id>/artifact.json` (id, title, type, version, published_version, timestamps) plus immutable `v<n>.md` / `v<n>.html` files, all written atomically (temp file + rename). `artifact_edit` appends a full new version — never a diff merge — so every version stays reproducible. Supported types are `markdown` and `html`; content is capped at 1 MiB per version so artifacts cannot blow up the agent context. All read-modify-write cycles are serialized with an `flock` on `artifacts.lock` (via `internal/filelock`), so concurrent edits from the CLI and the daemon cannot allocate the same version number. `List` always returns a non-nil slice so JSON callers see `[]`, not `null`, on an empty store.
-2. **Agent tools**: `artifact_create(title, type, content)` and `artifact_edit(artifact_id, content)`, registered in `app.defaultTools` when the store opens. Both implement `ApprovalRequest` (title/type/size plus a before/after content preview) because they write outside the working directory; the unattended approver denies them unless the job opted into `--allow-all`.
+2. **Agent tools**: `artifact_create(title, type, content)` and `artifact_edit(artifact_id, content)`, registered via the `artifact` entry in `app.toolProviders` when the store opens. Both implement `ApprovalRequest` (title/type/size plus a before/after content preview) because they write outside the working directory; the unattended approver denies them unless the job opted into `--allow-all`.
 3. **Publish**: `gg artifact publish <id>` and the Web Publish button (JSON-RPC `artifact.publish`) share one flow in `app.Workspace.PublishArtifact`: the latest version's bytes are saved into the library first (`library.AddBytes` → `~/.gg/library/<slug>.<ext>`, source `artifact:<id>`), and only then is the artifact's `published_version` advanced. `Store.Publish(id, expectedVersion)` refuses with `ErrVersionChanged` when the artifact gained a newer version between the caller's read and the mark — the half-saved library copy is removed and the caller retries instead of recording a published version whose bytes were never saved.
 4. **Library**: `gg library add <path> [--name]` copies a regular file (≤ 50 MiB, enforced on the actual copied bytes, not the pre-copy stat) into `~/.gg/library/` with collision-safe naming; `index.json` is the source of truth and is updated atomically. Name collisions are detected case-insensitively (the macOS default filesystem is case-insensitive) and the reserved name `index.json` is rejected, so an upload can never overwrite or delete the index. All mutations run under an `flock` on `library.lock` so concurrent adds cannot reserve the same name or drop each other's entries. `library list|remove|path` manage entries by id or case-insensitive name.
 5. **Web**: `artifact.list` / `artifact.get` / `artifact.publish` over the existing JSON-RPC transport; `system.info` advertises the `artifact` capability and the Web client only shows the Artifacts tab when the connected daemon reports it. The React Artifacts tab renders markdown with `marked` and HTML inside `<iframe sandbox="">` (no scripts execute). The reader always shows the latest version (drafts added after publishing stay visible); the Publish button appears whenever `publishedVersion < version`. Trust boundary: artifact content comes from the local user's own agent or files, same trust as the chat transcript.
@@ -108,3 +108,26 @@ When adding behavior:
 5. Keep file paths, provider secrets, and unrestricted IPC out of public DTOs.
 
 This makes a future mobile client, remote Web deployment, or alternative terminal UI another adapter rather than another implementation of the agent.
+
+### Adding agent tools
+
+Tools are assembled per turn by the `ToolProvider` registry (`internal/app/toolregistry.go`): each provider's `Build` returns one capability's tools, and a nil slice or error degrades that capability to absent without affecting the rest. To add a tool:
+
+1. Implement `agent.Tool` in `internal/tools` (or the capability's own package).
+2. Add or extend a `ToolProvider` entry in `toolProviders` — never a central if/else chain.
+3. If the tool performs a write or external side effect, implement `agent.ApprovalDescriber` so every call passes through the approval pipeline (the unattended approver denies approval-gated tools unless the job opted in).
+
+Transports advertise capabilities from `app.ToolCapabilities()`, which is derived from the registry, so the advertised set cannot drift from the tools actually registered.
+
+### MCP servers
+
+External tools come from MCP servers declared in `~/.gg/mcp.json`:
+
+```json
+{"servers": {
+  "filesystem": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/data"], "env": {"API_KEY": "..."}},
+  "remote": {"url": "https://example.com/mcp"}
+}}
+```
+
+`internal/mcp` dials each server (stdio subprocess or streamable HTTP) and adapts its tools as `mcp_<server>_<tool>` (sanitized to function-calling-safe names, max 64 chars, numeric suffix on collision). Server tools always implement `ApprovalDescriber`: every MCP call is approval-gated. Connections are memoized per `Service` (one dial per conversation) and reaped on `Service.Close`. A server that fails to dial or list is skipped for the Service's lifetime, so one broken server cannot slow every turn. stdio servers inherit only a minimal environment (PATH/HOME plus the server's own `env` map) — the parent process environment is never passed through wholesale.

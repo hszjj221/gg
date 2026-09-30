@@ -96,7 +96,7 @@ func NewService(options Options) *Service {
 // registry. Static resources (Chromium probe, media client) are memoized
 // per Service; dynamic state (connector token, model selection, config)
 // is re-read every turn so mid-session changes take effect.
-func (s *Service) buildTools(provider agent.Provider) []agent.Tool {
+func (s *Service) buildTools(ctx context.Context, provider agent.Provider) []agent.Tool {
 	loc, tzErr := userLocation(s.profile)
 	tc := ToolContext{
 		Config:      s.cfg,
@@ -110,7 +110,13 @@ func (s *Service) buildTools(provider agent.Provider) []agent.Tool {
 	}
 	var out []agent.Tool
 	for _, p := range toolProviders {
-		out = append(out, p.Build(tc)...)
+		built, err := p.Build(ctx, tc)
+		if err != nil {
+			// A failing provider degrades to absent for this turn; the
+			// rest of the toolset keeps working.
+			continue
+		}
+		out = append(out, built...)
 	}
 	return out
 }
@@ -123,7 +129,12 @@ func (s *Service) Queue() *agent.MessageQueue {
 // Chromium session behind the browser tools. It is idempotent and safe to
 // call on a Service whose browser tools never started Chromium.
 func (s *Service) Close() error {
-	return s.browserPool.Close()
+	// Both closings are best-effort and idempotent; report the first error.
+	if err := s.browserPool.Close(); err != nil {
+		_ = s.toolMemo.Close()
+		return err
+	}
+	return s.toolMemo.Close()
 }
 
 func (s *Service) HasSession() bool {
@@ -182,7 +193,7 @@ func (s *Service) run(ctx context.Context, prompt string, onEvent func(agent.Eve
 	}
 	provider := s.providerFactory(s.cfg)
 	summaryUsage := agent.Usage{}
-	runner := agent.NewRunnerWithOptions(provider, s.buildTools(provider), agent.RunnerOptions{
+	runner := agent.NewRunnerWithOptions(provider, s.buildTools(ctx, provider), agent.RunnerOptions{
 		Approver:      approver,
 		OnMessage:     s.persistMessage,
 		DrainMessages: s.queue.DrainSteering,
@@ -265,7 +276,7 @@ func (s *Service) handleControlCommand(ctx context.Context, prompt string) (Resu
 		if err != nil {
 			return Result{}, true, err
 		}
-		return Result{Content: s.contextStatus(), ModelName: s.cfg.Selection}, true, nil
+		return Result{Content: s.contextStatus(ctx), ModelName: s.cfg.Selection}, true, nil
 	}
 	return Result{}, false, nil
 }
@@ -473,14 +484,14 @@ func (s *Service) compactHistory(ctx context.Context, provider agent.Provider) (
 	return s.compactThrough(ctx, provider, through)
 }
 
-func (s *Service) contextStatus() string {
+func (s *Service) contextStatus(ctx context.Context) string {
 	system, err := s.systemMessages()
 	if err != nil {
 		return "context: " + err.Error()
 	}
 	build := s.buildContext(system, agent.Message{})
 	var defs []agent.ToolDefinition
-	for _, tool := range s.buildTools(nil) {
+	for _, tool := range s.buildTools(ctx, nil) {
 		defs = append(defs, tool.Definition())
 	}
 	hasSummary := s.summary != nil && strings.TrimSpace(s.summary.Summary) != ""

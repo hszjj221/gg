@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"github.com/hszjj221/gg/internal/connector"
 	"github.com/hszjj221/gg/internal/connector/google"
 	"github.com/hszjj221/gg/internal/kb"
+	"github.com/hszjj221/gg/internal/mcp"
 	"github.com/hszjj221/gg/internal/media"
 	"github.com/hszjj221/gg/internal/memory"
 	"github.com/hszjj221/gg/internal/tools"
@@ -25,9 +27,10 @@ type ToolProvider struct {
 	// Name is the capability identifier advertised to clients. Empty means
 	// the provider is always on and not advertised (core tools).
 	Name string
-	// Build returns the capability's tools, or nil when it degrades to
-	// absent (Chromium not installed, Google not connected, ...).
-	Build func(tc ToolContext) []agent.Tool
+	// Build returns the capability's tools. A nil slice (or an error) means
+	// the capability degrades to absent for this turn — Chromium not
+	// installed, Google not connected, MCP server unreachable, ...
+	Build func(ctx context.Context, tc ToolContext) ([]agent.Tool, error)
 }
 
 // ToolContext carries everything a provider needs to build its tools.
@@ -47,11 +50,12 @@ type ToolContext struct {
 // ToolMemo caches per-Service tool resources across turns. It is safe for
 // concurrent use; callers do not need to hold the owning Service's mutex.
 type ToolMemo struct {
-	mu              sync.Mutex
+	mu               sync.Mutex
 	chromiumResolved bool
 	chromiumOK       bool
 	mediaKey         string
 	mediaClient      *media.Client
+	mcpConnector     *mcp.Connector
 }
 
 // ChromiumOK reports whether browser tools can run. The PATH probe is
@@ -101,6 +105,28 @@ func (m *ToolMemo) MediaClient(cfg config.Config) *media.Client {
 	return m.mediaClient
 }
 
+// MCPConnector returns the Service-scoped MCP connector, creating it on
+// first use. One connector per Service means server subprocesses are
+// dialed once per conversation, not once per turn.
+func (m *ToolMemo) MCPConnector(homeDir string) *mcp.Connector {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.mcpConnector == nil {
+		m.mcpConnector = mcp.NewConnector(mcp.ConfigPath(homeDir))
+	}
+	return m.mcpConnector
+}
+
+// Close terminates the MCP connector's server sessions. It is idempotent.
+func (m *ToolMemo) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.mcpConnector == nil {
+		return nil
+	}
+	return m.mcpConnector.Close()
+}
+
 // toolProviders is the registry. Order determines tool definition order.
 var toolProviders = []ToolProvider{
 	{Name: "", Build: buildCoreTools},
@@ -110,6 +136,7 @@ var toolProviders = []ToolProvider{
 	{Name: "connector", Build: buildConnectorTools},
 	{Name: "media", Build: buildMediaTools},
 	{Name: "browser", Build: buildBrowserTools},
+	{Name: "mcp", Build: buildMCPTools},
 }
 
 // ToolCapabilities returns the capability identifiers the registry can
@@ -125,7 +152,7 @@ func ToolCapabilities() []string {
 	return names
 }
 
-func buildCoreTools(tc ToolContext) []agent.Tool {
+func buildCoreTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
 	return []agent.Tool{
 		tools.NewReadToolWithOptions(tc.Config.CWD, tools.ReadOptions{ExtraRoots: tc.ReadRoots}),
 		tools.NewListTool(tc.Config.CWD),
@@ -134,22 +161,22 @@ func buildCoreTools(tc ToolContext) []agent.Tool {
 		tools.NewEditTool(tc.Config.CWD),
 		tools.NewWriteTool(tc.Config.CWD),
 		tools.NewSubagentTool(tc.Config.CWD, tc.Provider, tools.SubagentOptions{}),
-	}
+	}, nil
 }
 
-func buildMemoryTools(tc ToolContext) []agent.Tool {
+func buildMemoryTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
 	if !tc.Config.Memory.Enabled {
-		return nil
+		return nil, nil
 	}
 	return []agent.Tool{
 		tools.NewMemoryAddTool(tc.MemStore),
 		tools.NewMemorySearchTool(tc.MemStore),
-	}
+	}, nil
 }
 
-func buildKBTools(tc ToolContext) []agent.Tool {
+func buildKBTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
 	if !kb.Exists(tc.Config.KBDir, kb.DefaultName) {
-		return nil
+		return nil, nil
 	}
 	// The query embedding must go to the same endpoint the index was
 	// built with; prefer dedicated embedding config, fall back to the
@@ -165,38 +192,38 @@ func buildKBTools(tc ToolContext) []agent.Tool {
 	}
 	return []agent.Tool{
 		tools.NewKBSearchTool(tc.Config.KBDir, embedKey, embedBase, tools.KBSearchOptions{}),
-	}
+	}, nil
 }
 
-func buildArtifactTools(tc ToolContext) []agent.Tool {
+func buildArtifactTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
 	// Artifact tools degrade to absent when the store cannot be opened;
 	// everything else keeps working.
 	astore, err := artifact.Open(tc.Config.Artifacts.Dir)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	return []agent.Tool{
 		tools.NewArtifactCreateTool(astore),
 		tools.NewArtifactEditTool(astore),
-	}
+	}, nil
 }
 
-func buildConnectorTools(tc ToolContext) []agent.Tool {
+func buildConnectorTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
 	// Connector tools degrade to absent when Google is not connected.
 	cstore, err := connector.Open(tc.Config.Connectors.Dir)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	tok, err := cstore.Load(google.Name)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	gclient, err := google.NewClient(cstore, google.Config{
 		ClientID:     tc.Config.Connectors.Google.ClientID,
 		ClientSecret: tc.Config.Connectors.Google.ClientSecret,
 	})
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	// Register only the tools the user actually granted: a partial
 	// (granular-consent) grant must not advertise tools that would just 403.
@@ -216,7 +243,7 @@ func buildConnectorTools(tc ToolContext) []agent.Tool {
 			tools.NewCalendarCreateTool(gclient, tc.Location, tc.LocationErr),
 		)
 	}
-	return out
+	return out, nil
 }
 
 func hasScope(scopes []string, want string) bool {
@@ -228,11 +255,11 @@ func hasScope(scopes []string, want string) bool {
 	return false
 }
 
-func buildMediaTools(tc ToolContext) []agent.Tool {
+func buildMediaTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
 	// Media tools degrade to absent when the provider base URL is missing.
 	mclient := tc.Memoized.MediaClient(tc.Config)
 	if mclient == nil {
-		return nil
+		return nil, nil
 	}
 	return []agent.Tool{
 		tools.NewImageGenerateTool(mclient),
@@ -241,20 +268,28 @@ func buildMediaTools(tc ToolContext) []agent.Tool {
 			tc.Config.CWD,
 			filepath.Join(tc.Config.HomeDir, ".gg", "media"),
 		}),
-	}
+	}, nil
 }
 
-func buildBrowserTools(tc ToolContext) []agent.Tool {
+func buildBrowserTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
 	// Browser tools need a local Chromium; they degrade to a clear error
 	// when none is installed. The pool scopes one Chromium session to this
 	// Service (one conversation) and is closed via Service.Close when the
 	// Service is retired.
 	if !tc.Memoized.ChromiumOK() {
-		return nil
+		return nil, nil
 	}
 	return []agent.Tool{
 		tools.NewBrowserNavigateTool(tc.BrowserPool),
 		tools.NewBrowserReadTool(tc.BrowserPool),
 		tools.NewBrowserScreenshotTool(tc.BrowserPool),
-	}
+	}, nil
+}
+
+// buildMCPTools adapts the configured MCP servers' tools. With no
+// ~/.gg/mcp.json (or no reachable servers) it degrades to absent. The
+// Connector is memoized per Service: servers are dialed once per
+// conversation, and stdio subprocesses are reaped on Service.Close.
+func buildMCPTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
+	return tc.Memoized.MCPConnector(tc.Config.HomeDir).Tools(ctx)
 }
