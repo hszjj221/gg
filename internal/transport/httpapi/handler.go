@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +31,19 @@ func NewHandler(rpc *jsonrpc.Handler, workspace *app.Workspace, token string) *H
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Answer CORS preflights from local UI origins before the bearer-token
+	// gate: the packaged Electron renderer loads from file:// (its origin
+	// serializes as "null") and the transport sends Authorization plus JSON
+	// content headers, so Chromium issues an OPTIONS preflight that carries
+	// no token. The bearer token stays the real authentication boundary;
+	// CORS only tells the browser it may deliver the gg UI's own requests.
+	if localUIOriginAllowed(w, r) && r.Method == http.MethodOptions {
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, Cache-Control, Last-Event-ID")
+		w.Header().Set("Access-Control-Max-Age", "600")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	// /healthz is the unauthenticated liveness probe (Kubernetes-style):
 	// it answers whether the process is alive and serving HTTP. It carries
 	// no sensitive data, so it sits outside the bearer-token gate. /health
@@ -149,6 +163,40 @@ func (h *Handler) authorized(r *http.Request) bool {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(provided), []byte(h.token)) == 1
+}
+
+// localUIOriginAllowed reports whether the request comes from a local gg UI
+// and, if so, marks the response shareable with that origin. The packaged
+// Electron renderer loads from file://, whose origin serializes as "null";
+// loopback http(s) origins cover dev servers. Anything else (including a
+// missing Origin, i.e. non-browser clients) gets no CORS headers, so the
+// daemon never widens its attack surface for remote web pages.
+func localUIOriginAllowed(w http.ResponseWriter, r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" || !isLocalUIOrigin(origin) {
+		return false
+	}
+	w.Header().Set("Access-Control-Allow-Origin", origin)
+	w.Header().Set("Vary", "Origin")
+	return true
+}
+
+func isLocalUIOrigin(origin string) bool {
+	if origin == "null" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	switch strings.ToLower(u.Hostname()) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
 }
 
 func writeSSE(w io.Writer, eventType, eventID string, value any) {

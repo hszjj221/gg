@@ -130,11 +130,11 @@ func TestParseRejectsInvalidApprovalFlag(t *testing.T) {
 	}
 }
 
-func TestHelpTextMentionsTUIInteractiveMode(t *testing.T) {
+func TestHelpTextMentionsInteractiveMode(t *testing.T) {
 	help := HelpText()
 
-	if !strings.Contains(help, "gg\n") || !strings.Contains(help, "TUI interactive mode") || !strings.Contains(help, "provider:model") || !strings.Contains(help, "--approval") || !strings.Contains(help, "--no-memory") || !strings.Contains(help, "--resume") || !strings.Contains(help, "--name") {
-		t.Fatalf("help text should mention TUI interactive mode:\n%s", help)
+	if !strings.Contains(help, "gg\n") || !strings.Contains(help, "interactive line-based mode") || !strings.Contains(help, "provider:model") || !strings.Contains(help, "--approval") || !strings.Contains(help, "--no-memory") || !strings.Contains(help, "--resume") || !strings.Contains(help, "--name") {
+		t.Fatalf("help text should mention interactive line-based mode:\n%s", help)
 	}
 }
 

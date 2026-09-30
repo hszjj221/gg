@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { API, ElectronTransport, protocolVersion, RPCError, WebTransport } from './transport';
+import { API, HttpTransport, protocolVersion, RPCError } from './transport';
 import { ArtifactsPane } from './Artifacts';
 import type { Approval, RunEvent, RunStatus, SessionSummary, SessionUpdate, Snapshot, TreeItem } from './types';
 
@@ -73,7 +73,16 @@ export function App() {
   );
 
   useEffect(() => {
-    if (desktop) void connect(new API(new ElectronTransport()));
+    if (!desktop) return;
+    void (async () => {
+      try {
+        const conn = await window.ggDesktop?.getConnection();
+        if (!conn) throw new Error('Electron bridge is unavailable');
+        await connect(new API(new HttpTransport(conn.endpoint, conn.token, conn.workspace)));
+      } catch (cause) {
+        setError(errorMessage(cause));
+      }
+    })();
   }, [connect, desktop]);
 
   useEffect(
@@ -90,7 +99,7 @@ export function App() {
     event.preventDefault();
     sessionStorage.setItem('gg.endpoint', endpoint);
     sessionStorage.setItem('gg.token', token);
-    await connect(new API(new WebTransport(endpoint, token)));
+    await connect(new API(new HttpTransport(endpoint, token)));
   }
 
   async function createSession() {

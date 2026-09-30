@@ -1,96 +1,11 @@
 const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 const { spawn } = require('node:child_process');
-const { createInterface } = require('node:readline');
+const { randomBytes } = require('node:crypto');
+const net = require('node:net');
 const path = require('node:path');
 
-const allowedMethods = new Set([
-  'system.info',
-  'session.list',
-  'session.create',
-  'session.open',
-  'session.get',
-  'session.rename',
-  'session.action',
-  'run.start',
-  'run.wait',
-  'run.get',
-  'run.active',
-  'run.cancel',
-  'run.approve',
-  'run.steer',
-  'artifact.list',
-  'artifact.get',
-  'artifact.publish',
-]);
-
-class DaemonClient {
-  constructor(workspace) {
-    this.workspace = workspace;
-    this.nextId = 1;
-    this.pending = new Map();
-    this.process = null;
-  }
-
-  start() {
-    if (this.process) return;
-    const executable = daemonPath();
-    this.process = spawn(executable, ['--cwd', this.workspace], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-    });
-    const lines = createInterface({ input: this.process.stdout });
-    lines.on('line', (line) => this.receive(line));
-    this.process.stderr.setEncoding('utf8');
-    this.process.stderr.on('data', (text) => console.error(`[ggd] ${String(text).trimEnd()}`));
-    this.process.on('error', (error) => this.failAll(error));
-    this.process.on('exit', (code, signal) => {
-      this.failAll(new Error(`ggd exited (${signal || code || 'unknown'})`));
-      this.process = null;
-    });
-  }
-
-  call(method, params = {}) {
-    if (!allowedMethods.has(method)) {
-      return Promise.reject(new Error(`unsupported RPC method: ${method}`));
-    }
-    this.start();
-    const id = this.nextId++;
-    const request = JSON.stringify({ jsonrpc: '2.0', id, method, params });
-    return new Promise((resolve, reject) => {
-      this.pending.set(String(id), { resolve, reject });
-      this.process.stdin.write(`${request}\n`, (error) => {
-        if (!error) return;
-        this.pending.delete(String(id));
-        reject(error);
-      });
-    });
-  }
-
-  receive(line) {
-    let response;
-    try {
-      response = JSON.parse(line);
-    } catch (error) {
-      console.error('Invalid response from ggd', error);
-      return;
-    }
-    const pending = this.pending.get(String(response.id));
-    if (!pending) return;
-    this.pending.delete(String(response.id));
-    pending.resolve(response);
-  }
-
-  failAll(error) {
-    for (const pending of this.pending.values()) pending.reject(error);
-    this.pending.clear();
-  }
-
-  stop() {
-    if (!this.process) return;
-    this.process.kill();
-    this.process = null;
-  }
-}
+const READY_TIMEOUT_MS = 15000;
+const READY_POLL_MS = 250;
 
 function daemonPath() {
   if (process.env.GGD_PATH) return process.env.GGD_PATH;
@@ -107,6 +22,42 @@ async function chooseWorkspace() {
     properties: ['openDirectory', 'createDirectory'],
   });
   return result.canceled ? null : result.filePaths[0];
+}
+
+function findFreePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      server.close(() => resolve(address.port));
+    });
+  });
+}
+
+async function waitForDaemon(endpoint, token) {
+  const deadline = Date.now() + READY_TIMEOUT_MS;
+  const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'system.info', params: {} });
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`${endpoint}/rpc`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body,
+      });
+      if (response.ok) {
+        const payload = await response.json();
+        if (payload && !payload.error) return;
+      }
+    } catch {
+      // ggd is not up yet; keep polling.
+    }
+    await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS));
+  }
+  throw new Error(`ggd 未在 ${READY_TIMEOUT_MS / 1000} 秒内就绪`);
 }
 
 function createWindow() {
@@ -128,7 +79,14 @@ function createWindow() {
   window.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
 }
 
-let daemon;
+let daemonProcess = null;
+let connection = null;
+
+function stopDaemon() {
+  if (!daemonProcess) return;
+  daemonProcess.kill();
+  daemonProcess = null;
+}
 
 app.whenReady().then(async () => {
   const workspace = await chooseWorkspace();
@@ -136,16 +94,41 @@ app.whenReady().then(async () => {
     app.quit();
     return;
   }
-  daemon = new DaemonClient(workspace);
-  ipcMain.handle('gg:rpc', (_event, method, params) => daemon.call(method, params));
-  ipcMain.handle('gg:workspace', () => workspace);
+  try {
+    const port = await findFreePort();
+    const token = randomBytes(32).toString('hex');
+    const endpoint = `http://127.0.0.1:${port}`;
+    daemonProcess = spawn(daemonPath(), ['--http', `127.0.0.1:${port}`, '--token', token, '--exit-on-stdin-eof', '--cwd', workspace], {
+      // stdin is a control pipe, never written to: if the Electron main
+      // process dies without cleanup (crash/SIGKILL skips before-quit), the
+      // pipe closes, stdin reaches EOF, and ggd shuts itself down instead of
+      // lingering as an orphan with a lost token and port.
+      stdio: ['pipe', 'ignore', 'pipe'],
+      windowsHide: true,
+    });
+    daemonProcess.stderr.setEncoding('utf8');
+    daemonProcess.stderr.on('data', (text) => console.error(`[ggd] ${String(text).trimEnd()}`));
+    daemonProcess.on('error', (error) => console.error('[ggd] failed to start', error));
+    daemonProcess.on('exit', (code, signal) => {
+      console.error(`[ggd] exited (${signal || code || 'unknown'})`);
+      daemonProcess = null;
+    });
+    await waitForDaemon(endpoint, token);
+    connection = { endpoint, token, workspace };
+  } catch (error) {
+    stopDaemon();
+    dialog.showErrorBox('gg 启动失败', `无法启动本地 gg 服务：${error instanceof Error ? error.message : String(error)}`);
+    app.quit();
+    return;
+  }
+  ipcMain.handle('gg:connection', () => connection);
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
-app.on('before-quit', () => daemon?.stop());
+app.on('before-quit', stopDaemon);
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });

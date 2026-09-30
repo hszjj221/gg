@@ -21,8 +21,8 @@
 - 用于聚焦代码库调研的同步只读 `subagent` 工具
 - 本地 RAG 知识库：`gg kb index` 索引 + agent 可调用的 `kb_search` 工具
 - 定时后台任务（`gg job ...`），在 `ggd` daemon 存活时触发
-- 可复用的 Go conversation runtime，同一套会话与 Agent 核心可供 TUI、Web 和桌面端使用
-- Bubble Tea TUI，以及共享 React UI 的 Web/Electron 客户端
+- 可复用的 Go conversation runtime，同一套会话与 Agent 核心可供 CLI、Web 和桌面端使用
+- Web 与 Electron 客户端共享一套 React UI，都通过 HTTP 与 `ggd` 通信
 
 ## Install
 
@@ -52,7 +52,7 @@ export OPENAI_API_KEY=sk-your-key
 gg -p "List the files in this project"
 ```
 
-启动 TUI 交互模式：
+启动交互模式（按行交互，Ctrl+D 退出）：
 
 ```bash
 gg
@@ -60,7 +60,7 @@ gg
 
 ### Web 与 Electron
 
-新的 `ggd` 进程通过稳定的 JSON-RPC 接口暴露会话和 Agent 能力。Web 端经带 Bearer Token 的 HTTP 使用它；Electron 则在本机启动 `ggd` sidecar，并通过隔离的 preload bridge 通信。
+新的 `ggd` 进程通过稳定的 JSON-RPC 接口暴露会话和 Agent 能力。Web 端经带 Bearer Token 的 HTTP 使用它；Electron 也一样——在本机以 `--http 127.0.0.1:<端口> --token <随机>` 启动 `ggd` sidecar，renderer 只通过一个最小的隔离 bridge 拿到 endpoint、token 和工作区标签。两个客户端共享一套 React UI 和同一份 HTTP transport。
 
 本地启动 Web 开发环境：
 
@@ -112,19 +112,14 @@ gg --name "重构认证模块" -p "Review this module"
 
 交互模式：
 
-- 在终端中运行 `gg` 会启动 TUI chat 界面。
-- TUI 会展示对话、单行 prompt 输入框、streaming 回复和状态栏。
-- 运行中按 Enter 可补充要求，在下一次模型调用前交付；Alt+Enter 可排队后续任务，当前任务成功后执行。斜杠命令请使用后续任务队列。
-- Escape 或 Ctrl+C 取消当前执行；取消或失败后，尚未交付的排队消息会恢复到输入框。
-- Page Up / Page Down 可翻阅历史，流式输出不会打断对旧消息的阅读。
-- TUI 还会以内联紧凑日志展示 `read`、`bash`、`edit`、`write`、`subagent` 等工具调用。
-- 使用 `/model` 查看已配置模型，使用 `/model provider:model` 切换后续 turn 使用的 provider/model。
-- 工具日志只是 TUI 视图能力；不会改变 JSONL session 格式，也不会影响一次性 prompt 或按行交互输出。
-- 当 stdin/stdout 不是终端时，`gg` 会回退到简单的按行交互模式，方便脚本和测试使用。
+- 在终端中运行 `gg` 会启动按行交互模式（Ctrl+D 退出）。
+- 回复随生成随输出；`bash`、`edit`、`write` 运行前会行内提示确认。
+- 使用 `/name <名称>` 可交互修改会话名，`/name --clear` 清除。
+- 想要更丰富的可视化体验（会话树、文档、审批界面），请使用 Web 或桌面客户端。
 
 工具审批：
 
-- `--approval auto` 是默认值。TUI 会在运行 `bash`、`edit` 或 `write` 前询问；一次性 prompt 和非终端运行保持原来的非交互行为。
+- `--approval auto` 是默认值。交互模式会在运行 `bash`、`edit` 或 `write` 前询问；一次性 prompt 和非终端运行保持原来的非交互行为。
 - `--approval on-request` 会在这些工具运行前始终询问，并要求真实终端。
 - `--approval never` 会关闭审批提示。
 - 拒绝工具调用时，会把 tool error 返回给模型，模型可以解释原因或选择其他路径。
@@ -176,7 +171,7 @@ Provider/model 配置：
 
 v1 只支持 `openai-compatible` provider。不支持远端拉取模型列表；请在 `models` 里显式列出可选模型。
 
-流式输出开始前遇到网络错误、限流或 5xx 响应等临时失败时会自动重试。流中断、工具参数不完整或输出达到长度限制会明确报错，保留部分回复，不会盲目重试已经输出的内容。输出长度使用 `max_tokens`；服务明确要求 `max_completion_tokens` 时会自动切换参数重试。`gg` 不会 fallback 到其他 provider 或模型；如果所有重试都失败，会继续走现有 CLI 或 TUI 错误展示路径。
+流式输出开始前遇到网络错误、限流或 5xx 响应等临时失败时会自动重试。流中断、工具参数不完整或输出达到长度限制会明确报错，保留部分回复，不会盲目重试已经输出的内容。输出长度使用 `max_tokens`；服务明确要求 `max_completion_tokens` 时会自动切换参数重试。`gg` 不会 fallback 到其他 provider 或模型；如果所有重试都失败，会继续走现有 CLI 错误展示路径。
 
 项目规则：
 
@@ -195,12 +190,11 @@ v1 只支持 `openai-compatible` provider。不支持远端拉取模型列表；
 
 - `gg sessions list` 会列出当前工作目录的会话。
 - `gg resume <id-or-path>` 可以通过显示的 ID、JSONL 文件名（不含 `.jsonl` 后缀）、文件名或路径恢复会话。
-- `gg resume` 和 `gg --resume` 会在终端中打开可搜索的会话选择器。
+- `gg resume` 和 `gg --resume` 会在终端中打开数字编号的会话选择器。
 - `gg --continue` 和 `gg --last` 会恢复当前工作目录的最新会话。
 - `--name`/`-n` 设置会话显示名称；交互模式使用 `/name <名称>` 修改，使用 `/name --clear` 清除。
 - Session v3 会把消息和元数据存入只追加的树结构，并用独立 head 记录持久化当前分支位置；打开旧会话时会自动升级，不丢失历史。
-- TUI 中的 `/tree` 会打开可搜索的对话树。选择旧的用户消息会回到它的父节点，并把原提示词放回输入框；选择助手消息则从该节点创建新分支。
-- TUI 中的 `/fork` 可选择一条旧的用户消息，从它的父节点创建新会话，并把原提示词放回输入框；`/clone` 会立即把当前活动分支复制为新会话。
+- Web 和桌面客户端提供会话树，支持回退（rewind）、分支（fork）和克隆（clone）操作。
 - 用户输入、完整模型消息、每个工具结果分别即时保存；模型调用失败时仍保留已完成操作和部分回复。
 - 同一会话被另一个 CLI 或 `ggd` 进程修改时，陈旧写入会返回可重试冲突，不会把两条父链静默交错写入 JSONL。
 - 恢复会话时可修复末尾未写完的 JSONL 记录；缺失的工具结果会标记为未知，由模型检查当前状态后再决定是否重试。
@@ -337,7 +331,7 @@ gg -p "Use a subagent to inspect how sessions are stored, then summarize the flo
 
 ## Development
 
-Runner 提供 `BeforeRequest`、`OnMessage`、`DrainMessages` 钩子，分别用于准备上下文、持久化消息和交付运行中补充要求，执行循环不依赖 TUI。
+Runner 提供 `BeforeRequest`、`OnMessage`、`DrainMessages` 钩子，分别用于准备上下文、持久化消息和交付运行中补充要求，执行循环不依赖任何特定界面。
 
 运行测试套件：
 
