@@ -156,6 +156,12 @@ Provider/model configuration:
       "baseURL": "http://localhost:11434/v1",
       "apiKey": "ollama",
       "models": ["qwen2.5-coder"]
+    },
+    "deepseek": {
+      "type": "openai-compatible",
+      "baseURL": "https://api.deepseek.com",
+      "apiKeyEnv": "DEEPSEEK_API_KEY",
+      "models": ["deepseek-chat", "deepseek-reasoner"]
     }
   }
 }
@@ -164,7 +170,7 @@ Provider/model configuration:
 Selection uses `provider:model`:
 
 - Provider/model: `--model provider:model`, then the resumed session model, then config `default`, then `openai:gpt-4.1`
-- API key: selected provider `apiKey`; `--api-key` overrides it. If no config file exists, legacy `OPENAI_API_KEY` is used.
+- API key: `--api-key` flag first, then the selected provider's `apiKey`, then the `apiKeyEnv` environment variable. `apiKeyEnv` names an env var holding the key so secrets don't have to live in the config file. If no config file exists, legacy `OPENAI_API_KEY` is used.
 - Base URL: selected provider `baseURL`; `--base-url` overrides it. If no config file exists, legacy `OPENAI_BASE_URL` then `https://api.openai.com/v1` are used.
 - Session directory: `--session-dir`, then `GG_SESSION_DIR`, then `~/.gg/sessions`
 - Memory: `memory.enabled` in config; `--no-memory` disables it for one run.

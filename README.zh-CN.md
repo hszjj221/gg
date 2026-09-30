@@ -156,6 +156,12 @@ Provider/model 配置：
       "baseURL": "http://localhost:11434/v1",
       "apiKey": "ollama",
       "models": ["qwen2.5-coder"]
+    },
+    "deepseek": {
+      "type": "openai-compatible",
+      "baseURL": "https://api.deepseek.com",
+      "apiKeyEnv": "DEEPSEEK_API_KEY",
+      "models": ["deepseek-chat", "deepseek-reasoner"]
     }
   }
 }
@@ -164,7 +170,7 @@ Provider/model 配置：
 模型选择统一使用 `provider:model`：
 
 - Provider/model：`--model provider:model`，然后是恢复会话中的模型，接着是配置里的 `default`，最后是 `openai:gpt-4.1`
-- API key：当前 provider 的 `apiKey`；`--api-key` 可以覆盖它。没有配置文件时，沿用 legacy `OPENAI_API_KEY`。
+- API key：优先级依次为 `--api-key` 参数、当前 provider 的 `apiKey`、`apiKeyEnv` 指定的环境变量。`apiKeyEnv` 用于指定存放 key 的环境变量名，避免把 secret 写进配置文件。没有配置文件时，沿用 legacy `OPENAI_API_KEY`。
 - Base URL：当前 provider 的 `baseURL`；`--base-url` 可以覆盖它。没有配置文件时，沿用 legacy `OPENAI_BASE_URL`，最后是 `https://api.openai.com/v1`。
 - Session directory：`--session-dir`，然后是 `GG_SESSION_DIR`，最后是 `~/.gg/sessions`
 - Memory：配置里的 `memory.enabled`；`--no-memory` 可单次关闭。
