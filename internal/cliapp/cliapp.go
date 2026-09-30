@@ -146,7 +146,15 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	providerFactory := options.ProviderFactory
 	if providerFactory == nil {
 		providerFactory = func(cfg config.Config) agent.Provider {
-			return openai.NewClient(openai.Config{APIKey: cfg.APIKey, BaseURL: cfg.BaseURL, Model: cfg.Model})
+			return openai.NewClient(openai.Config{
+				APIKey:  cfg.APIKey,
+				BaseURL: cfg.BaseURL,
+				Model:   cfg.Model,
+				Compat: openai.Compat{
+					NoStreamUsage:    cfg.Compat.NoStreamUsage,
+					CompletionTokens: cfg.Compat.CompletionTokens,
+				},
+			})
 		}
 	}
 

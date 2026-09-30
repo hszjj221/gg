@@ -31,10 +31,22 @@ const (
 	maxRetryAfter = 60 * time.Second
 )
 
+// Compat declares known protocol quirks of the remote endpoint. When a
+// quirk is set, the client sends the right request shape on the first
+// attempt; when unset, the client probes the provider and falls back
+// after a failed request, as before.
+type Compat struct {
+	// NoStreamUsage omits stream_options.include_usage.
+	NoStreamUsage bool
+	// CompletionTokens sends max_completion_tokens instead of max_tokens.
+	CompletionTokens bool
+}
+
 type Config struct {
 	APIKey     string
 	BaseURL    string
 	Model      string
+	Compat     Compat
 	HTTPClient *http.Client
 }
 
@@ -42,6 +54,7 @@ type Client struct {
 	apiKey  string
 	baseURL string
 	model   string
+	compat  Compat
 	http    *http.Client
 }
 
@@ -54,13 +67,14 @@ func NewClient(config Config) *Client {
 		apiKey:  config.APIKey,
 		baseURL: strings.TrimRight(config.BaseURL, "/"),
 		model:   config.Model,
+		compat:  config.Compat,
 		http:    httpClient,
 	}
 }
 
 func (c *Client) Complete(ctx context.Context, req agent.Request, onEvent func(agent.Event)) (agent.AssistantMessage, error) {
-	includeUsage := true
-	completionLimit := false
+	includeUsage := !c.compat.NoStreamUsage
+	completionLimit := c.compat.CompletionTokens
 	for attempt := 0; ; {
 		reply, err := c.complete(ctx, req, onEvent, includeUsage, completionLimit)
 		if isUnsupportedUsageError(err) && includeUsage {

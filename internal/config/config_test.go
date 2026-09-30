@@ -337,6 +337,111 @@ func TestResolveMissingAPIKeyEnvVarLeavesKeyEmpty(t *testing.T) {
 	}
 }
 
+func TestResolveInfersBaseURLFromWellKnownProviderName(t *testing.T) {
+	home := t.TempDir()
+	writeConfig(t, home, `{
+  "default": "deepseek:deepseek-chat",
+  "providers": {
+    "deepseek": {
+      "type": "openai-compatible",
+      "apiKeyEnv": "GG_TEST_DEEPSEEK_KEY",
+      "models": ["deepseek-chat"]
+    }
+  }
+}`)
+
+	cfg, err := Resolve(Options{HomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BaseURL != "https://api.deepseek.com" {
+		t.Fatalf("well-known baseURL was not inferred: %+v", cfg)
+	}
+}
+
+func TestResolveExplicitBaseURLWinsOverWellKnownInference(t *testing.T) {
+	home := t.TempDir()
+	writeConfig(t, home, `{
+  "default": "deepseek:deepseek-chat",
+  "providers": {
+    "deepseek": {
+      "type": "openai-compatible",
+      "baseURL": "https://gateway.example/v1",
+      "apiKey": "k",
+      "models": ["deepseek-chat"]
+    }
+  }
+}`)
+
+	cfg, err := Resolve(Options{HomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BaseURL != "https://gateway.example/v1" {
+		t.Fatalf("explicit baseURL did not win over inference: %+v", cfg)
+	}
+}
+
+func TestResolveUnknownProviderNameFallsBackToDefaultBaseURL(t *testing.T) {
+	home := t.TempDir()
+	writeConfig(t, home, `{
+  "default": "acme:acme-1",
+  "providers": {
+    "acme": {
+      "type": "openai-compatible",
+      "apiKey": "k",
+      "models": ["acme-1"]
+    }
+  }
+}`)
+
+	cfg, err := Resolve(Options{HomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BaseURL != DefaultBaseURL {
+		t.Fatalf("unknown provider should fall back to default baseURL: %+v", cfg)
+	}
+}
+
+func TestResolveCarriesProviderCompat(t *testing.T) {
+	home := t.TempDir()
+	writeConfig(t, home, `{
+  "default": "quirky:q-1",
+  "providers": {
+    "quirky": {
+      "type": "openai-compatible",
+      "baseURL": "https://quirky.example/v1",
+      "apiKey": "k",
+      "compat": {"noStreamUsage": true, "completionTokens": true},
+      "models": ["q-1"]
+    },
+    "plain": {
+      "type": "openai-compatible",
+      "baseURL": "https://plain.example/v1",
+      "apiKey": "k",
+      "models": ["p-1"]
+    }
+  }
+}`)
+
+	cfg, err := Resolve(Options{HomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Compat.NoStreamUsage || !cfg.Compat.CompletionTokens {
+		t.Fatalf("provider compat was not carried to resolved config: %+v", cfg.Compat)
+	}
+
+	plain, err := Resolve(Options{HomeDir: home, Model: "plain:p-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.Compat.NoStreamUsage || plain.Compat.CompletionTokens {
+		t.Fatalf("compat should default to zero value: %+v", plain.Compat)
+	}
+}
+
 func writeConfig(t *testing.T, home, content string) {
 	t.Helper()
 	dir := filepath.Join(home, ".gg")

@@ -159,7 +159,6 @@ Provider/model configuration:
     },
     "deepseek": {
       "type": "openai-compatible",
-      "baseURL": "https://api.deepseek.com",
       "apiKeyEnv": "DEEPSEEK_API_KEY",
       "models": ["deepseek-chat", "deepseek-reasoner"]
     }
@@ -167,11 +166,28 @@ Provider/model configuration:
 }
 ```
 
+`deepseek` omits `baseURL`: gg infers it from a small table of well-known OpenAI-compatible endpoints (`openai`, `deepseek`, `openrouter`, `ollama`, `lmstudio`, `moonshot`). An explicit `baseURL` always wins; unknown names fall back to `https://api.openai.com/v1`.
+
 Selection uses `provider:model`:
 
 - Provider/model: `--model provider:model`, then the resumed session model, then config `default`, then `openai:gpt-4.1`
 - API key: `--api-key` flag first, then the selected provider's `apiKey`, then the `apiKeyEnv` environment variable. `apiKeyEnv` names an env var holding the key so secrets don't have to live in the config file. If no config file exists, legacy `OPENAI_API_KEY` is used.
-- Base URL: selected provider `baseURL`; `--base-url` overrides it. If no config file exists, legacy `OPENAI_BASE_URL` then `https://api.openai.com/v1` are used.
+- Base URL: `--base-url` flag first, then the selected provider's `baseURL`, then the well-known endpoint for the provider name, then `https://api.openai.com/v1`. If no config file exists, legacy `OPENAI_BASE_URL` then `https://api.openai.com/v1` are used.
+
+Provider quirks go in `compat`. When set, gg sends the right request shape on the first attempt; when unset, it probes and retries once after a failed request, as before:
+
+```json
+"o-series": {
+  "type": "openai-compatible",
+  "baseURL": "https://api.openai.com/v1",
+  "apiKeyEnv": "OPENAI_API_KEY",
+  "compat": {"completionTokens": true},
+  "models": ["o1"]
+}
+```
+
+- `noStreamUsage`: omit `stream_options.include_usage` (some endpoints reject it with a 400).
+- `completionTokens`: send `max_completion_tokens` instead of `max_tokens`.
 - Session directory: `--session-dir`, then `GG_SESSION_DIR`, then `~/.gg/sessions`
 - Memory: `memory.enabled` in config; `--no-memory` disables it for one run.
 

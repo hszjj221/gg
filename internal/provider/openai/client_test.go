@@ -322,6 +322,79 @@ func TestClientFallsBackWhenStreamingUsageIsUnsupported(t *testing.T) {
 	}
 }
 
+func TestClientOmitsStreamUsageWhenCompatSet(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := payload["stream_options"]; ok {
+			t.Fatalf("compat noStreamUsage should omit stream_options: %+v", payload)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		APIKey:     "test-key",
+		BaseURL:    server.URL + "/v1",
+		Model:      "gpt-test",
+		Compat:     Compat{NoStreamUsage: true},
+		HTTPClient: server.Client(),
+	})
+	msg, err := client.Complete(context.Background(), agent.Request{Messages: []agent.Message{{Role: agent.RoleUser, Content: "hi"}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.Content != "ok" || requests != 1 {
+		t.Fatalf("compat should skip the usage probe: content=%q requests=%d", msg.Content, requests)
+	}
+}
+
+func TestClientUsesCompletionTokensWhenCompatSet(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := payload["max_tokens"]; ok {
+			t.Fatalf("compat completionTokens should not send max_tokens: %+v", payload)
+		}
+		if payload["max_completion_tokens"] != float64(100) {
+			t.Fatalf("compat completionTokens should send max_completion_tokens=100: %+v", payload)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{
+		APIKey:     "test-key",
+		BaseURL:    server.URL + "/v1",
+		Model:      "gpt-test",
+		Compat:     Compat{CompletionTokens: true},
+		HTTPClient: server.Client(),
+	})
+	req := agent.Request{
+		Messages:        []agent.Message{{Role: agent.RoleUser, Content: "hi"}},
+		MaxOutputTokens: 100,
+	}
+	msg, err := client.Complete(context.Background(), req, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.Content != "ok" || requests != 1 {
+		t.Fatalf("compat should skip the max_tokens probe: content=%q requests=%d", msg.Content, requests)
+	}
+}
+
 func TestParseRetryAfter(t *testing.T) {
 	if got := parseRetryAfter("120"); got != 120*time.Second {
 		t.Errorf("delta-seconds: got %v", got)

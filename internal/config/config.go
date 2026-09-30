@@ -49,8 +49,34 @@ type ProviderConfig struct {
 	// APIKeyEnv names an environment variable holding the API key, so
 	// secrets don't have to live in the config file. A literal APIKey
 	// wins over APIKeyEnv when both are set.
-	APIKeyEnv string   `json:"apiKeyEnv"`
-	Models    []string `json:"models"`
+	APIKeyEnv string         `json:"apiKeyEnv"`
+	Compat    ProviderCompat `json:"compat,omitempty"`
+	Models    []string       `json:"models"`
+}
+
+// ProviderCompat declares per-provider protocol quirks for the
+// OpenAI-compatible adapter. When a quirk is set, the client sends the
+// right request shape on the first attempt; when unset, gg probes the
+// provider and falls back after a failed request, as before.
+type ProviderCompat struct {
+	// NoStreamUsage omits stream_options.include_usage: some endpoints
+	// reject the parameter with a 400.
+	NoStreamUsage bool `json:"noStreamUsage,omitempty"`
+	// CompletionTokens sends max_completion_tokens instead of max_tokens,
+	// required by some providers (e.g. the OpenAI o-series, some gateways).
+	CompletionTokens bool `json:"completionTokens,omitempty"`
+}
+
+// wellKnownBaseURLs maps provider names to their canonical
+// OpenAI-compatible endpoints. It is only consulted when a provider
+// leaves baseURL empty; an explicit baseURL always wins.
+var wellKnownBaseURLs = map[string]string{
+	"openai":     "https://api.openai.com/v1",
+	"deepseek":   "https://api.deepseek.com",
+	"openrouter": "https://openrouter.ai/api/v1",
+	"ollama":     "http://localhost:11434/v1",
+	"lmstudio":   "http://localhost:1234/v1",
+	"moonshot":   "https://api.moonshot.cn/v1",
 }
 
 type ContextConfig struct {
@@ -103,6 +129,9 @@ type Config struct {
 	APIKey  string
 	BaseURL string
 	Model   string
+	// Compat carries the selected provider's protocol quirks to the
+	// OpenAI-compatible client.
+	Compat ProviderCompat
 	// EmbedBaseURL/EmbedAPIKey optionally override the chat provider's
 	// endpoint for embeddings (used by `gg kb` and the kb_search tool).
 	// Resolved from GG_EMBED_BASE_URL / GG_EMBED_API_KEY.
@@ -276,8 +305,9 @@ func (c Config) WithSelection(selection string) (Config, error) {
 	next.Model = model
 	next.Selection = providerName + ":" + model
 	next.ProviderType = provider.Type
-	next.BaseURL = first(next.baseURLOverride, provider.BaseURL, DefaultBaseURL)
+	next.BaseURL = first(next.baseURLOverride, provider.BaseURL, wellKnownBaseURLs[strings.ToLower(providerName)], DefaultBaseURL)
 	next.APIKey = first(next.apiKeyOverride, provider.APIKey, os.Getenv(strings.TrimSpace(provider.APIKeyEnv)))
+	next.Compat = provider.Compat
 	return next, nil
 }
 
