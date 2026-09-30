@@ -38,6 +38,12 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	stdin := readerOr(options.Stdin, os.Stdin)
 	stdout := writerOr(options.Stdout, os.Stdout)
 	stderr := writerOr(options.Stderr, os.Stderr)
+	// The Electron sidecar passes --exit-on-stdin-eof and holds the write end
+	// of a control pipe: if the parent dies without cleanup, stdin reaches
+	// EOF and the watcher started below cancels this derived context, so the
+	// daemon shuts down instead of lingering as an orphan.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	// Service management subcommands run before flag parsing: they take no
 	// daemon flags of their own. install-service bakes everything after an
 	// optional "--" separator into the service's start command.
@@ -72,10 +78,12 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		noContextFiles bool
 		noScheduler    bool
 		showVersion    bool
+		exitOnStdinEOF bool
 	)
 	fs.StringVar(&httpAddress, "http", "", "serve HTTP on an address such as 127.0.0.1:8765; otherwise use stdio")
 	fs.StringVar(&token, "token", "", "bearer token required by HTTP mode")
 	fs.BoolVar(&allowRemote, "allow-remote", false, "allow HTTP to bind to a non-loopback address")
+	fs.BoolVar(&exitOnStdinEOF, "exit-on-stdin-eof", false, "exit when stdin reaches EOF (lets a parent process own the daemon lifetime via a control pipe)")
 	fs.StringVar(&cwd, "cwd", "", "workspace directory")
 	fs.StringVar(&apiKey, "api-key", "", "provider API key")
 	fs.StringVar(&baseURL, "base-url", "", "OpenAI-compatible base URL")
@@ -194,6 +202,9 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	if exitOnStdinEOF {
+		go watchStdinEOF(stdin, logger, cancel)
+	}
 	logger.Info("http listening", "addr", listener.Addr().String())
 	errCh := make(chan error, 1)
 	go func() { errCh <- server.Serve(listener) }()
@@ -226,6 +237,27 @@ func isLoopbackAddress(address string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// watchStdinEOF drains stdin until EOF (or a read error) and then cancels the
+// daemon context so the HTTP server shuts down gracefully. A supervising
+// parent holds the write end of a control pipe and never writes: when the
+// parent exits without cleanup — a crash or SIGKILL skips Electron's
+// before-quit hook — the pipe closes, stdin reaches EOF, and the sidecar
+// terminates instead of lingering with a lost token and port.
+func watchStdinEOF(stdin io.Reader, logger *slog.Logger, cancel context.CancelFunc) {
+	defer cancel()
+	buffer := make([]byte, 512)
+	for {
+		if _, err := stdin.Read(buffer); err != nil {
+			if err == io.EOF {
+				logger.Info("stdin EOF: shutting down")
+			} else {
+				logger.Error("stdin watcher", "error", err)
+			}
+			return
+		}
+	}
 }
 
 func readerOr(value io.Reader, fallback io.Reader) io.Reader {

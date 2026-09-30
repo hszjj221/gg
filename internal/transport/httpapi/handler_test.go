@@ -76,6 +76,94 @@ func TestHTTPHandlerServesJSONRPC(t *testing.T) {
 	}
 }
 
+func TestHTTPHandlerCORSPreflightForLocalUI(t *testing.T) {
+	handler := testHandler(t, "secret")
+
+	// Packaged Electron loads the renderer from file:// (origin "null") and
+	// sends Authorization + JSON headers, so the preflight carries no token
+	// and must be answered outside the bearer-token gate.
+	request := httptest.NewRequest(http.MethodOptions, "/rpc", nil)
+	request.Header.Set("Origin", "null")
+	request.Header.Set("Access-Control-Request-Method", "POST")
+	request.Header.Set("Access-Control-Request-Headers", "authorization, content-type")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("preflight status = %d, want 204", response.Code)
+	}
+	if got := response.Header().Get("Access-Control-Allow-Origin"); got != "null" {
+		t.Fatalf("preflight ACAO = %q, want null", got)
+	}
+	for _, header := range []string{"Access-Control-Allow-Methods", "Access-Control-Allow-Headers"} {
+		if response.Header().Get(header) == "" {
+			t.Fatalf("preflight missing %s", header)
+		}
+	}
+
+	// A foreign origin must not get a preflight answer; it falls through to
+	// the bearer-token gate.
+	request = httptest.NewRequest(http.MethodOptions, "/rpc", nil)
+	request.Header.Set("Origin", "https://evil.example")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("foreign preflight status = %d, want 401", response.Code)
+	}
+	if got := response.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("foreign preflight ACAO = %q, want empty", got)
+	}
+
+	// Authenticated responses to local UI origins carry ACAO; non-browser
+	// clients (no Origin) get no CORS headers.
+	for _, origin := range []string{"null", "http://127.0.0.1:5173", "http://localhost:3000"} {
+		body := bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"session.create","params":{"name":"web"}}`)
+		request := httptest.NewRequest(http.MethodPost, "/rpc", body)
+		request.Header.Set("Authorization", "Bearer secret")
+		request.Header.Set("Origin", origin)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("rpc with origin %q: status = %d, want 200", origin, response.Code)
+		}
+		if got := response.Header().Get("Access-Control-Allow-Origin"); got != origin {
+			t.Fatalf("rpc with origin %q: ACAO = %q", origin, got)
+		}
+	}
+	body := bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"session.create","params":{"name":"web"}}`)
+	request = httptest.NewRequest(http.MethodPost, "/rpc", body)
+	request.Header.Set("Authorization", "Bearer secret")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("rpc without origin: status = %d, want 200", response.Code)
+	}
+	if got := response.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("rpc without origin: ACAO = %q, want empty", got)
+	}
+}
+
+func TestIsLocalUIOrigin(t *testing.T) {
+	for _, tc := range []struct {
+		origin string
+		want   bool
+	}{
+		{"null", true}, // packaged Electron loads the renderer from file://
+		{"http://127.0.0.1:5173", true},
+		{"http://localhost:3000", true},
+		{"https://localhost:8443", true},
+		{"http://[::1]:5173", true},
+		{"https://evil.example", false},
+		{"http://127.0.0.1.evil.example", false},
+		{"ftp://127.0.0.1/x", false},
+		{"not-a-url", false},
+		{"", false},
+	} {
+		if got := isLocalUIOrigin(tc.origin); got != tc.want {
+			t.Errorf("isLocalUIOrigin(%q) = %v, want %v", tc.origin, got, tc.want)
+		}
+	}
+}
+
 func TestHTTPEventStreamUsesStableApplicationErrors(t *testing.T) {
 	handler := testHandler(t, "secret")
 	request := httptest.NewRequest(http.MethodGet, "/events?runId=missing", nil)

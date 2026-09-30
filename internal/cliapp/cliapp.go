@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -18,7 +19,6 @@ import (
 	"github.com/hszjj221/gg/internal/provider/openai"
 	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/skills"
-	"github.com/hszjj221/gg/internal/tui"
 	"github.com/hszjj221/gg/internal/userprofile"
 )
 
@@ -118,11 +118,11 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		fmt.Fprintln(stderr, "note: "+notice)
 	}
 	if wantsSessionSelector(parsed) {
-		if !shouldRunTUI(stdin, stdout, isTerm) {
+		if !bothTerminals(stdin, stdout, isTerm) {
 			fmt.Fprintln(stderr, "session selector requires a terminal; use gg resume <id-or-path>")
 			return 2
 		}
-		selected, ok, err := selectSession(ctx, cfg, stdin, stdout)
+		selected, ok, err := selectSession(cfg, stdin, stdout)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -190,11 +190,10 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		fmt.Fprintln(stderr, "prompt is required in print mode")
 		return 2
 	}
-	if shouldRunTUI(stdin, stdout, isTerm) {
-		return runTUI(ctx, executor, cfg, sessionName(loaded), stdin, stdout, stderr, parsed.Usage, parsed.Approval != "never")
-	}
 	reader := bufio.NewReader(stdin)
-	return runInteractive(ctx, executor, reader, stdout, stderr, sessionName(loaded), parsed.Usage, interactiveApprover(parsed, reader, stderr, bothTerminals(stdin, stdout, isTerm)))
+	// Line-based approval always runs through the stderr prompt, which needs
+	// stdin + stderr as terminals (see lineApprovalTerminals).
+	return runInteractive(ctx, executor, reader, stdout, stderr, sessionName(loaded), parsed.Usage, interactiveApprover(parsed, reader, stderr, lineApprovalTerminals(stdin, stderr, isTerm)))
 }
 
 func runPrompt(
@@ -260,7 +259,7 @@ func wantsSessionSelector(args cli.Args) bool {
 	return args.Resume || (args.Command == cli.CommandResume && args.ResumeTarget == "")
 }
 
-func selectSession(ctx context.Context, cfg config.Config, stdin io.Reader, stdout io.Writer) (string, bool, error) {
+func selectSession(cfg config.Config, stdin io.Reader, stdout io.Writer) (string, bool, error) {
 	infos, err := session.ListForCWD(cfg.SessionDir, cfg.CWD)
 	if err != nil {
 		return "", false, err
@@ -268,18 +267,31 @@ func selectSession(ctx context.Context, cfg config.Config, stdin io.Reader, stdo
 	if len(infos) == 0 {
 		return "", false, fmt.Errorf("no sessions found for %s", cfg.CWD)
 	}
-	items := make([]tui.SessionItem, 0, len(infos))
-	for _, info := range infos {
-		items = append(items, tui.SessionItem{
-			ID:           info.ID,
-			Path:         info.Path,
-			Name:         info.Name,
-			Timestamp:    info.Timestamp,
-			MessageCount: info.MessageCount,
-			Preview:      info.Preview,
-		})
+	for i, info := range infos {
+		name := info.Name
+		if name == "" {
+			name = "-"
+		}
+		fmt.Fprintf(stdout, "[%d] %s  %s  %d msgs  %s\n", i+1, info.ID, info.Timestamp, info.MessageCount, name)
+		if info.Preview != "" {
+			fmt.Fprintf(stdout, "    %s\n", info.Preview)
+		}
 	}
-	return tui.RunSessionSelector(ctx, items, stdin, stdout)
+	fmt.Fprint(stdout, "Select session [1-", len(infos), "] (empty to cancel): ")
+	reader := bufio.NewReader(stdin)
+	line, err := reader.ReadString('\n')
+	if err != nil && err != io.EOF {
+		return "", false, err
+	}
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return "", false, nil
+	}
+	n, err := strconv.Atoi(line)
+	if err != nil || n < 1 || n > len(infos) {
+		return "", false, fmt.Errorf("invalid selection %q", line)
+	}
+	return infos[n-1].ID, true, nil
 }
 
 func runSessionsList(cfg config.Config, stdout io.Writer, stderr io.Writer) int {
@@ -457,44 +469,6 @@ func handleSessionCommand(prompt string, service *app.Service, name *string, std
 	return true, nil
 }
 
-func runTUI(
-	ctx context.Context,
-	executor *app.Service,
-	cfg config.Config,
-	sessionName string,
-	stdin io.Reader,
-	stdout io.Writer,
-	stderr io.Writer,
-	showUsage bool,
-	enableApproval bool,
-) int {
-	snapshot := executor.Snapshot()
-	var sessionAction tui.SessionActionFunc
-	if executor.HasSession() {
-		sessionAction = executor.HandleSessionAction
-	}
-	err := tui.Run(ctx, tui.Config{
-		Queue:           executor.Queue(),
-		CWD:             cfg.CWD,
-		ModelName:       cfg.Selection,
-		SessionName:     sessionName,
-		ShowUsage:       showUsage,
-		EnableApproval:  enableApproval,
-		InitialMessages: displayMessages(snapshot.Messages),
-		TreeItems:       snapshot.TreeItems,
-		Input:           stdin,
-		Output:          stdout,
-		Submit:          executor.Run,
-		RenameSession:   executor.RenameSession,
-		SessionAction:   sessionAction,
-	})
-	if err != nil && err != context.Canceled {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	return 0
-}
-
 func sessionName(loaded session.Loaded) string {
 	if loaded.LastInfo == nil {
 		return ""
@@ -560,19 +534,24 @@ func interactiveApprover(args cli.Args, reader *bufio.Reader, stderr io.Writer, 
 	return nil
 }
 
-func shouldRunTUI(stdin io.Reader, stdout io.Writer, isTerm func(any) bool) bool {
-	return bothTerminals(stdin, stdout, isTerm)
-}
-
 func bothTerminals(stdin io.Reader, stdout io.Writer, isTerm func(any) bool) bool {
 	return isTerm(stdin) && isTerm(stdout)
 }
 
-func approvalTerminalAvailable(args cli.Args, stdin io.Reader, stdout io.Writer, stderr io.Writer, isTerm func(any) bool) bool {
-	if args.Prompt == "" && !args.Print && shouldRunTUI(stdin, stdout, isTerm) {
-		return true
-	}
+// lineApprovalTerminals reports whether the line-based approval prompter can
+// interact with the user. The prompter writes the whole question to stderr
+// and then blocks reading the answer from stdin, so both must be terminals.
+// Gating on stdout alone is not enough: with stderr redirected the prompt
+// would be invisible while the CLI appears hung waiting for input.
+func lineApprovalTerminals(stdin io.Reader, stderr io.Writer, isTerm func(any) bool) bool {
 	return isTerm(stdin) && isTerm(stderr)
+}
+
+func approvalTerminalAvailable(args cli.Args, stdin io.Reader, stdout io.Writer, stderr io.Writer, isTerm func(any) bool) bool {
+	if args.Prompt == "" && !args.Print {
+		return bothTerminals(stdin, stdout, isTerm) && isTerm(stderr)
+	}
+	return lineApprovalTerminals(stdin, stderr, isTerm)
 }
 
 func terminalChecker(options Options) func(any) bool {
@@ -592,20 +571,6 @@ func isTerminal(value any) bool {
 		return false
 	}
 	return info.Mode()&os.ModeCharDevice != 0
-}
-
-func displayMessages(messages []agent.Message) []tui.Message {
-	out := make([]tui.Message, 0, len(messages))
-	for _, message := range messages {
-		if message.Content == "" {
-			continue
-		}
-		switch message.Role {
-		case agent.RoleUser, agent.RoleAssistant:
-			out = append(out, tui.Message{Role: message.Role, Content: message.Content})
-		}
-	}
-	return out
 }
 
 func openSession(args cli.Args, cfg config.Config) (*session.Store, session.Loaded, error) {

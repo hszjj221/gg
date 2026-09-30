@@ -1,15 +1,14 @@
 # gg 架构
 
-`gg` 把产品行为收敛到可复用的 Go 核心里，每个界面都只是适配器。TUI、Web、Electron 客户端因此共享会话语义、并发规则、审批处理和工具执行。
+`gg` 把产品行为收敛到可复用的 Go 核心里，每个界面都只是适配器。CLI、Web、Electron 客户端因此共享会话语义、并发规则、审批处理和工具执行。
 
 ```mermaid
 flowchart LR
-    TUI[Bubble Tea TUI] --> CLIAPP[internal/cliapp adapter]
+    CLI[gg CLI: one-shot + 按行交互] --> CLIAPP[internal/cliapp adapter]
     WEB[React Web] --> HTTP[HTTP + SSE transport]
-    DESKTOP[Electron + preload] --> STDIO[stdio transport]
+    DESKTOP[Electron] --> HTTP
     CLIAPP --> CORE[app Service]
     HTTP --> RPC[JSON-RPC handler]
-    STDIO --> RPC
     RPC --> WORKSPACE[app Workspace + Manager]
     WORKSPACE --> CORE
     CORE --> AGENT[agent/provider/tools]
@@ -28,7 +27,7 @@ flowchart LR
 | `internal/transport/stdio` | 面向本地子进程的并发换行分隔 JSON-RPC。 |
 | `internal/transport/httpapi` | Bearer 保护的 RPC + 可回放的 SSE 事件，供浏览器部署。 |
 | `internal/daemon` 与 `cmd/ggd` | 配置、provider、仓库、工作区、传输层的组装根。 |
-| `internal/cliapp` | 只做 CLI/TUI 组装。业务行为委托给 `app.Service`。 |
+| `internal/cliapp` | 只做 CLI 组装（一次性 prompt、按行交互、管理命令）。业务行为委托给 `app.Service`。 |
 | `internal/userprofile` | 用户画像（`~/.gg/USER.md`）：加载、解析、渲染 "who you are" 系统块。 |
 | `internal/memory` | 结构化记忆存储（`~/.gg/memory/`）：精选 `MEMORY.md`、日常日志 `YYYY-MM-DD.md`、`people/` 和 `groups/` 笔记、旧版 `memory.md` 迁移、日常日志裁剪、关键词检索。 |
 | `internal/scheduler` | Cron/单次任务定义、文件锁保护的 JSON 存储（`~/.gg/scheduler/`）、触发循环、无人值守审批策略。daemon 提供 `Executor`；核心除了 approver 类型外绝不 import agent 运行时。 |
@@ -39,9 +38,8 @@ flowchart LR
 | `internal/connector/google` | 第一个 provider：Gmail（搜索/读/发）和 Google Calendar（查/建）走纯 `net/http`；自动刷新 transport，401 重试一次。Scope：`gmail.readonly` + `gmail.send` + `calendar.events`。 |
 | `internal/tools` | 内置 agent 工具实现，包括电脑操作工具（`computer.go` 加各 OS 后端 `computer_linux.go` / `computer_darwin.go`；Windows 和其他 Unix 用 unsupported stub）。信任边界：工具跑在用户自己的 OS 权限下——任何写操作或外部副作用都必须实现 `agent.ApprovalDescriber`，让每次调用都过审批流水线。 |
 | `internal/mcp` | 基于官方 `modelcontextprotocol/go-sdk` 的 MCP 客户端：配置（`~/.gg/mcp.json`）、stdio/HTTP 建连、schema 适配、`mcp_<server>_<tool>` 工具桥。信任边界：server 是第三方代码——stdio 子进程只继承最小环境，每个 MCP 工具都走 approval，建连或 list 失败的 server 在 `Service` 生命周期内被跳过。 |
-| `internal/tui` | 只做 Bubble Tea 状态和渲染；会话 DTO 来自核心。 |
-| `ui/src` | 共享 React 界面和传输抽象。 |
-| `ui/electron` | 原生窗口、工作区选择、sidecar 生命周期，以及窄而上下文隔离的 IPC 桥。 |
+| `ui/src` | 共享 React UI；Web 与 Electron 共用同一份 HTTP transport。 |
+| `ui/electron` | 原生窗口、工作区选择和 sidecar 生命周期：以 `--http` + 每次启动随机 token 拉起 `ggd`，只把 endpoint、token 和工作区标签经窄而上下文隔离的 bridge 交给 renderer。 |
 
 依赖指向内层：UI 和传输层依赖应用用例；应用层依赖 agent 和持久化抽象；核心绝不 import UI 或网络包。
 
@@ -94,11 +92,11 @@ flowchart LR
 - `run.start`、`run.wait`、`run.get`、`run.active`、`run.cancel`、`run.approve`、`run.steer`
 - `artifact.list`、`artifact.get`、`artifact.publish`
 
-stdio 每行一个 JSON-RPC 对象，支持并发请求（等审批时另一个请求必须能进）。HTTP 在 `POST /rpc` 接受 JSON-RPC；`GET /events` 以 SSE 流式推送 run 事件。HTTP 模式要求 Bearer token，默认只绑 loopback，除非显式 `--allow-remote`。线格式保持 JSON-RPC 2.0；`system.info.protocolVersion` 独立给 gg 方法、事件、DTO 和稳定应用错误码做版本。
+stdio 每行一个 JSON-RPC 对象，支持并发请求（等审批时另一个请求必须能进）。HTTP 在 `POST /rpc` 接受 JSON-RPC；`GET /events` 以 SSE 流式推送 run 事件。HTTP 模式要求 Bearer token，默认只绑 loopback，除非显式 `--allow-remote`。打包后的 Electron renderer 从 `file://` 加载（origin 为 `null`），因此 daemon 对 `null` 和 loopback `http(s)` 来源的 CORS 预检（`OPTIONS`）在 bearer-token 鉴权之外直接应答；token 仍是真正的鉴权边界。线格式保持 JSON-RPC 2.0；`system.info.protocolVersion` 独立给 gg 方法、事件、DTO 和稳定应用错误码做版本。
 
 ## 客户端边界
 
-React 应用依赖一个小 `Transport` 接口。`WebTransport` 默认调同源 HTTP。`ElectronTransport` 只调 `preload.cjs` 白名单暴露的方法；renderer 拿不到 Node.js。Electron 主进程拥有 `ggd` 和选中的工作区。
+React 应用依赖一个小 `Transport` 接口。`HttpTransport` 经带 Bearer <redacted> 的 HTTP 与 `ggd` 通信（POST `/rpc` + SSE `/events`），Web 与 Electron 共用。桌面端由 Electron 主进程以 `ggd --http 127.0.0.1:<端口> --token <随机> --exit-on-stdin-eof` 拉起，只把 endpoint、token 和工作区标签暴露给 renderer；renderer 拿不到 Node.js。sidecar 的 stdin 是一条主进程持有的控制管道：父进程异常退出、没走 `before-quit` 清理（崩溃/SIGKILL）时，stdin 到达 EOF，daemon 自行退出，不会变成拿着丢失 token 和端口的孤儿进程。
 
 ## 扩展规则
 

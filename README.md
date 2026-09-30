@@ -21,8 +21,8 @@ English | [简体中文](README.zh-CN.md)
 - Synchronous read-only `subagent` tool for focused codebase research
 - Local RAG knowledge base: `gg kb index` + agent-callable `kb_search` tool
 - Scheduled background jobs (`gg job ...`) that fire while the `ggd` daemon is alive
-- Reusable Go conversation runtime shared by the TUI, Web, and desktop adapters
-- Bubble Tea TUI plus Web/Electron clients built from one React UI
+- Reusable Go conversation runtime shared by the CLI, Web, and desktop clients
+- Web and Electron clients built from one React UI, both talking to `ggd` over HTTP
 
 ## Install
 
@@ -52,7 +52,7 @@ Run a one-shot prompt:
 gg -p "List the files in this project"
 ```
 
-Start the TUI interactive mode:
+Start the interactive mode (line-based, Ctrl+D to exit):
 
 ```bash
 gg
@@ -60,7 +60,7 @@ gg
 
 ### Web and Electron
 
-The new `ggd` process exposes sessions and agent runs through a stable JSON-RPC interface. The Web client reaches it over Bearer-protected HTTP; Electron starts it as a local sidecar and talks through an isolated preload bridge.
+The new `ggd` process exposes sessions and agent runs through a stable JSON-RPC interface. The Web client reaches it over Bearer-protected HTTP; Electron starts it as a local sidecar the same way — over HTTP on a loopback port with a per-launch random Bearer <redacted> handed to the renderer through a minimal isolated bridge. Both clients share one React UI and one HTTP transport.
 
 Start the local Web development environment:
 
@@ -112,19 +112,14 @@ gg --name "Refactor auth" -p "Review this module"
 
 Interactive mode:
 
-- Running `gg` in a terminal starts the TUI chat interface.
-- The TUI shows the conversation, a single-line prompt input, streaming replies, and a status bar.
-- While running, Enter queues a steering message for the next model boundary; Alt+Enter queues a follow-up for after successful completion. Use follow-ups for slash commands.
-- Escape or Ctrl+C cancels the active run. Unconsumed queued messages are restored to the input on cancellation or failure.
-- Page Up / Page Down scroll history; incoming output preserves your scroll position when reading older messages.
-- The TUI also shows compact inline logs for tool calls such as `read`, `bash`, `edit`, `write`, and `subagent`.
-- Use `/model` to list configured models and `/model provider:model` to switch the provider/model used by later turns.
-- Tool logs are only a TUI view feature; they do not change the JSONL session format or one-shot/line interactive output.
-- When stdin/stdout are not terminals, `gg` falls back to the simple line-based interactive mode for scripts and tests.
+- Running `gg` in a terminal starts the line-based interactive mode (Ctrl+D to exit).
+- Replies stream as they arrive; tool approvals prompt inline before `bash`, `edit`, or `write` run.
+- Use `/name <name>` to rename the session interactively, `/name --clear` to remove the name.
+- For a richer visual experience (conversation tree, artifacts, approvals UI), use the Web or desktop client.
 
 Tool approval:
 
-- `--approval auto` is the default. TUI sessions ask before running `bash`, `edit`, or `write`; one-shot prompts and non-terminal runs keep the previous non-interactive behavior.
+- `--approval auto` is the default. Interactive sessions ask before running `bash`, `edit`, or `write`; one-shot prompts and non-terminal runs keep the previous non-interactive behavior.
 - `--approval on-request` always asks before those tools run and requires a real terminal.
 - `--approval never` disables approval prompts.
 - Denying a tool call returns a tool error to the model so it can explain or choose another path.
@@ -176,7 +171,7 @@ Selection uses `provider:model`:
 
 Only `openai-compatible` providers are supported in v1. Remote model discovery is not implemented; list allowed model names in `models`.
 
-Model calls are retried on temporary failures before streaming, such as network errors, rate limits, and 5xx responses. Interrupted streams, incomplete tool arguments, and output-length limits are reported as errors; partially streamed content is retained and is not blindly retried. Output limits use `max_tokens`, with a compatibility retry for providers explicitly requiring `max_completion_tokens`. `gg` does not fall back to another provider or model; if all retry attempts fail, the normal CLI or TUI error path is used.
+Model calls are retried on temporary failures before streaming, such as network errors, rate limits, and 5xx responses. Interrupted streams, incomplete tool arguments, and output-length limits are reported as errors; partially streamed content is retained and is not blindly retried. Output limits use `max_tokens`, with a compatibility retry for providers explicitly requiring `max_completion_tokens`. `gg` does not fall back to another provider or model; if all retry attempts fail, the normal CLI error path is used.
 
 Project instructions:
 
@@ -195,12 +190,11 @@ Session management:
 
 - `gg sessions list` lists sessions for the current working directory.
 - `gg resume <id-or-path>` resumes a session by displayed ID, JSONL filename stem, filename, or path.
-- `gg resume` and `gg --resume` open a searchable session selector in a terminal.
+- `gg resume` and `gg --resume` open a numbered session picker in the terminal.
 - `gg --continue` and `gg --last` resume the latest session for the current working directory.
 - `--name`/`-n` sets a session display name; `/name <name>` changes it interactively and `/name --clear` removes it.
 - Session v3 stores messages and metadata in an append-only tree and persists the active branch with a separate head record. Older sessions upgrade without discarding history.
-- In the TUI, `/tree` opens a searchable conversation tree. Selecting an earlier user message rewinds to its parent and places that prompt back in the editor; selecting an assistant message continues from it as a new branch.
-- In the TUI, `/fork` selects an earlier user message, creates a new session from its parent, and places the prompt back in the editor. `/clone` copies the complete active branch into a new session immediately.
+- The Web and desktop clients expose the conversation tree with rewind, branch (fork), and clone actions.
 - User messages, completed model messages, and individual tool results are saved as they complete. Provider errors and partial responses remain available after a failed run.
 - If another CLI or `ggd` process advances the same session, stale writes fail with a retryable conflict instead of silently interleaving two parent chains in the JSONL file.
 - Resume recovers complete JSONL entries after an interrupted final append. Missing tool results are marked as unknown, so the model can inspect the workspace before retrying.
@@ -337,7 +331,7 @@ gg -p "Use a subagent to inspect how sessions are stored, then summarize the flo
 
 ## Development
 
-The runner exposes `BeforeRequest`, `OnMessage`, and `DrainMessages` hooks for context preparation, durable messages, and steering without coupling the loop to the TUI.
+The runner exposes `BeforeRequest`, `OnMessage`, and `DrainMessages` hooks for context preparation, durable messages, and steering without coupling the loop to any particular interface.
 
 Run the test suite:
 

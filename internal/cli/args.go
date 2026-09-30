@@ -383,7 +383,7 @@ Usage:
   gg browser shot <url>                screenshot a page with headless Chromium
   gg browser read <url>                print a page's rendered text
 
-Running gg without a prompt starts the TUI interactive mode when stdin/stdout are terminals.
+Running gg without a prompt starts the interactive line-based mode (Ctrl+D to exit).
 
 Options:
   -p, --print              run once and print the final assistant text

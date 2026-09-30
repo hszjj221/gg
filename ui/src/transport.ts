@@ -20,45 +20,11 @@ export interface Transport {
   watchRun(runId: string, afterSequence: number, onEvent: (event: RunEvent) => void, signal: AbortSignal): Promise<number>;
 }
 
-export class ElectronTransport implements Transport {
-  async call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-    if (!window.ggDesktop) throw new Error('Electron bridge is unavailable');
-    const payload = await window.ggDesktop.invoke<T>(method, params);
-    if (payload.error) {
-      throw new RPCError(
-        payload.error.message || 'Request failed',
-        payload.error.data?.code,
-        payload.error.data?.retryable,
-        payload.error.code,
-      );
-    }
-    return payload.result as T;
-  }
-
-  workspaceLabel(): Promise<string> {
-    if (!window.ggDesktop) return Promise.resolve('Desktop');
-    return window.ggDesktop.workspace();
-  }
-
-  async watchRun(runId: string, afterSequence: number, onEvent: (event: RunEvent) => void, signal: AbortSignal): Promise<number> {
-    let after = afterSequence;
-    while (!signal.aborted) {
-      const batch = await this.call<WaitResult>('run.wait', { runId, afterSequence: after });
-      if (signal.aborted) throw abortError();
-      for (const event of batch.events) {
-        after = Math.max(after, event.sequence);
-        onEvent(event);
-      }
-      if (batch.done) return after;
-    }
-    throw abortError();
-  }
-}
-
-export class WebTransport implements Transport {
+export class HttpTransport implements Transport {
   constructor(
     private readonly endpoint: string,
     private readonly token: string,
+    private readonly label?: string,
   ) {}
 
   async call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
@@ -87,7 +53,7 @@ export class WebTransport implements Transport {
   }
 
   async workspaceLabel(): Promise<string> {
-    return this.endpoint || window.location.origin;
+    return this.label || this.endpoint || window.location.origin;
   }
 
   async watchRun(runId: string, afterSequence: number, onEvent: (event: RunEvent) => void, signal: AbortSignal): Promise<number> {

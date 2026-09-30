@@ -124,11 +124,7 @@ export interface ArtifactPublishResult {
 }
 
 export interface DesktopBridge {
-  invoke<T>(method: string, params?: Record<string, unknown>): Promise<{
-    result?: T;
-    error?: { code?: number; message?: string; data?: { code?: string; retryable?: boolean } };
-  }>;
-  workspace(): Promise<string>;
+  getConnection(): Promise<{ endpoint: string; token: string; workspace: string }>;
 }
 
 declare global {
