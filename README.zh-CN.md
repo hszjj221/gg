@@ -159,7 +159,6 @@ Provider/model 配置：
     },
     "deepseek": {
       "type": "openai-compatible",
-      "baseURL": "https://api.deepseek.com",
       "apiKeyEnv": "DEEPSEEK_API_KEY",
       "models": ["deepseek-chat", "deepseek-reasoner"]
     }
@@ -167,11 +166,28 @@ Provider/model 配置：
 }
 ```
 
+`deepseek` 没有写 `baseURL`：gg 会按 provider 名从内置的常见 OpenAI-compatible endpoint 表里推导（`openai`、`deepseek`、`openrouter`、`ollama`、`lmstudio`、`moonshot`）。显式写的 `baseURL` 永远优先；名字不在表里则回退到 `https://api.openai.com/v1`。
+
 模型选择统一使用 `provider:model`：
 
 - Provider/model：`--model provider:model`，然后是恢复会话中的模型，接着是配置里的 `default`，最后是 `openai:gpt-4.1`
 - API key：优先级依次为 `--api-key` 参数、当前 provider 的 `apiKey`、`apiKeyEnv` 指定的环境变量。`apiKeyEnv` 用于指定存放 key 的环境变量名，避免把 secret 写进配置文件。没有配置文件时，沿用 legacy `OPENAI_API_KEY`。
-- Base URL：当前 provider 的 `baseURL`；`--base-url` 可以覆盖它。没有配置文件时，沿用 legacy `OPENAI_BASE_URL`，最后是 `https://api.openai.com/v1`。
+- Base URL：优先级依次为 `--base-url` 参数、当前 provider 的 `baseURL`、按 provider 名推导的常见 endpoint、`https://api.openai.com/v1`。没有配置文件时，沿用 legacy `OPENAI_BASE_URL`，最后是 `https://api.openai.com/v1`。
+
+各家 provider 的协议差异写在 `compat` 里。设置后 gg 第一次请求就按正确形状发送；不设置则保持原来的探测行为（失败一次后重试）：
+
+```json
+"o-series": {
+  "type": "openai-compatible",
+  "baseURL": "https://api.openai.com/v1",
+  "apiKeyEnv": "OPENAI_API_KEY",
+  "compat": {"completionTokens": true},
+  "models": ["o1"]
+}
+```
+
+- `noStreamUsage`：不发送 `stream_options.include_usage`（有些 endpoint 会 400 拒绝这个参数）。
+- `completionTokens`：用 `max_completion_tokens` 代替 `max_tokens`。
 - Session directory：`--session-dir`，然后是 `GG_SESSION_DIR`，最后是 `~/.gg/sessions`
 - Memory：配置里的 `memory.enabled`；`--no-memory` 可单次关闭。
 
