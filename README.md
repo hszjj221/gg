@@ -280,6 +280,16 @@ Telegram channel (daemon):
 
 - Set `GG_TELEGRAM_BOT_TOKEN` and `GG_TELEGRAM_ALLOW_CHATS` (comma-separated chat IDs), then run `ggd`. Text and voice messages are answered per-chat; voice goes through STT → agent → text + TTS reply. Approval-gated tools are denied over Telegram. See `docs/telegram.md`.
 
+MCP servers (external tools via the Model Context Protocol):
+
+- Declare servers in `~/.gg/mcp.json` (`command`/`args` for stdio, `url` for streamable HTTP). Each server's tools become agent tools named `mcp_<server>_<tool>`; stdio servers inherit only a minimal environment. See the MCP section in `docs/architecture.md`.
+- Every MCP tool needs your approval before it runs; unattended runs deny them unless `--allow-all` is set. A server that fails to connect is skipped for the rest of the conversation, never fatal.
+
+Computer tools (local machine operation, Linux/macOS):
+
+- The agent gets `computer_info` (OS/arch/CPU/memory/disk), `process_list` / `process_kill`, `open` (open files or URLs with the default application), `notify` (system notification), and `clipboard_read` / `clipboard_write`. The capability is not advertised on other platforms.
+- `process_kill`, `open`, `clipboard_read`, and `clipboard_write` need your approval; unattended runs deny them unless `--allow-all` is set.
+
 ## Skills
 
 `gg` loads Codex-style skills from `.agents/skills` by default. Project skills in the current directory or its parents take precedence over global skills in `~/.agents/skills`.
