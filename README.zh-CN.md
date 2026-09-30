@@ -266,6 +266,16 @@ Connectors（外部服务）：
 - 连接后 agent 获得 `gmail_search` / `gmail_read` / `gmail_send` 和 `calendar_agenda` / `calendar_create`。发邮件、建日程需要你确认；无人值守默认拒绝，除非开了 `--allow-all`。
 - `gg connect list`、`gg connect status [google]`、`gg connect remove google`。
 
+MCP 服务器（Model Context Protocol 外部工具）：
+
+- 在 `~/.gg/mcp.json` 中声明服务器（stdio 用 `command`/`args`，streamable HTTP 用 `url`）。每个服务器的工具变成名为 `mcp_<server>_<tool>` 的 agent 工具；stdio 服务器只继承最小环境变量。详见 `docs/architecture.md` 的 MCP 章节。
+- 每个 MCP 工具执行前都要你确认；无人值守默认拒绝，除非开了 `--allow-all`。连接失败的服务器在本次会话中会被跳过，不会拖慢每一轮。
+
+电脑操作工具（本地电脑，Linux/macOS）：
+
+- agent 获得 `computer_info`（系统/CPU/内存/磁盘）、`process_list` / `process_kill`、`open`（用默认应用打开文件或 URL）、`notify`（系统通知）、`clipboard_read` / `clipboard_write`。其他平台不提供这一能力。
+- `process_kill`、`open`、`clipboard_read`、`clipboard_write` 需要你确认；无人值守默认拒绝，除非开了 `--allow-all`。
+
 ## Skills
 
 `gg` 默认从 `.agents/skills` 加载 Codex 风格 skills。当前目录及其父目录中的项目 skills 优先于 `~/.agents/skills` 中的全局 skills。
