@@ -86,7 +86,7 @@ npm run desktop
 
 客户端启动时会让你选择工作目录，然后构建并启动当前平台的本地 `ggd`。当前阶段提供可运行的客户端壳；签名、安装包和自动更新留给后续发布流水线处理。
 
-更完整的分层说明和协议边界见 [架构文档](docs/architecture.md)。
+更完整的分层说明和协议边界见 [架构文档](docs/architecture.zh-CN.md)。
 
 ## Usage
 
@@ -239,7 +239,7 @@ Token 消耗：
 - `gg kb index <dir>` 把文本文件切分并 embedding，存为本地索引 `~/.gg/kb/<name>/index.json`（纯 Go，无向量数据库）。
 - `gg kb search <query>` 在命令行对索引做语义检索。
 - 默认知识库建成后，agent 会自动获得 `kb_search` 工具，用于回答关于已索引语料的问题。
-- `gg kb eval --cases docs/kb-eval-sample.jsonl` 评测检索 recall@k。架构说明见 `docs/rag.md`。
+- `gg kb eval --cases docs/kb-eval-sample.jsonl` 评测检索 recall@k。架构说明见 `docs/rag.zh-CN.md`。
 
 定时任务：
 
@@ -262,13 +262,27 @@ Artifacts 与 Library：
 
 Connectors（外部服务）：
 
-- `gg connect google --client-id ID` 走 OAuth 流程（localhost 回调 + PKCE）连接 Gmail 和 Google Calendar；token 存 `~/.gg/connectors/google.json`（0600）。client 的创建见 `docs/connectors.md`。
+- `gg connect google --client-id ID` 走 OAuth 流程（localhost 回调 + PKCE）连接 Gmail 和 Google Calendar；token 存 `~/.gg/connectors/google.json`（0600）。client 的创建见 `docs/connectors.zh-CN.md`。
 - 连接后 agent 获得 `gmail_search` / `gmail_read` / `gmail_send` 和 `calendar_agenda` / `calendar_create`。发邮件、建日程需要你确认；无人值守默认拒绝，除非开了 `--allow-all`。
 - `gg connect list`、`gg connect status [google]`、`gg connect remove google`。
 
+Media & voice（OpenAI 兼容的 `/v1/images/generations`、`/v1/audio/speech`、`/v1/audio/transcriptions`）：
+
+- `gg media image "prompt"`、`gg media tts "text"`、`gg media stt <audio-file>`。默认复用聊天 provider 的 base URL / API key；用 `GG_MEDIA_BASE_URL` / `GG_MEDIA_API_KEY` / `GG_MEDIA_{IMAGE,TTS,STT}_MODEL` 覆盖。详见 `docs/media.zh-CN.md`。
+- agent 获得 `image_generate`（需要你确认）、`tts`、`stt` 工具；生成的文件存到 `~/.gg/media/`。
+
+浏览器（headless Chromium 走 CDP，本期只读 + 截图）：
+
+- `gg browser shot <url>`、`gg browser read <url>`。需要本机有 Chromium（`chromium` / `google-chrome`，或 `GG_CHROMIUM`）；只允许 `http(s)` URL。详见 `docs/browser.zh-CN.md`。
+- agent 获得 `browser_navigate`、`browser_read`、`browser_screenshot`（只有装了 Chromium 才注册）；截图存到 `~/.gg/media/screenshots/`。
+
+Telegram 频道（daemon）：
+
+- 设置 `GG_TELEGRAM_BOT_TOKEN` 和 `GG_TELEGRAM_ALLOW_CHATS`（逗号分隔的 chat ID），然后运行 `ggd`。文字和语音消息按 chat 分别应答；语音走 STT → agent → 文字 + TTS 回复。需要 approval 的工具在 Telegram 上不可用。详见 `docs/telegram.zh-CN.md`。
+
 MCP 服务器（Model Context Protocol 外部工具）：
 
-- 在 `~/.gg/mcp.json` 中声明服务器（stdio 用 `command`/`args`，streamable HTTP 用 `url`）。每个服务器的工具变成名为 `mcp_<server>_<tool>` 的 agent 工具；stdio 服务器只继承最小环境变量。详见 `docs/architecture.md` 的 MCP 章节。
+- 在 `~/.gg/mcp.json` 中声明服务器（stdio 用 `command`/`args`，streamable HTTP 用 `url`）。每个服务器的工具变成名为 `mcp_<server>_<tool>` 的 agent 工具；stdio 服务器只继承最小环境变量。详见 `docs/architecture.zh-CN.md` 的 MCP 章节。
 - 每个 MCP 工具执行前都要你确认；无人值守默认拒绝，除非开了 `--allow-all`。连接失败的服务器在本次会话中会被跳过，不会拖慢每一轮。
 
 电脑操作工具（本地电脑，Linux/macOS）：
