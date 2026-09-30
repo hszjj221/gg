@@ -37,6 +37,8 @@ flowchart LR
 | `internal/filelock` | Cross-process exclusive file locking (flock) shared by the artifact and library stores; explicit error on platforms without flock. |
 | `internal/connector` | Third-party connection framework: OAuth 2.0 authorization-code flow (localhost callback + PKCE, `state` CSRF check), token persistence (`~/.gg/connectors/<name>.json`, 0600, flock-serialized), on-demand refresh. |
 | `internal/connector/google` | First provider: Gmail (search/read/send) and Google Calendar (agenda/create) over plain `net/http`; auto-refresh transport with one 401 retry. Scopes: `gmail.readonly` + `gmail.send` + `calendar.events`. |
+| `internal/tools` | Builtin agent tool implementations, including the computer tools (`computer.go` plus per-OS backends `computer_linux.go` / `computer_darwin.go`; Windows and other Unixes get unsupported stubs). Trust boundary: tools run with the user's own OS privileges — any write or external side effect must implement `agent.ApprovalDescriber` so every call passes the approval pipeline. |
+| `internal/mcp` | MCP client on the official `modelcontextprotocol/go-sdk`: config (`~/.gg/mcp.json`), stdio/HTTP dialing, schema adaptation, and the `mcp_<server>_<tool>` tool bridge. Trust boundary: servers are third-party code — stdio subprocesses inherit only a minimal environment, every MCP tool is approval-gated, and a server that fails to dial or list is skipped for the `Service`'s lifetime. |
 | `internal/tui` | Bubble Tea state and rendering only; conversation DTOs come from the core. |
 | `ui/src` | Shared React interface and transport abstraction. |
 | `ui/electron` | Native window, workspace picker, sidecar lifecycle, and a narrow context-isolated IPC bridge. |
@@ -106,6 +108,9 @@ When adding behavior:
 3. Expose a transport-neutral method/event only when a client needs it.
 4. Keep Web- or Electron-specific policy in its adapter.
 5. Keep file paths, provider secrets, and unrestricted IPC out of public DTOs.
+6. Add a new agent capability as a `ToolProvider` entry, an MCP server declaration, or a skill — never a central if/else chain. If it writes or causes an external side effect, implement `agent.ApprovalDescriber` so the unattended approver denies it by default.
+7. Platform- or environment-dependent tools degrade through `Available`/`Build` and are never advertised when unavailable; `ToolCapabilities()` stays derived from the registry.
+8. External code and prompt content (MCP servers, skills) run at the lowest trust: scrubbed subprocess environments, approval-gated tools, fail-skip instead of fail-fatal.
 
 This makes a future mobile client, remote Web deployment, or alternative terminal UI another adapter rather than another implementation of the agent.
 
@@ -131,3 +136,29 @@ External tools come from MCP servers declared in `~/.gg/mcp.json`:
 ```
 
 `internal/mcp` dials each server (stdio subprocess or streamable HTTP) and adapts its tools as `mcp_<server>_<tool>` (sanitized to function-calling-safe names, max 64 chars, numeric suffix on collision). Server tools always implement `ApprovalDescriber`: every MCP call is approval-gated. Connections are memoized per `Service` (one dial per conversation) and reaped on `Service.Close`. A server that fails to dial or list is skipped for the Service's lifetime, so one broken server cannot slow every turn. stdio servers inherit only a minimal environment (PATH/HOME plus the server's own `env` map) — the parent process environment is never passed through wholesale.
+
+### Skills
+
+Skills (`internal/skills`) are the third extension layer: markdown playbooks loaded from project skill roots and `~/.agents/skills`, read by the model on demand. A skill adds knowledge and procedure, not code execution — the agent carries out skill steps with the existing tool surface, so a skill inherits the approval policy of the tools it uses. Trust boundary: skills are prompt content from the repo or the user's own files; treat third-party skill text like any untrusted prompt input.
+
+### Extension layers
+
+The three layers, from most to least trusted:
+
+1. **Builtin providers** (`internal/app/toolregistry.go`): compiled into gg, built per turn, degrading to absent when prerequisites are missing (no Chromium, Google not connected) or unsupported on the platform (`Available` gate). Writes and external side effects implement `agent.ApprovalDescriber`. Worked example: the computer tools — `internal/tools/computer.go` plus per-OS backends; on Windows and other Unixes the capability is neither built nor advertised.
+2. **MCP servers** (`~/.gg/mcp.json`, `internal/mcp`): external processes exposing tools as `mcp_<server>_<tool>`; always approval-gated; connections memoized per `Service`; a broken server is skipped, never fatal.
+3. **Skills** (`internal/skills`): markdown procedures the model reads on demand; no new code runs; approval comes from the tools the steps use.
+
+`app.ToolCapabilities()` derives the advertised set from the registry, so clients never see a capability whose tools cannot be built.
+
+## Quality gates
+
+Every PR is expected to arrive green and stay reviewable:
+
+- **CI**: the 6 checks (Go on ubuntu-latest and macos-latest, Web and Electron) must pass; `go vet ./...` runs in CI and must be clean.
+- **Race**: `go test -race` on `internal/app`, `internal/session`, `internal/transport/...` (CI runs this on Linux).
+- **Format**: `gofmt -l` clean. Run `make check` locally before pushing — it runs format, vet, and the full test suite.
+- **New packages**: interfaces first, unit tests on the core paths, typed errors, doc comments on exported symbols.
+- **Size**: keep PRs under ~500 lines so one reviewer can hold them in their head; split bigger work into stacked phases.
+- **Review**: Codex review findings are verified independently — a finding is fixed only after confirming it against the code, not on the review's say-so. Valid P0/P1/P2 are fixed; P3s are judgment calls. Merge only on green CI.
+- **Platforms**: Linux and macOS are supported. `internal/tools` and `internal/app` must also compile for Windows (`GOOS=windows go build`), and every new platform-split file needs an `other` stub so the package compiles on any Unix target.
