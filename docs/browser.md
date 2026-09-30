@@ -1,35 +1,30 @@
-# 浏览器（docs/browser.md）
+# Browser (docs/browser.md)
 
-gg 通过 **Chrome DevTools Protocol (CDP)** 驱动本地 headless Chromium。
-实现是纯标准库的最小 WS 客户端（`internal/browser/ws`），无第三方依赖。
+gg drives a local headless Chromium over **Chrome DevTools Protocol (CDP)**.
+The implementation is a minimal, stdlib-only WebSocket client (`internal/browser/ws`) with no third-party dependencies.
 
-## 能力（第一期：读 + 截图）
+## Capabilities (phase one: read + screenshot)
 
-- `browser_navigate {url}`：加载页面并等待 load 完成，返回标题。
-- `browser_read`：返回当前页渲染文本（`document.body.innerText`，截断 12000 rune）。
-- `browser_screenshot`：截取视口 PNG，存到 `~/.gg/media/screenshots/`（0600）。
+- `browser_navigate {url}`: loads the page, waits for load completion, returns the title.
+- `browser_read`: returns the rendered text of the current page (`document.body.innerText`, truncated at 12,000 runes).
+- `browser_screenshot`: captures a viewport PNG into `~/.gg/media/screenshots/` (0600).
 
-填表/点击等写操作是下一期，且必须走 approval。
+Form filling, clicking, and other write operations come in a later phase and will require approval.
 
-## 运行要求
+## Requirements
 
-需要本机有 Chromium：按 `chromium`、`chromium-browser`、`google-chrome`、
-`google-chrome-stable` 顺序查找（macOS 看 `/Applications` 下的 Chrome/Chromium），
-或用 `GG_CHROMIUM` 直接指定二进制路径。找不到时工具返回明确错误，不静默失败。
+A local Chromium is required: probed in order `chromium`, `chromium-browser`, `google-chrome`, `google-chrome-stable` (on macOS, Chrome/Chromium under `/Applications`), or specify the binary path directly with `GG_CHROMIUM`. When none is found the tools return an explicit error instead of failing silently.
 
-Chromium 以 `--headless=new --remote-debugging-port=0` 启动（默认保留
-sandbox；仅当 `GG_BROWSER_NO_SANDBOX=1` 时禁用，用于容器等内核不支持
-sandbox 的环境）。每个会话（Service）复用一个 session（懒启动），
-会话间互不干扰；进程与临时 profile 随 session 关闭而清理。
+Chromium starts with `--headless=new --remote-debugging-port=0` (sandbox kept by default; disabled only with `GG_BROWSER_NO_SANDBOX=1`, for environments like containers whose kernels don't support sandboxing). One browser session is shared per session (Service), started lazily, and sessions never interfere with each other; the process and temporary profile are cleaned up when the session closes.
 
-## 安全边界
+## Security boundaries
 
-- `browser_navigate` 与 CLI 只接受 `http(s)` URL，拒绝 `file:`、`javascript:` 等 scheme。
-- 截图/PNG 只写 `~/.gg/media/screenshots/`，0600。
+- `browser_navigate` and the CLI only accept `http(s)` URLs; `file:`, `javascript:` and other schemes are rejected.
+- Screenshots/PNGs are only written to `~/.gg/media/screenshots/`, 0600.
 
 ## CLI
 
 ```bash
-gg browser shot https://example.com   # 截图，输出 PNG 路径
-gg browser read https://example.com   # 输出页面渲染文本
+gg browser shot https://example.com   # screenshot, prints the PNG path
+gg browser read https://example.com   # prints the page's rendered text
 ```

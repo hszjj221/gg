@@ -20,6 +20,10 @@ go run ./cmd/gg --help
 
 Keep pull requests small and focused. Include tests for behavior changes, and update `README.md` when user-facing behavior changes.
 
+## Documentation
+
+All user-facing documents are bilingual: English is the default (`README.md`, `docs/*.md`), Simplified Chinese lives in the `.zh-CN.md` twin (`README.zh-CN.md`, `docs/<name>.zh-CN.md`). When you add or change a document, update both versions and keep cross-links within the same language.
+
 For code style, use standard Go formatting:
 
 ```bash

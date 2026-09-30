@@ -1,39 +1,39 @@
-# Connectors（外部服务连接）
+# Connectors (third-party service connections)
 
-gg 通过 connector 把外部服务接给 agent。目前支持 **Google**（Gmail + Google Calendar），后续按同一框架扩展。
+gg connects external services to the agent through connectors. **Google** (Gmail + Google Calendar) is supported today; more will follow the same framework.
 
-## 连接 Google
+## Connect Google
 
 ```bash
 gg connect google --client-id YOUR_CLIENT_ID
 ```
 
-流程：
+The flow:
 
-1. gg 在 `127.0.0.1` 起一个临时回调服务，打印授权 URL（并尝试自动打开浏览器）。
-2. 在浏览器里用你的 Google 账号同意授权（Gmail 读取/发送、日历事件）。
-3. 回调成功后，token 存到 `~/.gg/connectors/google.json`（0600，只有你能读）。
+1. gg starts a temporary callback server on `127.0.0.1`, prints the authorization URL (and tries to open the browser automatically).
+2. Consent in the browser with your Google account (Gmail read/send, calendar events).
+3. After a successful callback, the token is stored in `~/.gg/connectors/google.json` (0600, readable only by you).
 
-无浏览器/远程机器时加 `--manual`：授权后浏览器会显示无法连接，把地址栏的完整 URL 粘贴回终端即可：
+On headless/remote machines add `--manual`: after authorizing, the browser shows a connection failure; paste the full URL from the address bar back into the terminal:
 
 ```bash
 gg connect google --client-id YOUR_CLIENT_ID --manual
 ```
 
-### Client ID 从哪来
+### Where to get a Client ID
 
-gg 是开源软件，不能内置 Google OAuth 凭据。你需要自己创建一个（一次）：
+gg is open-source and cannot ship Google OAuth credentials. Create your own (once):
 
-1. 打开 https://console.cloud.google.com/apis/credentials
-2. 创建凭据 → OAuth 客户端 ID → 应用类型选 **桌面设备**（Desktop app）
-3. 启用 **Gmail API** 和 **Google Calendar API**（API 库里搜索启用）
-4. 把 Client ID 传给 `gg connect google`
+1. Open https://console.cloud.google.com/apis/credentials
+2. Create credentials → OAuth client ID → application type **Desktop app**
+3. Enable the **Gmail API** and **Google Calendar API** (search and enable in the API library)
+4. Pass the Client ID to `gg connect google`
 
-Desktop app 类型不需要 client secret（走 PKCE）。个人使用时，Google Cloud 项目保持"测试模式"即可（`gmail.send` 是敏感 scope，测试模式下自用足够；要公开发布再走 Google 验证）。
+The Desktop app type needs no client secret (PKCE flow). For personal use, keeping the Google Cloud project in "Testing" mode is enough (`gmail.send` is a sensitive scope; testing mode suffices for self-use — go through Google verification only if you publish publicly).
 
-> 注意：测试模式下 refresh token **7 天过期**（Google 规定，Gmail/Calendar 这类敏感 scope 不豁免）。7 天后需要重新 `gg connect google` 走一遍授权。长期使用请把 OAuth 同意屏幕设为"已发布"（需要 Google 验证，或保持测试用户列表里有你自己——发布后测试用户限制解除，token 不再 7 天过期）。
+> Note: in testing mode, refresh tokens **expire after 7 days** (a Google rule; sensitive scopes like Gmail/Calendar are not exempt). Re-run `gg connect google` after 7 days. For long-term use, set the OAuth consent screen to "Published" (requires Google verification; or keep yourself in the test-user list — publishing lifts the test-user restriction and tokens no longer expire in 7 days).
 
-Client ID 也可以写进 `~/.gg/config.json` 或环境变量，避免每次传 flag：
+The Client ID can also go into `~/.gg/config.json` or environment variables so you don't pass the flag every time:
 
 ```json
 {"connectors": {"google": {"clientId": "...", "clientSecret": "..."}}}
@@ -41,43 +41,43 @@ Client ID 也可以写进 `~/.gg/config.json` 或环境变量，避免每次传 
 
 ```bash
 export GG_GOOGLE_CLIENT_ID=...
-export GG_GOOGLE_CLIENT_SECRET=...   # 可选
+export GG_GOOGLE_CLIENT_SECRET=...   # optional
 ```
 
-优先级：`--client-id` flag > 环境变量 > 配置文件。
+Precedence: `--client-id` flag > environment variables > config file.
 
-### 管理连接
+### Manage connections
 
 ```bash
-gg connect list            # 已连接的服务
-gg connect status google   # scopes、token 有效期
-gg connect remove google   # 断开（删除本地 token）
+gg connect list            # connected services
+gg connect status google   # scopes, token expiry
+gg connect remove google   # disconnect (deletes the local token)
 ```
 
-## Agent 能做什么
+## What the agent can do
 
-连接成功后，agent 自动获得 5 个工具（未连接时不存在）：
+Once connected, the agent automatically gets 5 tools (they don't exist when disconnected):
 
-| 工具 | 说明 | 审批 |
+| Tool | Description | Approval |
 |---|---|---|
-| `gmail_search` | 按 Gmail 搜索语法查邮件，如 `newer_than:1d`、`from:boss@example.com`、`is:unread` | 否 |
-| `gmail_read` | 读一封邮件（From/Subject/Date + 正文） | 否 |
-| `gmail_send` | 发邮件 | **是** |
-| `calendar_agenda` | 查未来 N 天日程（默认今天） | 否 |
-| `calendar_create` | 创建日历事件 | **是** |
+| `gmail_search` | Search mail with Gmail syntax, e.g. `newer_than:1d`, `from:boss@example.com`, `is:unread` | No |
+| `gmail_read` | Read one message (From/Subject/Date + body) | No |
+| `gmail_send` | Send mail | **Yes** |
+| `calendar_agenda` | List events for the next N days (today by default) | No |
+| `calendar_create` | Create a calendar event | **Yes** |
 
-示例：
+Examples:
 
-- "总结一下今天的邮件" → `gmail_search("newer_than:1d")` → 逐封 `gmail_read` → 中文总结
-- "我明天下午有什么会" → `calendar_agenda`（days=2）
-- "帮我约个明天上午 10 点的会" → `calendar_create`（需你确认）
+- "Summarize today's mail" → `gmail_search("newer_than:1d")` → `gmail_read` each → Chinese summary
+- "What meetings do I have tomorrow afternoon" → `calendar_agenda` (days=2)
+- "Schedule a meeting for 10 AM tomorrow" → `calendar_create` (needs your confirmation)
 
-申请的 scope 是最小集：`gmail.readonly` + `gmail.send`（不要 `gmail.modify` 全权）+ `calendar.events`（只要事件读写，不要整个日历设置）。
+The requested scopes are the minimal set: `gmail.readonly` + `gmail.send` (no full `gmail.modify`) + `calendar.events` (event read/write only, not whole-calendar settings).
 
-## 安全边界
+## Security boundaries
 
-- OAuth 回调只绑 `127.0.0.1`，随机端口，`state` 防 CSRF。
-- token 文件 0600、目录 0700；access token 过期自动用 refresh token 续（跨进程加锁，不会重复刷新）。
-- `gmail_send` / `calendar_create` 必须经过你的确认（preview 显示收件人/主题/时间）；定时任务默认会被拒绝，除非任务显式开了 `--allow-all`。
-- 日志和报错里永远不会打印 token。
-- 撤销：在 Google 账号的"第三方访问权限"里移除，或本地 `gg connect remove google`。
+- The OAuth callback binds only to `127.0.0.1`, on a random port, with `state` CSRF protection.
+- Token file 0600, directory 0700; expired access tokens are refreshed automatically via the refresh token (cross-process locking, no duplicate refreshes).
+- `gmail_send` / `calendar_create` require your confirmation (preview shows recipients/subject/time); scheduled jobs are denied by default unless the job explicitly sets `--allow-all`.
+- Tokens are never printed in logs or error messages.
+- To revoke: remove access under "Third-party access" in your Google account, or run `gg connect remove google` locally.
