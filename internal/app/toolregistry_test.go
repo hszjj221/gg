@@ -16,7 +16,11 @@ var errTestProvider = errors.New("test provider failure")
 
 func TestToolCapabilitiesDerivedFromRegistry(t *testing.T) {
 	got := ToolCapabilities()
-	want := []string{"memory", "kb", "artifact", "connector", "media", "browser", "mcp"}
+	// The computer capability is only advertised where it has a backend.
+	want := []string{"memory", "kb", "artifact", "connector", "media", "browser", "computer", "mcp"}
+	if !computerToolsSupported() {
+		want = []string{"memory", "kb", "artifact", "connector", "media", "browser", "mcp"}
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ToolCapabilities() = %v, want %v", got, want)
 	}
@@ -31,6 +35,22 @@ func TestToolCapabilitiesDerivedFromRegistry(t *testing.T) {
 	for _, name := range want {
 		if seen[name] != 1 {
 			t.Errorf("provider %q registered %d times", name, seen[name])
+		}
+	}
+}
+
+func TestComputerCapabilityAbsentOffSupportedPlatforms(t *testing.T) {
+	// The registry must not advertise computer tools where they cannot run:
+	// ToolCapabilities is what transports (e.g. system.info) show clients.
+	for _, p := range toolProviders {
+		if p.Name != "computer" {
+			continue
+		}
+		if p.Available == nil {
+			t.Fatal("computer provider needs an Available gate")
+		}
+		if p.Available() != computerToolsSupported() {
+			t.Errorf("Available() = %v, computerToolsSupported() = %v", p.Available(), computerToolsSupported())
 		}
 	}
 }

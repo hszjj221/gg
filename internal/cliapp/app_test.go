@@ -11,7 +11,9 @@ import (
 	"testing"
 
 	"github.com/hszjj221/gg/internal/agent"
+	"github.com/hszjj221/gg/internal/app"
 	"github.com/hszjj221/gg/internal/config"
+	"github.com/hszjj221/gg/internal/contextmgr"
 	"github.com/hszjj221/gg/internal/memory"
 	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/skills"
@@ -587,8 +589,15 @@ func TestTurnExecutorAutoCompactsWhenOverBudget(t *testing.T) {
 	cfg := config.Config{
 		CWD:       dir,
 		Selection: "openai:gpt-4.1",
-		Context:   config.ContextConfig{MaxPromptTokens: 1600, TailTurns: 1, SummaryMaxTokens: 100, AutoCompact: true},
+		Context:   config.ContextConfig{TailTurns: 1, SummaryMaxTokens: 100, AutoCompact: true},
 	}
+	// Size the budget from the real registry: a hardcoded budget rots as
+	// providers are added (and as environment-dependent providers like the
+	// browser tools appear in CI but not locally). The 700-token slack must
+	// clear the ~1060-token history so compaction triggers, while leaving
+	// room for system + tools + the tail turn afterwards.
+	toolTokens := contextmgr.EstimateTools(app.RegistryToolDefinitions(context.Background(), cfg))
+	cfg.Context.MaxPromptTokens = toolTokens + 700
 	executor := newTurnExecutor(
 		cfg,
 		func(config.Config) agent.Provider { return provider },
