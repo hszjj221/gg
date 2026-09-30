@@ -98,6 +98,8 @@ stdio 每行一个 JSON-RPC 对象，支持并发请求（等审批时另一个�
 
 React 应用依赖一个小 `Transport` 接口。`HttpTransport` 经带 Bearer <redacted> 的 HTTP 与 `ggd` 通信（POST `/rpc` + SSE `/events`），Web 与 Electron 共用。桌面端由 Electron 主进程以 `ggd --http 127.0.0.1:<端口> --token <随机> --exit-on-stdin-eof` 拉起，只把 endpoint、token 和工作区标签暴露给 renderer；renderer 拿不到 Node.js。sidecar 的 stdin 是一条主进程持有的控制管道：父进程异常退出、没走 `before-quit` 清理（崩溃/SIGKILL）时，stdin 到达 EOF，daemon 自行退出，不会变成拿着丢失 token 和端口的孤儿进程。
 
+CLI（`gg -p`、脚本模式、管理命令）有意不做成 thin client：它经 `internal/cliapp` 在进程内直接运行 agent，从不经 HTTP 连 `ggd`。好处是无 daemon 也可用、延迟更低、对脚本友好；代价是同一份 agent 逻辑存在两条执行路径（进程内 vs. `ggd` 承载的 Web/Electron）。这是已知取舍，不是疏漏：只有当两条路径出现可观测的行为漂移时，才把 CLI 收敛到 HTTP 传输上。
+
 ## 扩展规则
 
 加行为时：

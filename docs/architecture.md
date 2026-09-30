@@ -97,6 +97,8 @@ stdio uses one JSON-RPC object per line and supports concurrent requests, which 
 
 The React app depends on a small `Transport` interface. `HttpTransport` talks to `ggd` over Bearer-protected HTTP (POST `/rpc` plus SSE `/events`) and is shared by the Web and Electron clients. On desktop, the Electron main process spawns `ggd --http 127.0.0.1:<port> --token <random> --exit-on-stdin-eof` and exposes only the endpoint, token, and workspace label to the renderer; renderer code has no Node.js access. The sidecar's stdin is a control pipe that the main process holds: if the parent dies without cleanup (crash/SIGKILL skips `before-quit`), stdin reaches EOF and the daemon shuts itself down instead of lingering as an orphan.
 
+The CLI (`gg -p`, script mode, and management commands) is deliberately not a thin client: it runs the agent in-process through `internal/cliapp` and never talks to `ggd` over HTTP. This keeps the CLI usable with no daemon running, with lower latency and script-friendly behavior, at the cost of two execution paths for the same agent logic (in-process vs. `ggd`-hosted for Web/Electron). This is a known trade-off, not an oversight: converge the CLI onto the HTTP transport only if the two paths observably drift in behavior.
+
 ## Extension rules
 
 When adding behavior:
