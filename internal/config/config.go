@@ -43,10 +43,14 @@ type Options struct {
 }
 
 type ProviderConfig struct {
-	Type    string   `json:"type"`
-	BaseURL string   `json:"baseURL"`
-	APIKey  string   `json:"apiKey"`
-	Models  []string `json:"models"`
+	Type    string `json:"type"`
+	BaseURL string `json:"baseURL"`
+	APIKey  string `json:"apiKey"`
+	// APIKeyEnv names an environment variable holding the API key, so
+	// secrets don't have to live in the config file. A literal APIKey
+	// wins over APIKeyEnv when both are set.
+	APIKeyEnv string   `json:"apiKeyEnv"`
+	Models    []string `json:"models"`
 }
 
 type ContextConfig struct {
@@ -273,7 +277,7 @@ func (c Config) WithSelection(selection string) (Config, error) {
 	next.Selection = providerName + ":" + model
 	next.ProviderType = provider.Type
 	next.BaseURL = first(next.baseURLOverride, provider.BaseURL, DefaultBaseURL)
-	next.APIKey = first(next.apiKeyOverride, provider.APIKey)
+	next.APIKey = first(next.apiKeyOverride, provider.APIKey, os.Getenv(strings.TrimSpace(provider.APIKeyEnv)))
 	return next, nil
 }
 

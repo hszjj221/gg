@@ -240,6 +240,103 @@ func TestResolveRejectsUnknownModelWhenProviderHasModelList(t *testing.T) {
 	}
 }
 
+func TestResolveAPIKeyEnvResolvesKeyFromEnvironment(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GG_TEST_DEEPSEEK_KEY", "env-secret")
+	writeConfig(t, home, `{
+  "default": "deepseek:deepseek-chat",
+  "providers": {
+    "deepseek": {
+      "type": "openai-compatible",
+      "baseURL": "https://api.deepseek.com",
+      "apiKeyEnv": "GG_TEST_DEEPSEEK_KEY",
+      "models": ["deepseek-chat"]
+    }
+  }
+}`)
+
+	cfg, err := Resolve(Options{HomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.APIKey != "env-secret" {
+		t.Fatalf("apiKeyEnv was not resolved from environment: %+v", cfg)
+	}
+}
+
+func TestResolveLiteralAPIKeyWinsOverAPIKeyEnv(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GG_TEST_DEEPSEEK_KEY", "env-secret")
+	writeConfig(t, home, `{
+  "default": "deepseek:deepseek-chat",
+  "providers": {
+    "deepseek": {
+      "type": "openai-compatible",
+      "baseURL": "https://api.deepseek.com",
+      "apiKey": "literal-key",
+      "apiKeyEnv": "GG_TEST_DEEPSEEK_KEY",
+      "models": ["deepseek-chat"]
+    }
+  }
+}`)
+
+	cfg, err := Resolve(Options{HomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.APIKey != "literal-key" {
+		t.Fatalf("literal apiKey did not win over apiKeyEnv: %+v", cfg)
+	}
+}
+
+func TestResolveCLIAPIKeyWinsOverAPIKeyEnv(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GG_TEST_DEEPSEEK_KEY", "env-secret")
+	writeConfig(t, home, `{
+  "default": "deepseek:deepseek-chat",
+  "providers": {
+    "deepseek": {
+      "type": "openai-compatible",
+      "baseURL": "https://api.deepseek.com",
+      "apiKeyEnv": "GG_TEST_DEEPSEEK_KEY",
+      "models": ["deepseek-chat"]
+    }
+  }
+}`)
+
+	cfg, err := Resolve(Options{HomeDir: home, APIKey: "cli-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.APIKey != "cli-key" {
+		t.Fatalf("CLI --api-key did not win over apiKeyEnv: %+v", cfg)
+	}
+}
+
+func TestResolveMissingAPIKeyEnvVarLeavesKeyEmpty(t *testing.T) {
+	home := t.TempDir()
+	os.Unsetenv("GG_TEST_MISSING_KEY")
+	writeConfig(t, home, `{
+  "default": "deepseek:deepseek-chat",
+  "providers": {
+    "deepseek": {
+      "type": "openai-compatible",
+      "baseURL": "https://api.deepseek.com",
+      "apiKeyEnv": "GG_TEST_MISSING_KEY",
+      "models": ["deepseek-chat"]
+    }
+  }
+}`)
+
+	cfg, err := Resolve(Options{HomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.APIKey != "" {
+		t.Fatalf("unset apiKeyEnv var should leave key empty: %+v", cfg)
+	}
+}
+
 func writeConfig(t *testing.T, home, content string) {
 	t.Helper()
 	dir := filepath.Join(home, ".gg")
