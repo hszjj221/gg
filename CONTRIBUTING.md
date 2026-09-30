@@ -12,8 +12,7 @@ Requirements:
 Run the local checks before sending a pull request:
 
 ```bash
-go test -count=1 ./...
-go vet ./...
+make check   # gofmt + go vet + go test ./...
 go run ./cmd/gg --help
 ```
 
