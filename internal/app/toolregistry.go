@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,11 @@ type ToolProvider struct {
 	// the capability degrades to absent for this turn — Chromium not
 	// installed, Google not connected, MCP server unreachable, ...
 	Build func(ctx context.Context, tc ToolContext) ([]agent.Tool, error)
+	// Available reports whether the capability can be provided on this
+	// platform at all. Nil means always available. A provider that is not
+	// available is neither built nor advertised (e.g. computer tools off
+	// Linux/macOS).
+	Available func() bool
 }
 
 // ToolContext carries everything a provider needs to build its tools.
@@ -136,20 +142,41 @@ var toolProviders = []ToolProvider{
 	{Name: "connector", Build: buildConnectorTools},
 	{Name: "media", Build: buildMediaTools},
 	{Name: "browser", Build: buildBrowserTools},
+	{Name: "computer", Build: buildComputerTools, Available: computerToolsSupported},
 	{Name: "mcp", Build: buildMCPTools},
 }
 
 // ToolCapabilities returns the capability identifiers the registry can
-// provide. Transports derive their advertised capabilities from this so the
-// list cannot drift from the tools actually registered.
+// provide on this platform. Transports derive their advertised capabilities
+// from this so the list cannot drift from the tools actually registered.
 func ToolCapabilities() []string {
 	names := make([]string, 0, len(toolProviders))
 	for _, p := range toolProviders {
-		if p.Name != "" {
-			names = append(names, p.Name)
+		if p.Name == "" {
+			continue
 		}
+		if p.Available != nil && !p.Available() {
+			continue
+		}
+		names = append(names, p.Name)
 	}
 	return names
+}
+
+// RegistryToolDefinitions builds the full turn toolset for cfg and returns
+// the tools' definitions. It exists so tests can size context budgets from
+// the real registry instead of a hardcoded tool count: providers come and
+// go with the environment (Chromium installed, MCP configured, ...) and the
+// registry grows over time, so a fixed budget rots. A nil provider is fine;
+// only definitions are needed.
+func RegistryToolDefinitions(ctx context.Context, cfg config.Config) []agent.ToolDefinition {
+	svc := NewService(Options{Config: cfg})
+	built := svc.buildTools(ctx, nil)
+	defs := make([]agent.ToolDefinition, 0, len(built))
+	for _, tl := range built {
+		defs = append(defs, tl.Definition())
+	}
+	return defs
 }
 
 func buildCoreTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
@@ -283,6 +310,31 @@ func buildBrowserTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error
 		tools.NewBrowserNavigateTool(tc.BrowserPool),
 		tools.NewBrowserReadTool(tc.BrowserPool),
 		tools.NewBrowserScreenshotTool(tc.BrowserPool),
+	}, nil
+}
+
+// computerToolsSupported reports whether the local-computer tools have a
+// backend on this platform. Only Linux and macOS do; elsewhere (Windows,
+// other Unixes) the whole capability degrades to absent instead of
+// advertising tools that always fail.
+func computerToolsSupported() bool {
+	return runtime.GOOS == "linux" || runtime.GOOS == "darwin"
+}
+
+// buildComputerTools registers the local-computer tools (system info,
+// process management, open, notify, clipboard).
+func buildComputerTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
+	if !computerToolsSupported() {
+		return nil, nil
+	}
+	return []agent.Tool{
+		tools.NewComputerInfoTool(),
+		tools.NewProcessListTool(),
+		tools.NewProcessKillTool(),
+		tools.NewOpenTool(tc.Config.CWD),
+		tools.NewNotifyTool(),
+		tools.NewClipboardReadTool(),
+		tools.NewClipboardWriteTool(),
 	}, nil
 }
 

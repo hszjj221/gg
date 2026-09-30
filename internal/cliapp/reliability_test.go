@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/hszjj221/gg/internal/agent"
+	"github.com/hszjj221/gg/internal/app"
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/contextmgr"
 	"github.com/hszjj221/gg/internal/session"
@@ -75,7 +76,16 @@ func TestCompactionRunsBetweenToolBatchesWithoutLosingTranscript(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &longTurnProvider{}
-	cfg := config.Config{CWD: dir, Context: config.ContextConfig{MaxPromptTokens: 2000, MaxOutputTokens: 400, TailTurns: 6, SummaryMaxTokens: 100, AutoCompact: true}}
+	cfg := config.Config{CWD: dir, Context: config.ContextConfig{MaxOutputTokens: 400, TailTurns: 6, SummaryMaxTokens: 100, AutoCompact: true}}
+	// Size the budget from the real registry (see TestTurnExecutorAutoCompactsWhenOverBudget):
+	// the hardcoded 2000 rotted as providers were added. The 1100-token slack
+	// must clear one tool batch (~640 tokens: prompt + tool call + blob.txt
+	// result) so the turn proceeds, yet be exceeded once the second batch
+	// lands (~1270 tokens), so compaction runs mid-turn with the latest batch
+	// kept as tail; the machinery then keeps every request within budget by
+	// construction.
+	toolTokens := contextmgr.EstimateTools(app.RegistryToolDefinitions(context.Background(), cfg))
+	cfg.Context.MaxPromptTokens = toolTokens + 1100
 	e := newTurnExecutor(cfg, func(config.Config) agent.Provider { return p }, nil, nil, nil, skills.Set{}, true)
 	result, err := e.Run(context.Background(), "Preserve my constraint and inspect the file", nil, nil)
 	if err != nil {
@@ -85,7 +95,7 @@ func TestCompactionRunsBetweenToolBatchesWithoutLosingTranscript(t *testing.T) {
 		t.Fatalf("did not compact inside turn: %+v result=%+v", p, result)
 	}
 	for _, req := range p.requests {
-		if tokens := contextmgr.EstimateMessages(req.Messages) + contextmgr.EstimateTools(req.Tools); tokens > 2000 {
+		if tokens := contextmgr.EstimateMessages(req.Messages) + contextmgr.EstimateTools(req.Tools); tokens > cfg.Context.MaxPromptTokens {
 			t.Fatalf("sent oversized request: %d", tokens)
 		}
 	}
