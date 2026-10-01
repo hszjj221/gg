@@ -260,6 +260,9 @@ func chatMessages(messages []agent.Message) []map[string]any {
 			item["content"] = msg.Content
 		case agent.RoleAssistant:
 			item["content"] = msg.Content
+			if msg.Reasoning != "" {
+				item["reasoning_content"] = msg.Reasoning
+			}
 			if len(msg.ToolCalls) > 0 {
 				item["tool_calls"] = outboundToolCalls(msg.ToolCalls)
 			}
@@ -307,8 +310,9 @@ type streamChunk struct {
 	} `json:"error"`
 	Choices []struct {
 		Delta struct {
-			Content   string          `json:"content"`
-			ToolCalls []deltaToolCall `json:"tool_calls"`
+			Content          string          `json:"content"`
+			ReasoningContent string          `json:"reasoning_content"`
+			ToolCalls        []deltaToolCall `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -349,6 +353,7 @@ func parseStream(r io.Reader, onEvent func(agent.Event)) (result agent.Assistant
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	var text strings.Builder
+	var reasoning strings.Builder
 	toolCalls := map[int]*toolCallBuilder{}
 	finishReason := ""
 	var usage agent.Usage
@@ -389,6 +394,12 @@ func parseStream(r io.Reader, onEvent func(agent.Event)) (result agent.Assistant
 					onEvent(agent.Event{Type: agent.EventTextDelta, Text: choice.Delta.Content})
 				}
 			}
+			if choice.Delta.ReasoningContent != "" {
+				reasoning.WriteString(choice.Delta.ReasoningContent)
+				if onEvent != nil {
+					onEvent(agent.Event{Type: agent.EventThinkingDelta, Text: choice.Delta.ReasoningContent})
+				}
+			}
 			for _, tc := range choice.Delta.ToolCalls {
 				builder := toolCalls[tc.Index]
 				if builder == nil {
@@ -427,8 +438,9 @@ func parseStream(r io.Reader, onEvent func(agent.Event)) (result agent.Assistant
 	content := text.String()
 	msg := agent.AssistantMessage{
 		Message: agent.Message{
-			Role:    agent.RoleAssistant,
-			Content: content,
+			Role:      agent.RoleAssistant,
+			Content:   content,
+			Reasoning: reasoning.String(),
 		},
 		StopReason: agent.StopReasonEndTurn,
 		Usage:      usage,

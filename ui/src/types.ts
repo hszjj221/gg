@@ -44,7 +44,7 @@ export interface SystemInfo {
 }
 
 export interface AgentEvent {
-  type: 'text_delta' | 'tool_call_start' | 'tool_call_finish' | 'user_message';
+  type: 'text_delta' | 'thinking_delta' | 'tool_call_start' | 'tool_call_finish' | 'user_message';
   text?: string;
   toolCallId?: string;
   toolName?: string;

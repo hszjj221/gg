@@ -182,7 +182,7 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	})
 
 	if parsed.Prompt != "" {
-		return runPrompt(ctx, executor, parsed.Prompt, stdout, stderr, false, parsed.Usage, promptApprover(parsed, stdin, stderr))
+		return runPrompt(ctx, executor, parsed.Prompt, stdout, stderr, false, parsed.Usage, promptApprover(parsed, stdin, stderr), isTerm)
 	}
 	if parsed.Print {
 		fmt.Fprintln(stderr, "prompt is required in print mode")
@@ -191,7 +191,7 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	reader := bufio.NewReader(stdin)
 	// Line-based approval always runs through the stderr prompt, which needs
 	// stdin + stderr as terminals (see lineApprovalTerminals).
-	return runInteractive(ctx, executor, reader, stdout, stderr, sessionName(loaded), parsed.Usage, interactiveApprover(parsed, reader, stderr, lineApprovalTerminals(stdin, stderr, isTerm)))
+	return runInteractive(ctx, executor, reader, stdout, stderr, sessionName(loaded), parsed.Usage, interactiveApprover(parsed, reader, stderr, lineApprovalTerminals(stdin, stderr, isTerm)), isTerm)
 }
 
 func runPrompt(
@@ -203,21 +203,31 @@ func runPrompt(
 	stream bool,
 	showUsage bool,
 	approver agent.Approver,
+	isTerm func(any) bool,
 ) int {
 	var onDelta func(string)
-	var onEvent func(agent.Event)
 	var streamed strings.Builder
+	stderrTerm := isTerm != nil && isTerm(stderr)
 	if stream {
 		onDelta = func(text string) {
 			streamed.WriteString(text)
 			fmt.Fprint(stdout, text)
 		}
 	}
-	if onDelta != nil {
-		onEvent = func(event agent.Event) {
-			if event.Type == agent.EventTextDelta {
+	onEvent := func(event agent.Event) {
+		switch event.Type {
+		case agent.EventTextDelta:
+			if onDelta != nil {
 				onDelta(event.Text)
 			}
+		case agent.EventThinkingDelta:
+			// Thinking streams to stderr so scripted stdout stays clean,
+			// in both streaming and one-shot modes.
+			text := event.Text
+			if stderrTerm {
+				text = "\x1b[2m" + text + "\x1b[0m"
+			}
+			fmt.Fprint(stderr, text)
 		}
 	}
 	result, err := executor.Run(ctx, prompt, onEvent, approver)
@@ -399,6 +409,7 @@ func runInteractive(
 	initialSessionName string,
 	showUsage bool,
 	approver agent.Approver,
+	isTerm func(any) bool,
 ) int {
 	fmt.Fprintln(stdout, "gg interactive mode. Press Ctrl+D to exit.")
 	currentSessionName := initialSessionName
@@ -428,7 +439,7 @@ func runInteractive(
 			}
 			continue
 		}
-		code := runPrompt(ctx, executor, prompt, stdout, stderr, true, showUsage, approver)
+		code := runPrompt(ctx, executor, prompt, stdout, stderr, true, showUsage, approver, isTerm)
 		if code != 0 {
 			return code
 		}

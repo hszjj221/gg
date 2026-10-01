@@ -377,7 +377,7 @@ func runJobRun(ctx context.Context, cfg config.Config, options Options, store *s
 	rctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	started := time.Now()
-	code := runPrompt(rctx, executor, prompt, stdout, stderr, false, false, approver)
+	code := runPrompt(rctx, executor, prompt, stdout, stderr, false, false, approver, nil)
 	rec := scheduler.RunRecord{
 		JobID: job.ID, JobName: job.Name,
 		StartedAt: started, FinishedAt: time.Now(),
