@@ -1,6 +1,6 @@
 import type { ArtifactMeta, ArtifactPublishResult, ArtifactView, RunEvent, RunStatus, SessionSummary, SessionUpdate, Snapshot, SystemInfo, WaitResult } from './types';
 
-export const protocolVersion = '1.2';
+export const protocolVersion = '1.3';
 
 export class RPCError extends Error {
   constructor(

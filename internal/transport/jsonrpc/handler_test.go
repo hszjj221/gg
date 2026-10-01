@@ -309,3 +309,31 @@ func TestRunStartDefaultsToRequireApproval(t *testing.T) {
 		}
 	})
 }
+
+// TestSystemInfoOmitsDegradedProvidersWhenHealthy verifies the system.info
+// diagnostic endpoint stays backward compatible when no provider has
+// failed: degradedProviders is omitted, not an empty array.
+func TestSystemInfoOmitsDegradedProvidersWhenHealthy(t *testing.T) {
+	handler := NewHandler(testWorkspace(t))
+	resp := handler.Handle(context.Background(), Request{JSONRPC: Version, ID: []byte(`1`), Method: "system.info"})
+	if resp.Error != nil {
+		t.Fatal(resp.Error)
+	}
+	info, ok := resp.Result.(SystemInfo)
+	if !ok {
+		t.Fatalf("unexpected system.info result type %T", resp.Result)
+	}
+	if info.ProtocolVersion == "" || len(info.Capabilities) == 0 {
+		t.Fatalf("system.info lost its core fields: %+v", info)
+	}
+	if len(info.DegradedProviders) != 0 {
+		t.Fatalf("expected no degraded providers on a fresh workspace, got %+v", info.DegradedProviders)
+	}
+	data, err := json.Marshal(resp.Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsJSONKey(data, "degradedProviders") {
+		t.Fatalf("degradedProviders should be omitted when empty, got %s", data)
+	}
+}

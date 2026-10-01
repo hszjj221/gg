@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/artifact"
@@ -25,6 +26,9 @@ type WorkspaceOptions struct {
 	MemoryStore     *memory.Store
 	ArtifactStore   *artifact.Store
 	LibraryStore    *library.Store
+	// Log is passed to conversation services so tool provider build
+	// failures are visible in daemon logs. Nil means slog.Default().
+	Log *slog.Logger
 }
 
 // Workspace is the application facade used by non-terminal transports. It
@@ -39,6 +43,12 @@ type Workspace struct {
 	memStore        *memory.Store
 	artifacts       *artifact.Store
 	libraryStore    *library.Store
+	logger          *slog.Logger
+	// degraded is shared by every conversation service in the workspace:
+	// all sessions report provider build outcomes into it, so a provider
+	// that recovers in any session is cleared everywhere instead of
+	// lingering as a stale failure from a session that hasn't run since.
+	degraded *DegradedRegistry
 }
 
 type SessionSummary struct {
@@ -66,6 +76,8 @@ func NewWorkspace(options WorkspaceOptions) (*Workspace, error) {
 		memStore:        options.MemoryStore,
 		artifacts:       options.ArtifactStore,
 		libraryStore:    options.LibraryStore,
+		logger:          options.Log,
+		degraded:        &DegradedRegistry{},
 	}, nil
 }
 
@@ -246,6 +258,16 @@ func (w *Workspace) service(sessionID string) (*Service, error) {
 	return service, nil
 }
 
+// DegradedProviders returns the tool providers that failed their most
+// recent build in any open session, with reasons. Every session reports
+// both failures and recoveries into the shared registry, so a success in
+// one session clears a failure recorded by another — a fixed provider
+// stops being reported as degraded without every session having to run.
+// Empty means every build since the last failure succeeded.
+func (w *Workspace) DegradedProviders() []DegradedProvider {
+	return w.degraded.List()
+}
+
 func (w *Workspace) addLoaded(store *session.Store, loaded session.Loaded) (*Service, error) {
 	cfg := w.cfg
 	var err error
@@ -265,6 +287,8 @@ func (w *Workspace) addLoaded(store *session.Store, loaded session.Loaded) (*Ser
 		ModelRecorded:   loaded.LastModel != nil && loaded.LastModel.Selection == cfg.Selection,
 		Profile:         w.profile,
 		MemoryStore:     w.memStore,
+		Log:             w.logger,
+		Degraded:        w.degraded,
 	})
 	if _, err := w.manager.Add(service); err != nil {
 		return nil, err

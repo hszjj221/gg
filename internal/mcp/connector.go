@@ -39,6 +39,7 @@ type Connector struct {
 	configs   map[string]ServerConfig
 	toolLists map[string][]agent.Tool
 	failed    map[string]bool
+	failErr   map[string]error
 	usedNames map[string]bool
 }
 
@@ -55,6 +56,7 @@ func NewConnector(configPath string) *Connector {
 		configs:    map[string]ServerConfig{},
 		toolLists:  map[string][]agent.Tool{},
 		failed:     map[string]bool{},
+		failErr:    map[string]error{},
 		usedNames:  map[string]bool{},
 	}
 }
@@ -80,6 +82,7 @@ func (c *Connector) Tools(ctx context.Context) ([]agent.Tool, error) {
 			delete(c.configs, name)
 			delete(c.toolLists, name)
 			delete(c.failed, name)
+			delete(c.failErr, name)
 		}
 	}
 	// Rebuild the used-name set from the surviving servers so a removed
@@ -109,6 +112,21 @@ func (c *Connector) Tools(ctx context.Context) ([]agent.Tool, error) {
 	return out, nil
 }
 
+// FailedServers returns the servers that failed to dial or list, mapped
+// to the error that stopped them. A server stays listed until its config
+// changes or it is removed; callers use this to log per-server failures
+// that otherwise leave no trace (the provider still returns the working
+// servers' tools, so this is not a Build error).
+func (c *Connector) FailedServers() map[string]error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make(map[string]error, len(c.failErr))
+	for name, err := range c.failErr {
+		out[name] = err
+	}
+	return out
+}
+
 // connectLocked dials one server, lists its tools (all pages), and adapts
 // them. Callers must hold c.mu. A genuine failure marks the server failed:
 // it is skipped on later calls without retrying. Caller cancellation is
@@ -118,6 +136,7 @@ func (c *Connector) connectLocked(ctx context.Context, name string, sc ServerCon
 	if err != nil {
 		if ctx.Err() == nil {
 			c.failed[name] = true
+			c.failErr[name] = err
 		}
 		return nil, false
 	}
@@ -126,6 +145,7 @@ func (c *Connector) connectLocked(ctx context.Context, name string, sc ServerCon
 		_ = sess.Close()
 		if ctx.Err() == nil {
 			c.failed[name] = true
+			c.failErr[name] = err
 		}
 		return nil, false
 	}

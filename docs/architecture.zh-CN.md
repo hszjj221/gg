@@ -94,7 +94,14 @@ flowchart LR
 
 传输无关的方法：
 
-- `system.info`：gg 协议版本和能力协商
+- `system.info`：gg 协议版本和能力协商；同时报告 `degradedProviders`——
+  最近一次构建失败的工具能力及其原因（协议 1.3 新增，健康时省略）。
+  Provider 区分"预期禁用"（未装 Chromium、未连接 Google、无 MCP 配置）
+  与"运维失败"（store 打不开、MCP server 连不上）：只有后者会被记日志
+  并上报。所有 session 把失败和恢复都上报到同一个 workspace 级注册表，
+  任意 session 的一次成功构建就能清除该 provider 的 degraded 状态。
+  原因在发给客户端前会脱敏（home 目录替换为 `~`），完整错误保留在
+  daemon 日志中
 - `session.list`、`session.create`、`session.open`、`session.get`、`session.rename`
 - `session.action` 带 `tree`、`fork` 或 `clone`
 - `run.start`、`run.wait`、`run.get`、`run.active`、`run.cancel`、`run.approve`、`run.steer`

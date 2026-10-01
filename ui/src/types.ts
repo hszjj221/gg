@@ -41,6 +41,7 @@ export interface SessionUpdate extends Snapshot {
 export interface SystemInfo {
   protocolVersion: string;
   capabilities: string[];
+  degradedProviders?: { name: string; reason: string }[];
 }
 
 export interface AgentEvent {

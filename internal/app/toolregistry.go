@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -48,6 +50,10 @@ type ToolContext struct {
 	Location    *time.Location
 	LocationErr error
 	BrowserPool *tools.BrowserSessionPool
+	// Log receives provider-local operational warnings (e.g. one MCP
+	// server failing while others work). Never nil in buildTools; tests
+	// that build a ToolContext by hand should treat nil as slog.Default().
+	Log *slog.Logger
 	// Memoized holds per-Service resources so providers don't redo static
 	// probes or discard reusable clients every turn.
 	Memoized *ToolMemo
@@ -223,11 +229,12 @@ func buildKBTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
 }
 
 func buildArtifactTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
-	// Artifact tools degrade to absent when the store cannot be opened;
-	// everything else keeps working.
+	// Artifact.Open creates the store dir when missing; an error here is
+	// an operational failure (permissions, read-only fs), so it is
+	// propagated to the degradation tracker instead of degrading silently.
 	astore, err := artifact.Open(tc.Config.Artifacts.Dir)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 	return []agent.Tool{
 		tools.NewArtifactCreateTool(astore),
@@ -236,14 +243,19 @@ func buildArtifactTools(ctx context.Context, tc ToolContext) ([]agent.Tool, erro
 }
 
 func buildConnectorTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
-	// Connector tools degrade to absent when Google is not connected.
+	// A connector dir that cannot be opened is an operational failure and
+	// is propagated; a missing token is the expected "not connected"
+	// state and degrades silently.
 	cstore, err := connector.Open(tc.Config.Connectors.Dir)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 	tok, err := cstore.Load(google.Name)
 	if err != nil {
-		return nil, nil
+		if errors.Is(err, connector.ErrNotConnected) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	gclient, err := google.NewClient(cstore, google.Config{
 		ClientID:     tc.Config.Connectors.Google.ClientID,
@@ -342,6 +354,22 @@ func buildComputerTools(ctx context.Context, tc ToolContext) ([]agent.Tool, erro
 // ~/.gg/mcp.json (or no reachable servers) it degrades to absent. The
 // Connector is memoized per Service: servers are dialed once per
 // conversation, and stdio subprocesses are reaped on Service.Close.
+// Servers that fail to dial or list are warned about individually — their
+// tools are missing while the provider as a whole still works, so this is
+// logged per server rather than reported as a provider Build failure.
 func buildMCPTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
-	return tc.Memoized.MCPConnector(tc.Config.HomeDir).Tools(ctx)
+	conn := tc.Memoized.MCPConnector(tc.Config.HomeDir)
+	tools, err := conn.Tools(ctx)
+	if err != nil {
+		return nil, err
+	}
+	log := tc.Log
+	if log == nil {
+		log = slog.Default()
+	}
+	for name, ferr := range conn.FailedServers() {
+		log.Warn("mcp server failed; its tools are unavailable",
+			"server", name, "error", ferr)
+	}
+	return tools, nil
 }

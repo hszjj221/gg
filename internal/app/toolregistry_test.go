@@ -1,8 +1,11 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -308,6 +311,7 @@ func TestApprovalInvariantSweep(t *testing.T) {
 	}
 	cfg.Memory.Enabled = true
 	cfg.Artifacts.Dir = t.TempDir()
+	cfg.Connectors.Dir = t.TempDir()
 	tc := testToolContext(t, cfg)
 
 	var tools []agent.Tool
@@ -359,7 +363,7 @@ func TestApprovalInvariantConditionalTools(t *testing.T) {
 	}
 	if err := cstore.Save(google.Name, connector.Token{
 		AccessToken: "at", RefreshToken: "rt",
-		Expiry:      time.Now().Add(time.Hour), Scopes: google.Scopes,
+		Expiry: time.Now().Add(time.Hour), Scopes: google.Scopes,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -375,5 +379,211 @@ func TestApprovalInvariantConditionalTools(t *testing.T) {
 		tools.NewCalendarCreateTool(gclient, nil, nil),
 	} {
 		assertApprovalClassified(t, tool)
+	}
+}
+
+// TestBuildToolsRecordsDegradedProviders verifies a failing provider is
+// logged and recorded with its reason (not silently swallowed), and that a
+// later successful build clears the record.
+func TestBuildToolsRecordsDegradedProviders(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+	s := NewService(Options{
+		Config: config.Config{
+			HomeDir:    t.TempDir(),
+			CWD:        t.TempDir(),
+			Artifacts:  config.ArtifactConfig{Dir: t.TempDir()},
+			Connectors: config.ConnectorConfig{Dir: t.TempDir()},
+		},
+		Log: logger,
+	})
+	fail := true
+	broken := ToolProvider{
+		Name: "broken",
+		Build: func(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
+			if fail {
+				return nil, errTestProvider
+			}
+			return nil, nil
+		},
+	}
+	toolProviders = append(toolProviders, broken)
+	defer func() { toolProviders = toolProviders[:len(toolProviders)-1] }()
+
+	s.buildTools(context.Background(), nil)
+
+	degraded := s.DegradedProviders()
+	if len(degraded) != 1 || degraded[0].Name != "broken" {
+		t.Fatalf("expected [broken] degraded, got %+v", degraded)
+	}
+	if !strings.Contains(degraded[0].Reason, "test provider failure") {
+		t.Fatalf("degraded reason should carry the build error, got %q", degraded[0].Reason)
+	}
+	if out := logBuf.String(); !strings.Contains(out, "broken") || !strings.Contains(out, "test provider failure") {
+		t.Fatalf("expected build failure logged with provider and error, got %q", out)
+	}
+
+	// A later successful build clears the record: the provider recovered.
+	fail = false
+	s.buildTools(context.Background(), nil)
+	if got := s.DegradedProviders(); len(got) != 0 {
+		t.Fatalf("expected degraded list cleared after recovery, got %+v", got)
+	}
+}
+
+// TestBuildToolsDegradedUnnamedProviderReportedAsCore covers the defensive
+// branch: a failing provider with an empty name is reported as "core" so
+// the degraded list never carries a blank entry.
+func TestBuildToolsDegradedUnnamedProviderReportedAsCore(t *testing.T) {
+	s := NewService(Options{Config: config.Config{
+		HomeDir:    t.TempDir(),
+		CWD:        t.TempDir(),
+		Artifacts:  config.ArtifactConfig{Dir: t.TempDir()},
+		Connectors: config.ConnectorConfig{Dir: t.TempDir()},
+	}})
+	broken := ToolProvider{
+		Build: func(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
+			return nil, errTestProvider
+		},
+	}
+	toolProviders = append(toolProviders, broken)
+	defer func() { toolProviders = toolProviders[:len(toolProviders)-1] }()
+
+	s.buildTools(context.Background(), nil)
+
+	degraded := s.DegradedProviders()
+	if len(degraded) != 1 || degraded[0].Name != "core" {
+		t.Fatalf("expected unnamed provider reported as core, got %+v", degraded)
+	}
+}
+
+// TestSanitizeProviderReasonRedactsHomeDir verifies provider build errors
+// are scrubbed of the user's home directory before reaching clients: the
+// public system.info DTO must not leak local absolute paths (Codex P2 on
+// PR #38). The full error still goes to the daemon log.
+func TestSanitizeProviderReasonRedactsHomeDir(t *testing.T) {
+	reason := sanitizeProviderReason("/home/alice", "read mcp config: open /home/alice/.gg/mcp.json: permission denied")
+	if strings.Contains(reason, "/home/alice") {
+		t.Fatalf("home dir leaked into client-facing reason: %q", reason)
+	}
+	if !strings.Contains(reason, "~/.gg/mcp.json") {
+		t.Fatalf("reason lost its diagnostic context: %q", reason)
+	}
+	if got := sanitizeProviderReason("", "plain error"); got != "plain error" {
+		t.Fatalf("empty home dir should leave reason untouched, got %q", got)
+	}
+}
+
+// TestBuildToolsSharedRegistryClearsStaleFailures covers the cross-session
+// staleness case (Codex P2 on PR #38): session A records an MCP failure,
+// the config is fixed, and session B's successful build clears the entry
+// so system.info stops reporting the provider as degraded.
+func TestBuildToolsSharedRegistryClearsStaleFailures(t *testing.T) {
+	registry := &DegradedRegistry{}
+	fail := true
+	flaky := ToolProvider{
+		Name: "flaky",
+		Build: func(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
+			if fail {
+				return nil, errTestProvider
+			}
+			return nil, nil
+		},
+	}
+	toolProviders = append(toolProviders, flaky)
+	defer func() { toolProviders = toolProviders[:len(toolProviders)-1] }()
+
+	newSvc := func() *Service {
+		return NewService(Options{
+			Config: config.Config{
+				HomeDir:    t.TempDir(),
+				CWD:        t.TempDir(),
+				Artifacts:  config.ArtifactConfig{Dir: t.TempDir()},
+				Connectors: config.ConnectorConfig{Dir: t.TempDir()},
+			},
+			Degraded: registry,
+		})
+	}
+	s1, s2 := newSvc(), newSvc()
+
+	s1.buildTools(context.Background(), nil)
+	if got := registry.List(); len(got) != 1 || got[0].Name != "flaky" {
+		t.Fatalf("expected [flaky] degraded after s1 failure, got %+v", got)
+	}
+
+	// Provider recovers; only s2 runs a turn. The shared registry must
+	// clear the entry even though s1 never ran again.
+	fail = false
+	s2.buildTools(context.Background(), nil)
+	if got := registry.List(); len(got) != 0 {
+		t.Fatalf("expected stale failure cleared by s2 recovery, got %+v", got)
+	}
+}
+
+// TestBuildArtifactToolsPropagatesOpenError verifies an artifact store that
+// cannot be opened (here: a regular file where the dir should be) is an
+// operational failure that reaches the degradation tracker instead of
+// degrading silently (Codex P2 on PR #38).
+func TestBuildArtifactToolsPropagatesOpenError(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{HomeDir: t.TempDir(), CWD: t.TempDir()}
+	cfg.Artifacts.Dir = blocker
+	if _, err := buildArtifactTools(context.Background(), testToolContext(t, cfg)); err == nil {
+		t.Fatal("expected artifact store open failure to propagate")
+	}
+}
+
+// TestBuildConnectorToolsDistinguishesNotConnected verifies the expected
+// disabled state (no token) still degrades silently while a corrupted
+// token file is an operational failure that propagates (Codex P2 on
+// PR #38).
+func TestBuildConnectorToolsDistinguishesNotConnected(t *testing.T) {
+	tc := testToolContext(t, config.Config{HomeDir: t.TempDir(), CWD: t.TempDir()})
+	tc.Config.Connectors.Dir = t.TempDir()
+	// No token file: expected "not connected" state, silent degrade.
+	if got, err := buildConnectorTools(context.Background(), tc); err != nil || got != nil {
+		t.Fatalf("not-connected should degrade silently, got tools=%v err=%v", got, err)
+	}
+	// Corrupted token file: operational failure, must propagate.
+	tokPath := filepath.Join(tc.Config.Connectors.Dir, "google.json")
+	if err := os.WriteFile(tokPath, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := buildConnectorTools(context.Background(), tc); err == nil {
+		t.Fatal("expected corrupted token file to propagate an error")
+	}
+}
+
+// TestBuildMCPToolsWarnsOnFailedServer verifies a configured MCP server
+// that fails to dial is warned about per server while the provider still
+// returns the working servers' tools (no Build error, so nothing is
+// dropped). Daemon log gains the signal that used to be silent.
+func TestBuildMCPToolsWarnsOnFailedServer(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".gg"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mcpJSON := `{"servers":{"ghost":{"command":"gg-definitely-not-a-real-binary"}}}`
+	if err := os.WriteFile(filepath.Join(home, ".gg", "mcp.json"), []byte(mcpJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var logBuf bytes.Buffer
+	tc := testToolContext(t, config.Config{HomeDir: home, CWD: t.TempDir()})
+	tc.Log = slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	tools, err := buildMCPTools(ctx, tc)
+	if err != nil {
+		t.Fatalf("partial MCP failure must not fail the provider build: %v", err)
+	}
+	if len(tools) != 0 {
+		t.Fatalf("expected no tools from the failed server, got %d", len(tools))
+	}
+	if out := logBuf.String(); !strings.Contains(out, "ghost") || !strings.Contains(out, "mcp server failed") {
+		t.Fatalf("expected per-server failure warning in log, got %q", out)
 	}
 }

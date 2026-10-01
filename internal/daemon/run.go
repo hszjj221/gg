@@ -156,6 +156,7 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		ArtifactStore:   openArtifactStore(logger, cfg),
 		LibraryStore:    openLibraryStore(logger, cfg),
 		Manager:         app.ManagerOptions{Log: logger},
+		Log:             logger,
 	})
 	if err != nil {
 		logger.Error("open workspace", "error", err)

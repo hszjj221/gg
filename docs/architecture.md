@@ -119,7 +119,17 @@ Long-running daemon services (the job scheduler, the Telegram bot) run as
 
 The transport-independent methods are:
 
-- `system.info` for the gg protocol version and capability negotiation
+- `system.info` for the gg protocol version and capability negotiation; it also
+  reports `degradedProviders` — tool capabilities whose providers failed
+  their most recent build, with reasons (added in protocol 1.3, omitted
+  when healthy). Providers distinguish expected-disabled (Chromium not
+  installed, Google not connected, no MCP config) from operational
+  failures (unreadable store, unreachable MCP server): only the latter
+  are logged and reported. Every session reports both failures and
+  recoveries into one workspace-wide registry, so a provider that
+  recovers in any session stops being reported as degraded. Reasons are
+  sanitized before reaching clients (the home directory is redacted to
+  `~`); the full error stays in the daemon log
 - `session.list`, `session.create`, `session.open`, `session.get`, `session.rename`
 - `session.action` with `tree`, `fork`, or `clone`
 - `run.start`, `run.wait`, `run.get`, `run.active`, `run.cancel`, `run.approve`, `run.steer`
