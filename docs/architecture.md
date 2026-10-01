@@ -62,6 +62,40 @@ System prompt assembly order (after the coding instructions): user profile, cura
 4. **Approval policy**: `scheduler.UnattendedApprover` denies every approval-gated tool by default; a job created with `--allow-all` opts in. This is injected explicitly — the scheduler never relies on a nil approver, which the runner would treat as "allow everything".
 5. **Restart semantics**: cron jobs are rescheduled from the current time (missed firings are not caught up); a past-due once job that never ran fires once on daemon startup. The daemon writes `~/.gg/ggd.pid` so `gg job add` can warn when no daemon is alive to fire jobs.
 
+## Daemon channels and supervision
+
+Long-running daemon services (the job scheduler, the Telegram bot) run as
+*channels* behind one shared launch path in `internal/daemon`:
+
+1. **Panic isolation**: every channel goroutine, every Telegram update handler,
+   and every stdio JSON-RPC request handler recovers from panics, logs the
+   stack trace, and keeps serving — one bad message or request can never take
+   the whole daemon down. A panicking Telegram update is acked (not
+   re-delivered) because the panic is deterministic for that input; a
+   panicking stdio request gets a JSON-RPC `-32603` internal-error response
+   (notifications stay response-free, even on panic). Panics one level
+   deeper are contained too: a panicking scheduled-job execution is recorded
+   as a failed run and reported, and a panicking agent turn finishes its run
+   as failed instead of killing the daemon.
+2. **Liveness**: a channel that fails at runtime is reported and left stopped
+   (it never takes the daemon down with it). Per-channel state
+   (`running`/`failed`/`stopped`, plus the error and timestamp) is tracked by
+   a monitor and served on the authenticated `GET /health` endpoint as
+   `channels`; the unauthenticated `/healthz` stays a pure process-liveness
+   probe.
+3. **Single instance**: `ggd` holds an exclusive `flock` on `~/.gg/ggd.pid`
+   for its whole lifetime, and the outcome is fail-closed: a second full
+   daemon gets "already running" and refuses to start, and any failure to
+   establish the lock at all refuses startup rather than running unguarded
+   (which would risk duplicate scheduled jobs and duplicate Telegram
+   replies). The lock — not the pid inside — is the guard, so a crashed
+   daemon can never block a fresh start. The one exception is a
+   parent-supervised sidecar (`--exit-on-stdin-eof`, e.g. the Electron app):
+   when another instance already owns the channels, the sidecar serves its
+   API without starting the scheduler/messaging channels instead of failing
+   outright. `~/.gg` and the pid file are owner-only (`0700`/`0600`),
+   enforced on existing paths too, matching the other state stores.
+
 ## Artifacts and library
 
 `internal/artifact` owns versioned deliverables; `internal/library` owns the user's file collection; the two meet at publish time:

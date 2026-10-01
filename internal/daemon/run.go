@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -136,12 +137,12 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	if providerFactory == nil {
 		providerFactory = provider.New
 	}
+	logger := newLogger(stderr)
 	personal, notice, err := app.SetupPersonal(cfg)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	logger := newLogger(stderr)
 	if notice != "" {
 		logger.Info("startup notice", "notice", notice)
 	}
@@ -154,29 +155,55 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		MemoryStore:     personal.Store,
 		ArtifactStore:   openArtifactStore(logger, cfg),
 		LibraryStore:    openLibraryStore(logger, cfg),
+		Manager:         app.ManagerOptions{Log: logger},
 	})
 	if err != nil {
 		logger.Error("open workspace", "error", err)
 		return 1
 	}
 	rpc := jsonrpc.NewHandlerWithContext(ctx, workspace)
+	// The pidfile lock is the single-instance guard, so its outcome is
+	// fail-closed: a second full daemon is refused, and any failure to
+	// establish the lock at all refuses startup rather than running
+	// unguarded (which would risk duplicate scheduled jobs and duplicate
+	// Telegram replies). The one exception is a parent-supervised sidecar
+	// (--exit-on-stdin-eof, e.g. the Electron app): the running instance
+	// already owns the scheduler and messaging channels, so the sidecar
+	// serves its API without starting them instead of failing outright
+	// (which would make the desktop app unusable whenever a service
+	// daemon is installed) or doubling every channel.
+	channelsDisabled := false
 	cleanupPid, err := WritePidFile(cfg.HomeDir)
-	if err != nil {
-		logger.Warn("pid file", "error", err)
-	} else {
+	switch {
+	case err == nil:
 		defer cleanupPid()
-	}
-	if err := startChannels(ctx, channelDeps{
-		cfg:         cfg,
-		workspace:   workspace,
-		logger:      logger,
-		noScheduler: noScheduler,
-	}); err != nil {
-		logger.Error("start channels", "error", err)
+	case errors.Is(err, ErrAlreadyRunning) && exitOnStdinEOF:
+		logger.Warn("another ggd instance is running; starting without channels")
+		channelsDisabled = true
+	case errors.Is(err, ErrAlreadyRunning):
+		fmt.Fprintln(stderr, "ggd is already running")
+		return 1
+	default:
+		fmt.Fprintln(stderr, "cannot acquire instance lock:", err)
 		return 1
 	}
+	monitor := NewMonitor()
+	if !channelsDisabled {
+		monitor, err = startChannels(ctx, channelDeps{
+			cfg:         cfg,
+			workspace:   workspace,
+			logger:      logger,
+			noScheduler: noScheduler,
+		})
+		if err != nil {
+			logger.Error("start channels", "error", err)
+			return 1
+		}
+	}
 	if httpAddress == "" {
-		if err := stdio.NewServer(rpc, stdin, stdout).Serve(ctx); err != nil && ctx.Err() == nil {
+		srv := stdio.NewServer(rpc, stdin, stdout)
+		srv.Log = logger
+		if err := srv.Serve(ctx); err != nil && ctx.Err() == nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
@@ -196,7 +223,7 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		return 1
 	}
 	server := &http.Server{
-		Handler:           httpapi.NewHandler(rpc, workspace, token),
+		Handler:           httpHealthHandler(rpc, workspace, token, monitor),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -222,6 +249,14 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		}
 		return 0
 	}
+}
+
+// httpHealthHandler builds the HTTP handler with the channel monitor wired
+// into the authenticated /health endpoint.
+func httpHealthHandler(rpc *jsonrpc.Handler, workspace *app.Workspace, token string, monitor *Monitor) *httpapi.Handler {
+	h := httpapi.NewHandler(rpc, workspace, token)
+	h.SetChannelStatus(monitor.Snapshot)
+	return h
 }
 
 func isLoopbackAddress(address string) bool {

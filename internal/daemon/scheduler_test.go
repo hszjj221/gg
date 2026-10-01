@@ -61,6 +61,11 @@ func TestWritePidFileEmptyHome(t *testing.T) {
 
 func writePidFileForTest(t *testing.T, home string) error {
 	t.Helper()
-	// 2^31-1 is not a live pid on any real system.
-	return os.WriteFile(filepath.Join(home, "ggd.pid"), []byte("2147483647\n"), 0o644)
+	// A stale pid file with no lock holder: 2^31-1 is not a live pid on any
+	// real system, and nothing holds the lock on this fresh file.
+	dir := filepath.Join(home, ".gg")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "ggd.pid"), []byte("2147483647\n"), 0o644)
 }

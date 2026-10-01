@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
-	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -151,19 +149,17 @@ func TestDaemonStatus(t *testing.T) {
 	if !strings.Contains(out.String(), "not running") {
 		t.Errorf("status output = %q", out.String())
 	}
-	// Current process pid: alive.
-	pidPath := filepath.Join(home, ".gg", "ggd.pid")
-	if err := os.MkdirAll(filepath.Dir(pidPath), 0o755); err != nil {
+	// A daemon holding the pidfile lock: alive.
+	cleanup, err := WritePidFile(home)
+	if err != nil {
 		t.Fatal(err)
 	}
-	// Current process pid: alive. (pid 1 is not used: on CI runners it is
-	// owned by root and kill(pid, 0) from an unprivileged user fails
-	// with EPERM even though the process exists.)
-	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	defer cleanup()
 	out.Reset()
 	if code := Run(context.Background(), []string{"status"}, opts); code != 0 {
-		t.Error("status = non-zero with pid 1 alive, want 0")
+		t.Error("status = non-zero with lock held, want 0")
+	}
+	if !strings.Contains(out.String(), "is running") {
+		t.Errorf("status output = %q", out.String())
 	}
 }

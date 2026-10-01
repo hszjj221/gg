@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -643,5 +644,83 @@ func TestUpdateRunNotFound(t *testing.T) {
 	s := openTestStore(t)
 	if err := s.UpdateRun("nope", func(*RunRecord) {}); err == nil {
 		t.Fatal("UpdateRun on missing id = nil, want error")
+	}
+}
+
+// panicOnceExecutor panics on its first Execute call, then succeeds: it
+// proves a panicking job neither kills the scheduler nor loses its run
+// record.
+type panicOnceExecutor struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (e *panicOnceExecutor) Execute(ctx context.Context, job Job) (string, string, error) {
+	e.mu.Lock()
+	e.calls++
+	n := e.calls
+	e.mu.Unlock()
+	if n == 1 {
+		panic("boom")
+	}
+	return "done: " + job.Name, "/tmp/sess", nil
+}
+
+func TestSchedulerJobPanicRecordedAndSchedulerSurvives(t *testing.T) {
+	s := openTestStore(t)
+	var mu sync.Mutex
+	var reported []error
+	sch := New(s, &panicOnceExecutor{}, WithErrorReporter(func(err error) {
+		mu.Lock()
+		reported = append(reported, err)
+		mu.Unlock()
+	}))
+	past := time.Now().Add(-time.Second)
+	job, err := s.Add(Job{Name: "flaky", Kind: KindCron, Schedule: "* * * * *", Prompt: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forceDue := func() {
+		if err := s.Update(func(jobs *[]Job) error {
+			(*jobs)[0].NextRun = &past
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	forceDue()
+	if err := sch.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitForRunCount(t, s, job.ID, 1)
+	recs, err := s.ReadRuns(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 || recs[0].Status != "error" {
+		t.Fatalf("records after panic = %+v, want one error", recs)
+	}
+	if !strings.Contains(recs[0].Summary, "panic: boom") {
+		t.Errorf("panic record summary = %q, want it to mention the panic", recs[0].Summary)
+	}
+	mu.Lock()
+	n := len(reported)
+	mu.Unlock()
+	if n != 1 {
+		t.Fatalf("reported errors = %d, want 1", n)
+	}
+	// The scheduler itself survived: the next firing succeeds.
+	forceDue()
+	if err := sch.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitForRunCount(t, s, job.ID, 2)
+	recs, err = s.ReadRuns(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// ReadRuns returns newest first.
+	if len(recs) != 2 || recs[0].Status != "ok" || recs[1].Status != "error" {
+		t.Fatalf("records after recovery = %+v, want [ok error] newest-first", recs)
 	}
 }

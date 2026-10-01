@@ -62,6 +62,14 @@ flowchart LR
 4. **审批策略**：`scheduler.UnattendedApprover` 默认拒绝所有走 approval 的工具；建任务时加 `--allow-all` 才放行。这里是显式注入——scheduler 绝不依赖 nil approver（runner 会把 nil 当"全放行"）。
 5. **重启语义**：cron 任务从当前时间重新排（错过的触发不补）；从没跑过、已过期的单次任务在 daemon 启动时补跑一次。daemon 写 `~/.gg/ggd.pid`，没 daemon 活着时 `gg job add` 会警告。
 
+## Daemon 通道与监管
+
+常驻的 daemon 服务（定时任务调度器、Telegram 机器人）都作为 *channel*，走 `internal/daemon` 里统一的启动路径：
+
+1. **panic 隔离**：每个 channel goroutine、每个 Telegram update 处理、每个 stdio JSON-RPC 请求处理都有 recover，记下堆栈后继续服务——一条坏消息或一个坏请求永远拖不死整个 daemon。panic 的 Telegram update 会被 ack（不再重投），因为对该输入 panic 是确定性的；panic 的 stdio 请求会收到 JSON-RPC `-32603` 内部错误响应（notification 即使 panic 也不回包，保持 response-free）。更深一层也有兜底：panic 的定时任务执行会被记为一次失败的 run 并上报；panic 的 agent turn 会把这一 run 记为失败，而不是拖死 daemon。
+2. **存活状态**：运行时失败的 channel 会上报并保持停止（不会拖 daemon 下水）。每个 channel 的状态（`running`/`failed`/`stopped`，含错误和时间戳）由 monitor 跟踪，在已认证的 `GET /health` 接口以 `channels` 字段暴露；未认证的 `/healthz` 保持为纯进程存活探针。
+3. **单实例**：`ggd` 在整个生命周期内持有 `~/.gg/ggd.pid` 上的排他 `flock`，且结果是 fail-closed：第二个完整 daemon 会收到 "already running" 并拒绝启动；锁根本建不起来时也拒绝启动，而不是无保护地跑（否则会有重复的定时任务和重复的 Telegram 回复）。起保护作用的是锁本身而不是文件里的 pid，所以崩溃的 daemon 永远不会挡住新实例。唯一的例外是父进程监管的 sidecar（`--exit-on-stdin-eof`，如 Electron 应用）：已有实例持有 channel 时，sidecar 不启动 scheduler/消息 channel、只提供 API 服务，而不是直接启动失败。`~/.gg` 和 pid 文件都是 owner-only（`0700`/`0600`），已存在的路径也会被纠正，和其他状态存储一致。
+
 ## Artifacts 与 library
 
 `internal/artifact` 管版本化产出物；`internal/library` 管用户的文件集；两者在发布时交汇：
