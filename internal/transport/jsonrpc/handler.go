@@ -16,7 +16,9 @@ const Version = "2.0"
 // contract independently from the JSON-RPC wire version.
 // 1.2: run.start requireApproval defaults to true (fail-closed); clients
 // that omit it must handle approval_requested events.
-const ProtocolVersion = "1.2"
+// 1.3: system.info results gain degradedProviders (omitted when healthy),
+// listing tool providers whose build failed and degraded to absent.
+const ProtocolVersion = "1.3"
 
 // capabilities lists transport-level features. Tool capabilities are
 // derived from app.ToolCapabilities so the advertised set cannot drift
@@ -59,6 +61,10 @@ type ErrorData struct {
 type SystemInfo struct {
 	ProtocolVersion string   `json:"protocolVersion"`
 	Capabilities    []string `json:"capabilities"`
+	// DegradedProviders names tool capabilities whose providers failed
+	// their most recent build across open sessions, with reasons.
+	// Omitted when every session built its full toolset.
+	DegradedProviders []app.DegradedProvider `json:"degradedProviders,omitempty"`
 }
 
 type Handler struct {
@@ -102,7 +108,11 @@ func (e *Error) Error() string { return e.Message }
 func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) (any, error) {
 	switch method {
 	case "system.info":
-		return SystemInfo{ProtocolVersion: ProtocolVersion, Capabilities: append([]string(nil), capabilities...)}, nil
+		return SystemInfo{
+			ProtocolVersion:   ProtocolVersion,
+			Capabilities:      append([]string(nil), capabilities...),
+			DegradedProviders: h.workspace.DegradedProviders(),
+		}, nil
 	case "session.list":
 		return h.workspace.ListSessions()
 	case "session.create":

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +32,63 @@ type Options struct {
 	// nil; NewService then falls back to a store rooted at Config.Memory.Dir.
 	Profile     userprofile.Profile
 	MemoryStore *memory.Store
+	// Log receives operational warnings, e.g. when a tool provider fails
+	// to build and degrades to absent. Nil means slog.Default(); the daemon
+	// passes its stderr logger so failures are visible in daemon logs.
+	Log *slog.Logger
+	// Degraded is the registry this service reports provider build
+	// outcomes to. Nil means a private registry; the daemon workspace
+	// shares one across its sessions so recovery in any session clears
+	// the provider everywhere.
+	Degraded *DegradedRegistry
+}
+
+// DegradedProvider names a tool capability whose provider failed its most
+// recent Build, with the reason it degraded to absent. It is the
+// machine-readable form of the "why did my tools disappear" signal:
+// failures are logged when they happen, and the latest set is exposed via
+// Service.DegradedProviders and the system.info diagnostic endpoint.
+type DegradedProvider struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
+}
+
+// DegradedRegistry tracks the latest per-provider build outcome. Services
+// that share a registry (one daemon workspace) report every build, so a
+// provider that recovers in any session is cleared everywhere instead of
+// lingering as a stale failure from a session that hasn't run since.
+// A nil-error report clears the provider. Safe for concurrent use.
+type DegradedRegistry struct {
+	mu     sync.Mutex
+	failed map[string]string
+}
+
+// Report records one provider's build outcome: a non-nil err marks it
+// degraded with the given reason, a nil err clears a previous failure.
+func (r *DegradedRegistry) Report(name, reason string, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err == nil {
+		delete(r.failed, name)
+		return
+	}
+	if r.failed == nil {
+		r.failed = make(map[string]string)
+	}
+	r.failed[name] = reason
+}
+
+// List returns the currently degraded providers, sorted by name for
+// stable output.
+func (r *DegradedRegistry) List() []DegradedProvider {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]DegradedProvider, 0, len(r.failed))
+	for name, reason := range r.failed {
+		out = append(out, DegradedProvider{Name: name, Reason: reason})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // Service owns the mutable state of one conversation. Mutating operations are
@@ -41,7 +100,8 @@ type Options struct {
 // never across provider network calls, tool execution, or approval. The
 // Manager serializes Run per session, so all mutations happen on the Run
 // goroutine; the lock exists for concurrent readers (Snapshot, session
-// actions) during a turn.
+// actions) during a turn. degraded is a self-synchronizing registry shared
+// with the workspace; it is never guarded by mu.
 type Service struct {
 	mu              sync.Mutex
 	cfg             config.Config
@@ -54,6 +114,8 @@ type Service struct {
 	profile         userprofile.Profile
 	memStore        *memory.Store
 	queue           *agent.MessageQueue
+	logger          *slog.Logger
+	degraded        *DegradedRegistry
 	// browserPool scopes one Chromium session to this Service (one
 	// conversation). It is created once here — not per turn — and closed
 	// via Close when the Service is retired, so daemon turns cannot leak
@@ -76,6 +138,14 @@ func NewService(options Options) *Service {
 	if memStore == nil {
 		memStore = memory.NewStore(options.Config.Memory.Dir)
 	}
+	logger := options.Log
+	if logger == nil {
+		logger = slog.Default()
+	}
+	degraded := options.Degraded
+	if degraded == nil {
+		degraded = &DegradedRegistry{}
+	}
 	return &Service{
 		cfg:             options.Config,
 		providerFactory: options.ProviderFactory,
@@ -87,6 +157,8 @@ func NewService(options Options) *Service {
 		profile:         options.Profile,
 		memStore:        memStore,
 		queue:           &agent.MessageQueue{},
+		logger:          logger,
+		degraded:        degraded,
 		browserPool:     tools.NewBrowserSessionPool(),
 		toolMemo:        &ToolMemo{},
 	}
@@ -107,18 +179,52 @@ func (s *Service) buildTools(ctx context.Context, provider agent.Provider) []age
 		LocationErr: tzErr,
 		BrowserPool: s.browserPool,
 		Memoized:    s.toolMemo,
+		Log:         s.logger,
 	}
 	var out []agent.Tool
 	for _, p := range toolProviders {
 		built, err := p.Build(ctx, tc)
+		name := p.Name
+		if name == "" {
+			name = "core"
+		}
 		if err != nil {
 			// A failing provider degrades to absent for this turn; the
-			// rest of the toolset keeps working.
+			// rest of the toolset keeps working. The failure is logged
+			// in full and recorded (sanitized) so a silently missing
+			// capability is always explainable (daemon log + system.info
+			// degradedProviders).
+			s.logger.Warn("tool provider build failed; capability degraded to absent",
+				"provider", name, "error", err)
+			s.degraded.Report(name, sanitizeProviderReason(s.cfg.HomeDir, err.Error()), err)
 			continue
 		}
+		// A successful build clears a previous failure, even one recorded
+		// by another session sharing the registry.
+		s.degraded.Report(name, "", nil)
 		out = append(out, built...)
 	}
 	return out
+}
+
+// sanitizeProviderReason redacts the user's home directory from a provider
+// build error before it is exposed to clients: absolute paths under ~ are
+// a local detail the public DTO boundary keeps private
+// (docs/architecture.md). The full error is still written to the daemon
+// log; the diagnostic reason keeps enough context (which file, which
+// server) to act on.
+func sanitizeProviderReason(homeDir, reason string) string {
+	if homeDir == "" {
+		return reason
+	}
+	return strings.ReplaceAll(reason, homeDir, "~")
+}
+
+// DegradedProviders returns the providers that failed their most recent
+// toolset build, with reasons. Empty means the last turn built the full
+// toolset. Safe for concurrent use.
+func (s *Service) DegradedProviders() []DegradedProvider {
+	return s.degraded.List()
 }
 
 func (s *Service) Queue() *agent.MessageQueue {

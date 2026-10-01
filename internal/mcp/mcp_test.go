@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -557,5 +558,41 @@ func TestMCPToolEmptyErrorResult(t *testing.T) {
 	}
 	if !strings.Contains(res.Content[0].Text, "no content") {
 		t.Fatalf("expected diagnostic, got %q", res.Content[0].Text)
+	}
+}
+
+// TestFailedServersReportsReasons verifies dial/list failures are exposed
+// per server with their error, so callers can warn about them even though
+// the provider still returns the working servers' tools (Codex P2 on
+// PR #38).
+func TestFailedServersReportsReasons(t *testing.T) {
+	sessOK := &fakeSession{tools: []*mcp.Tool{textTool("ok", "", nil)}}
+	c := NewConnector(writeConfig(t, `{"servers": {
+		"good": {"command": "x"},
+		"bad": {"command": "y"}
+	}}`))
+	c.dial = func(_, _ context.Context, name string, _ ServerConfig) (session, error) {
+		if name == "bad" {
+			return nil, errors.New("boom")
+		}
+		return sessOK, nil
+	}
+	tools, err := c.Tools(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("expected only the working server's tools, got %d", len(tools))
+	}
+	failed := c.FailedServers()
+	ferr, ok := failed["bad"]
+	if !ok {
+		t.Fatalf("expected bad server in FailedServers, got %v", failed)
+	}
+	if !strings.Contains(ferr.Error(), "boom") {
+		t.Fatalf("expected failure reason, got %v", ferr)
+	}
+	if _, ok := failed["good"]; ok {
+		t.Fatalf("working server must not be listed as failed: %v", failed)
 	}
 }
