@@ -171,7 +171,7 @@ Provider/model configuration:
 Selection uses `provider:model`:
 
 - Provider/model: `--model provider:model`, then the resumed session model, then config `default`, then `openai:gpt-4.1`
-- API key: `--api-key` flag first, then the selected provider's `apiKey`, then the `apiKeyEnv` environment variable. `apiKeyEnv` names an env var holding the key so secrets don't have to live in the config file. If no config file exists, legacy `OPENAI_API_KEY` is used.
+- API key, resolved in priority order: `--api-key` flag, the selected provider's `apiKey`, `~/.gg/credentials.json` (a 0600 JSON object like `{"deepseek": "sk-..."}`), then the `apiKeyEnv` environment variable. `apiKeyEnv` and the credentials file keep secrets out of the config file. If no config file exists, legacy `OPENAI_API_KEY` is used.
 - Base URL: `--base-url` flag first, then the selected provider's `baseURL`, then the well-known endpoint for the provider name, then `https://api.openai.com/v1`. If no config file exists, legacy `OPENAI_BASE_URL` then `https://api.openai.com/v1` are used.
 
 Provider quirks go in `compat`. When set, gg sends the right request shape on the first attempt; when unset, it probes and retries once after a failed request, as before:

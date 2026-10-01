@@ -17,7 +17,7 @@ import (
 	"github.com/hszjj221/gg/internal/artifact"
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/library"
-	"github.com/hszjj221/gg/internal/provider/openai"
+	"github.com/hszjj221/gg/internal/provider"
 	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/skills"
 	"github.com/hszjj221/gg/internal/transport/httpapi"
@@ -134,17 +134,7 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	}
 	providerFactory := options.ProviderFactory
 	if providerFactory == nil {
-		providerFactory = func(cfg config.Config) agent.Provider {
-			return openai.NewClient(openai.Config{
-				APIKey:  cfg.APIKey,
-				BaseURL: cfg.BaseURL,
-				Model:   cfg.Model,
-				Compat: openai.Compat{
-					NoStreamUsage:    cfg.Compat.NoStreamUsage,
-					CompletionTokens: cfg.Compat.CompletionTokens,
-				},
-			})
-		}
+		providerFactory = provider.New
 	}
 	personal, notice, err := app.SetupPersonal(cfg)
 	if err != nil {
