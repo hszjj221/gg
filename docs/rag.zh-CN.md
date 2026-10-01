@@ -75,6 +75,11 @@ gg kb index ~/Documents/manuals --name manuals --embed-model text-embedding-3-la
 
 # 独立的 embeddings 端点（聊天 provider 不提供 embeddings 时）：
 # flag --embed-base-url / --embed-api-key，或环境变量 GG_EMBED_BASE_URL / GG_EMBED_API_KEY。
+# embeddings API key 的解析顺序：--embed-api-key > ~/.gg/credentials.json 的
+# "embed" 条目 > GG_EMBED_API_KEY > 聊天 provider 的 key——`gg kb` 和 agent 的
+# kb_search 工具走完全相同的链路。注意：只用 flag 传 key
+# （--embed-api-key 且无任何持久化配置）时，该 key 仅对当次 CLI 调用可见；
+# `gg kb index` 会在这种情况下告警，因为 agent 将查不了新索引。
 # 查询（agent 或 CLI）必须配同一个端点；
 # 端点不一致会 fail closed 并给出指引，而不是悄悄出错。
 export GG_EMBED_BASE_URL=https://embed.example.com/v1

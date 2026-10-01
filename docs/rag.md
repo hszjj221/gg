@@ -99,6 +99,12 @@ gg kb index ~/Documents/manuals --name manuals --embed-model text-embedding-3-la
 
 # Dedicated embeddings endpoint (when the chat provider doesn't serve embeddings):
 # flags --embed-base-url / --embed-api-key, or env GG_EMBED_BASE_URL / GG_EMBED_API_KEY.
+# The embeddings API key resolves as: --embed-api-key > ~/.gg/credentials.json
+# "embed" entry > GG_EMBED_API_KEY > the chat provider's key — identically for
+# `gg kb` and the agent's kb_search tool. Note: a flag-only key
+# (--embed-api-key with nothing persistent) is visible to that CLI
+# invocation alone; `gg kb index` warns in that case because the agent
+# would not be able to query the new index.
 # The same endpoint must be configured wherever you query (agent or CLI);
 # a mismatch fails closed with instructions instead of silently misbehaving.
 export GG_EMBED_BASE_URL=https://embed.example.com/v1

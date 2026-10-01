@@ -134,7 +134,10 @@ type Config struct {
 	Compat ProviderCompat
 	// EmbedBaseURL/EmbedAPIKey optionally override the chat provider's
 	// endpoint for embeddings (used by `gg kb` and the kb_search tool).
-	// Resolved from GG_EMBED_BASE_URL / GG_EMBED_API_KEY.
+	// Resolved from GG_EMBED_BASE_URL / GG_EMBED_API_KEY. EmbedAPIKey is
+	// the raw env value; prefer Config.ResolveEmbedKey, which routes the
+	// dedicated key through the full auth chain (explicit value >
+	// credentials.json "embed" > GG_EMBED_API_KEY > chat provider key).
 	EmbedBaseURL string
 	EmbedAPIKey  string
 	// Media* optionally override the chat provider's endpoint for media

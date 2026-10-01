@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -60,4 +61,37 @@ func credentialsFileKey(path, providerName string) string {
 		return ""
 	}
 	return creds[providerName]
+}
+
+// EmbedCredentialsName is the credentials.json key holding a dedicated
+// embeddings API key, e.g. {"embed": "sk-..."}. It lets the embeddings
+// endpoint use a different key than the chat provider without another
+// environment variable.
+const EmbedCredentialsName = "embed"
+
+// EmbedAPIKeyEnv is the environment variable holding a dedicated
+// embeddings API key.
+const EmbedAPIKeyEnv = "GG_EMBED_API_KEY"
+
+// ResolveEmbedKey returns the API key for embeddings calls (kb index and
+// kb_search). It reuses the AuthResolver chain so the dedicated
+// embeddings key enjoys the same layers as chat provider keys:
+//
+//  1. explicitKey (--embed-api-key flag or a literal config value)
+//  2. credentials.json "embed" entry
+//  3. GG_EMBED_API_KEY environment variable
+//  4. the chat provider's resolved key (itself resolved through the full
+//     AuthResolver chain: flag > config > credentials file > apiKeyEnv)
+//
+// This is the single convergence point: the CLI (`gg kb`) and the agent
+// (kb_search tool) must resolve identically, otherwise an index built by
+// one cannot be queried by the other.
+func (c Config) ResolveEmbedKey(explicitKey string) string {
+	if key := (AuthResolver{
+		CLIOverride:     explicitKey,
+		CredentialsPath: filepath.Join(c.HomeDir, ".gg", CredentialsFileName),
+	}.APIKey(EmbedCredentialsName, ProviderConfig{APIKeyEnv: EmbedAPIKeyEnv})); key != "" {
+		return key
+	}
+	return c.APIKey
 }
