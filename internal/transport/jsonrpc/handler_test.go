@@ -198,3 +198,114 @@ func findJSONKey(value any, key string) bool {
 	}
 	return false
 }
+
+// toolOnceProvider emits a single bash tool call on its first turn, then
+// ends the turn. It lets tests observe whether the approval pipeline
+// engaged for the tool call.
+type toolOnceProvider struct{ calls int }
+
+func (p *toolOnceProvider) Complete(_ context.Context, _ agent.Request, _ func(agent.Event)) (agent.AssistantMessage, error) {
+	p.calls++
+	if p.calls == 1 {
+		return agent.AssistantMessage{
+			Message: agent.Message{Role: agent.RoleAssistant, ToolCalls: []agent.ToolCall{
+				{ID: "call-1", Name: "bash", Arguments: []byte(`{"command":"printf ok"}`)},
+			}},
+			StopReason: agent.StopReasonToolUse,
+		}, nil
+	}
+	return agent.AssistantMessage{Message: agent.Message{Role: agent.RoleAssistant, Content: "done"}, StopReason: agent.StopReasonEndTurn}, nil
+}
+
+func startRunViaHandler(t *testing.T, handler *Handler, sessionID, params string) string {
+	t.Helper()
+	res := handler.Handle(context.Background(), Request{
+		JSONRPC: Version, ID: []byte(`1`), Method: "run.start",
+		Params: json.RawMessage(params),
+	})
+	startResult, ok := res.Result.(map[string]string)
+	if res.Error != nil || !ok || startResult["runId"] == "" {
+		t.Fatalf("start run: %+v", res.Error)
+	}
+	return startResult["runId"]
+}
+
+// waitForApproval polls run events until an approval is requested or the
+// run finishes, returning the approval ID ("") when none was requested.
+func waitForApproval(t *testing.T, workspace *app.Workspace, runID string) (approvalID string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var after int64
+	for {
+		events, done, err := workspace.WaitRun(ctx, runID, after)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range events {
+			after = e.Sequence
+			if e.Type == app.EventApprovalRequested && e.Approval != nil {
+				return e.Approval.ID
+			}
+		}
+		if done {
+			return ""
+		}
+	}
+}
+
+// TestRunStartDefaultsToRequireApproval verifies the fail-closed default:
+// omitting requireApproval starts the run with the approval pipeline
+// engaged, while explicit false opts out.
+func TestRunStartDefaultsToRequireApproval(t *testing.T) {
+	newSession := func(t *testing.T, handler *Handler) string {
+		t.Helper()
+		created := handler.Handle(context.Background(), Request{JSONRPC: Version, ID: []byte(`1`), Method: "session.create"})
+		snapshot, ok := created.Result.(app.Snapshot)
+		if created.Error != nil || !ok {
+			t.Fatalf("create session: %+v", created.Error)
+		}
+		return snapshot.SessionID
+	}
+
+	t.Run("absent requires approval", func(t *testing.T) {
+		workspace := testWorkspaceWithProvider(t, &toolOnceProvider{})
+		handler := NewHandler(workspace)
+		sessionID := newSession(t, handler)
+		runID := startRunViaHandler(t, handler, sessionID,
+			`{"sessionId":"`+sessionID+`","prompt":"hi"}`)
+		approvalID := waitForApproval(t, workspace, runID)
+		if approvalID == "" {
+			t.Fatal("expected approval_requested for run.start without requireApproval")
+		}
+		approved := handler.Handle(context.Background(), Request{
+			JSONRPC: Version, ID: []byte(`2`), Method: "run.approve",
+			Params: json.RawMessage(`{"runId":"` + runID + `","approvalId":"` + approvalID + `","allow":true}`),
+		})
+		if approved.Error != nil {
+			t.Fatalf("approve: %+v", approved.Error)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		for {
+			_, done, err := workspace.WaitRun(ctx, runID, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if done {
+				break
+			}
+		}
+	})
+
+	t.Run("explicit false skips approval", func(t *testing.T) {
+		workspace := testWorkspaceWithProvider(t, &toolOnceProvider{})
+		handler := NewHandler(workspace)
+		sessionID := newSession(t, handler)
+		runID := startRunViaHandler(t, handler, sessionID,
+			`{"sessionId":"`+sessionID+`","prompt":"hi","requireApproval":false}`)
+		if approvalID := waitForApproval(t, workspace, runID); approvalID != "" {
+			t.Fatalf("unexpected approval_requested with requireApproval=false")
+		}
+	})
+}

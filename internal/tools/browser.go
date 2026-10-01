@@ -74,7 +74,7 @@ func (t BrowserNavigateTool) Name() string { return "browser_navigate" }
 func (t BrowserNavigateTool) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "browser_navigate",
-		Description: "Load a URL in headless Chromium and wait for it to finish loading. Returns the page title.",
+		Description: "Load a URL in headless Chromium and wait for it to finish loading. Returns the page title. Requires user approval.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -83,6 +83,25 @@ func (t BrowserNavigateTool) Definition() agent.ToolDefinition {
 			"required": []string{"url"},
 		},
 	}
+}
+
+// ApprovalRequest puts navigation under the approval gate: the SSRF check
+// in Execute only inspects the initial URL, so the user sees the exact URL
+// Chromium is about to load before it connects. Post-navigation redirects
+// are not re-checked (documented residual risk in docs/architecture.md).
+func (t BrowserNavigateTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, error) {
+	var input struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return agent.ApprovalRequest{}, fmt.Errorf("invalid browser_navigate arguments: %w", err)
+	}
+	return agent.ApprovalRequest{
+		ToolName:  "browser_navigate",
+		Summary:   fmt.Sprintf("browse to %q", truncateRunes(input.URL, 120)),
+		Details:   fmt.Sprintf("url: %s\nThe URL passes the public-target SSRF check before Chromium connects.", input.URL),
+		Arguments: raw,
+	}, nil
 }
 
 func (t BrowserNavigateTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {

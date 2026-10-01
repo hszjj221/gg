@@ -53,6 +53,27 @@ func TestTTSTool(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("error: %v", res.Content)
 	}
+	// Approval is required: TTS is a paid external API call plus a file write.
+	req, err := tool.ApprovalRequest(json.RawMessage(`{"text":"hello world","voice":"v","format":"wav"}`))
+	if err != nil {
+		t.Fatalf("approval: %v", err)
+	}
+	if req.ToolName != "tts" || !strings.Contains(req.Summary, "hello world") {
+		t.Fatalf("unexpected approval request: %+v", req)
+	}
+	// The approval must show the effective voice: an empty voice is
+	// substituted with media.DefaultVoice ("alloy") before the paid
+	// request is made, so showing "default" would mislead the approver.
+	req, err = tool.ApprovalRequest(json.RawMessage(`{"text":"hello"}`))
+	if err != nil {
+		t.Fatalf("approval: %v", err)
+	}
+	if !strings.Contains(req.Summary, "alloy") || !strings.Contains(req.Details, "voice: alloy") {
+		t.Fatalf("approval request must show effective voice alloy: %+v", req)
+	}
+	if _, err := tool.ApprovalRequest(json.RawMessage(`{bad json`)); err == nil {
+		t.Fatal("expected error for invalid arguments")
+	}
 }
 
 func TestSTTTool(t *testing.T) {
@@ -75,6 +96,21 @@ func TestSTTTool(t *testing.T) {
 	res = tool.Execute(context.Background(), json.RawMessage(`{"audio_path":"/nope.mp3"}`))
 	if !res.IsError {
 		t.Fatal("expected error for missing file")
+	}
+	// Approval is required: STT uploads a local file to a paid external
+	// transcription API.
+	req, err := tool.ApprovalRequest(raw)
+	if err != nil {
+		t.Fatalf("approval: %v", err)
+	}
+	if req.ToolName != "stt" || !strings.Contains(req.Details, "audio_path: "+audio) {
+		t.Fatalf("unexpected approval request: %+v", req)
+	}
+	if !strings.Contains(req.Details, "language: auto") {
+		t.Fatalf("approval request must show effective language auto: %+v", req)
+	}
+	if _, err := tool.ApprovalRequest(json.RawMessage(`{bad json`)); err == nil {
+		t.Fatal("expected error for invalid arguments")
 	}
 }
 

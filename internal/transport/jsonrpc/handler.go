@@ -14,7 +14,9 @@ const Version = "2.0"
 
 // ProtocolVersion versions gg's method, result, event, and application-error
 // contract independently from the JSON-RPC wire version.
-const ProtocolVersion = "1.1"
+// 1.2: run.start requireApproval defaults to true (fail-closed); clients
+// that omit it must handle approval_requested events.
+const ProtocolVersion = "1.2"
 
 // capabilities lists transport-level features. Tool capabilities are
 // derived from app.ToolCapabilities so the advertised set cannot drift
@@ -150,9 +152,13 @@ func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) 
 		return h.workspace.SessionAction(params.SessionID, params.Action, params.NodeID)
 	case "run.start":
 		var params struct {
-			SessionID       string `json:"sessionId"`
-			Prompt          string `json:"prompt"`
-			RequireApproval bool   `json:"requireApproval"`
+			SessionID string `json:"sessionId"`
+			Prompt    string `json:"prompt"`
+			// RequireApproval is a pointer so "absent" is distinguishable
+			// from "explicitly false": a client that forgets the field must
+			// not silently disable the approval pipeline (fail closed).
+			// Pass explicit false only from trusted automation.
+			RequireApproval *bool `json:"requireApproval"`
 		}
 		if err := decodeParams(raw, &params); err != nil {
 			return nil, err
@@ -160,7 +166,11 @@ func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) 
 		if params.SessionID == "" || strings.TrimSpace(params.Prompt) == "" {
 			return nil, invalidParams("sessionId and prompt are required")
 		}
-		run, err := h.workspace.StartTurn(h.runContext, params.SessionID, params.Prompt, params.RequireApproval)
+		requireApproval := true
+		if params.RequireApproval != nil {
+			requireApproval = *params.RequireApproval
+		}
+		run, err := h.workspace.StartTurn(h.runContext, params.SessionID, params.Prompt, requireApproval)
 		if err != nil {
 			return nil, err
 		}

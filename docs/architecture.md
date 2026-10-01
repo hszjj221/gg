@@ -183,6 +183,8 @@ The three layers, from most to least trusted:
 2. **MCP servers** (`~/.gg/mcp.json`, `internal/mcp`): external processes exposing tools as `mcp_<server>_<tool>`; always approval-gated; connections memoized per `Service`; a broken server is skipped, never fatal.
 3. **Skills** (`internal/skills`): markdown procedures the model reads on demand; no new code runs; approval comes from the tools the steps use.
 
+**Deliberate decision — browser navigation is approval-gated.** `browser_navigate` requires user approval: the URL shown in the approval prompt is checked against the SSRF guard (which rejects cloud metadata, localhost, intranet targets) before Chromium ever connects, and the user confirms the exact destination. This was tightened because the SSRF guard only inspects the *initial* URL — Chromium follows redirects and page subresources on its own, so an initial-URL check alone cannot keep navigation off internal targets. `browser_read` and `browser_screenshot` stay exempt: they operate on the page the user already approved and cannot trigger new navigation. Residual risks: (1) post-approval redirects can still reach internal hosts (Chromium follows them without re-check); (2) in-context data can be exfiltrated by embedding it in a fetched URL — accepted, since secrets should not sit in the agent's context unprotected. Approval-gating only the navigation (not every read) keeps autonomous research usable: one approval opens the page, subsequent reads are free.
+
 `app.ToolCapabilities()` derives the advertised set from the registry, so clients never see a capability whose tools cannot be built.
 
 ## Quality gates

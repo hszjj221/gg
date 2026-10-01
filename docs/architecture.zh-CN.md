@@ -158,6 +158,8 @@ Skills（`internal/skills`）是第三层扩展：markdown playbook，从项目 
 2. **MCP 服务器**（`~/.gg/mcp.json`、`internal/mcp`）：外部进程暴露工具为 `mcp_<server>_<tool>`；永远走 approval；连接按 `Service` 缓存；坏服务器被跳过，绝不致命。
 3. **Skills**（`internal/skills`）：模型按需读的 markdown 流程；不跑新代码；审批来自步骤所用的工具。
 
+**有意的决策——browser 导航需要审批。**`browser_navigate` 需要用户审批：审批提示里展示的 URL 会先过 SSRF 防护（拒绝云元数据、localhost、内网等非公开目标），Chromium 建连前用户再确认一次确切目的地。收紧的原因是 SSRF 防护只检查*初始* URL——Chromium 会自己跟随重定向和页面子资源，光靠初始 URL 检查挡不住内网目标。`browser_read` 和 `browser_screenshot` 仍豁免：它们只操作用户已批准的页面，不会触发新的导航。残留风险：(1) 批准后的重定向仍可能打到内网（Chromium 跟随重定向时不再复查）；(2) 上下文里的数据可以拼进 URL 带出去——已接受，机密本来就不该不设防地躺在 agent 上下文里。只对导航（而不是每次读取）加审批，自主调研依然可用：一次审批打开页面，后续读取不再打扰。
+
 `app.ToolCapabilities()` 从注册表推导广告集合，客户端永远看不到建不出来的能力的工具。
 
 ## 质量门禁
