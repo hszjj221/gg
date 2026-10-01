@@ -173,6 +173,7 @@ Selection uses `provider:model`:
 - Provider/model: `--model provider:model`, then the resumed session model, then config `default`, then `openai:gpt-4.1`
 - API key, resolved in priority order: `--api-key` flag, the selected provider's `apiKey`, `~/.gg/credentials.json` (a 0600 JSON object like `{"deepseek": "sk-..."}`), then the `apiKeyEnv` environment variable. `apiKeyEnv` and the credentials file keep secrets out of the config file. If no config file exists, legacy `OPENAI_API_KEY` is used.
 - Base URL: `--base-url` flag first, then the selected provider's `baseURL`, then the well-known endpoint for the provider name, then `https://api.openai.com/v1`. If no config file exists, legacy `OPENAI_BASE_URL` then `https://api.openai.com/v1` are used.
+- Thinking: reasoning models (e.g. `deepseek-reasoner`) stream their internal reasoning as `reasoning_content`; gg normalizes it into a provider-neutral `thinking_delta` event. The CLI shows it dimmed on stderr, in both interactive and one-shot modes, so scripted stdout stays clean. gg retains the reasoning on the assistant message and echoes it as `reasoning_content` when continuing a tool call, as DeepSeek's thinking-mode tool protocol requires. Thinking never lands in the answer or in persisted session transcripts.
 
 Provider quirks go in `compat`. When set, gg sends the right request shape on the first attempt; when unset, it probes and retries once after a failed request, as before:
 

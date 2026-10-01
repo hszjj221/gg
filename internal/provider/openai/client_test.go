@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -479,5 +481,118 @@ func TestClientHonorsRetryAfterHeader(t *testing.T) {
 	// The server asked for 1s; jittered backoff alone would usually be far less.
 	if elapsed < 900*time.Millisecond {
 		t.Errorf("Retry-After: 1 was not honored, elapsed %v", elapsed)
+	}
+}
+
+func TestClientEmitsThinkingDeltaFromReasoningContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"let me \"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{APIKey: "test-key", BaseURL: server.URL + "/v1", Model: "reasoner", HTTPClient: server.Client()})
+	var events []agent.Event
+	msg, err := client.Complete(context.Background(), agent.Request{Messages: []agent.Message{{Role: agent.RoleUser, Content: "hi"}}}, func(e agent.Event) {
+		events = append(events, e)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.Content != "done" {
+		t.Fatalf("thinking must not leak into content: %q", msg.Content)
+	}
+	var thinking, text []string
+	for _, e := range events {
+		switch e.Type {
+		case agent.EventThinkingDelta:
+			thinking = append(thinking, e.Text)
+		case agent.EventTextDelta:
+			text = append(text, e.Text)
+		default:
+			t.Fatalf("unexpected event type: %q", e.Type)
+		}
+	}
+	if got := strings.Join(thinking, ""); got != "let me think" {
+		t.Fatalf("thinking deltas not normalized: %q", got)
+	}
+	if got := strings.Join(text, ""); got != "done" {
+		t.Fatalf("text deltas broken: %q", got)
+	}
+}
+
+func TestClientEchoesReasoningContentForToolContinuation(t *testing.T) {
+	var mu sync.Mutex
+	var secondBody []byte
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		mu.Lock()
+		requests++
+		n := requests
+		mu.Unlock()
+		if n == 1 {
+			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"let me call the tool\",\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n"))
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		secondBody = body
+		mu.Unlock()
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{APIKey: "test-key", BaseURL: server.URL + "/v1", Model: "reasoner", HTTPClient: server.Client()})
+	ctx := context.Background()
+	reply, err := client.Complete(ctx, agent.Request{Messages: []agent.Message{{Role: agent.RoleUser, Content: "hi"}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reply.ToolCalls) != 1 {
+		t.Fatalf("expected one tool call: %+v", reply)
+	}
+	if reply.Reasoning != "let me call the tool" {
+		t.Fatalf("reasoning not retained on assistant message: %q", reply.Reasoning)
+	}
+
+	history := []agent.Message{
+		{Role: agent.RoleUser, Content: "hi"},
+		reply.Message,
+		{Role: agent.RoleTool, Content: "tool output", ToolCallID: "call_1", ToolName: "read"},
+	}
+	if _, err := client.Complete(ctx, agent.Request{Messages: history}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	var payload struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	if err := json.Unmarshal(secondBody, &payload); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range payload.Messages {
+		if m["role"] != "assistant" {
+			continue
+		}
+		if _, ok := m["tool_calls"]; !ok {
+			continue
+		}
+		rc, _ := m["reasoning_content"].(string)
+		if rc != "let me call the tool" {
+			t.Fatalf("tool continuation missing reasoning_content: %v", m)
+		}
+		found = true
+	}
+	if !found {
+		t.Fatal("assistant tool-call message not found in second request")
 	}
 }

@@ -173,6 +173,7 @@ Provider/model 配置：
 - Provider/model：`--model provider:model`，然后是恢复会话中的模型，接着是配置里的 `default`，最后是 `openai:gpt-4.1`
 - API key：按优先级解析：`--api-key` 参数、当前 provider 的 `apiKey`、`~/.gg/credentials.json`（0600 权限的 JSON，格式如 `{"deepseek": "sk-..."}`）、`apiKeyEnv` 指定的环境变量。`apiKeyEnv` 和 credentials 文件都是为了避免把 secret 写进配置文件。没有配置文件时，沿用 legacy `OPENAI_API_KEY`。
 - Base URL：优先级依次为 `--base-url` 参数、当前 provider 的 `baseURL`、按 provider 名推导的常见 endpoint、`https://api.openai.com/v1`。没有配置文件时，沿用 legacy `OPENAI_BASE_URL`，最后是 `https://api.openai.com/v1`。
+- Thinking：推理模型（如 `deepseek-reasoner`）会以 `reasoning_content` 流式输出内部思考过程；gg 把它归一化为 provider 无关的 `thinking_delta` 事件。CLI 在交互模式和单次模式下都以暗色显示在 stderr，不污染脚本用的 stdout。gg 会把思考过程保留在 assistant 消息上，在 tool call 续传时按 DeepSeek thinking-mode 工具协议的要求回显 `reasoning_content`。思考过程不会进入回答正文，也不会存入会话记录。
 
 各家 provider 的协议差异写在 `compat` 里。设置后 gg 第一次请求就按正确形状发送；不设置则保持原来的探测行为（失败一次后重试）：
 

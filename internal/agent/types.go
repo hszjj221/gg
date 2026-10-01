@@ -34,7 +34,14 @@ const (
 type EventType string
 
 const (
-	EventTextDelta      EventType = "text_delta"
+	EventTextDelta EventType = "text_delta"
+	// EventThinkingDelta carries a fragment of the model's internal
+	// reasoning. Providers surface this differently (OpenAI-compatible
+	// reasoning_content, Anthropic thinking blocks); protocol adapters
+	// normalize them into this event. Thinking is ephemeral stream
+	// display: it is not part of the assistant message content and is
+	// not persisted in transcripts.
+	EventThinkingDelta  EventType = "thinking_delta"
 	EventToolCallStart  EventType = "tool_call_start"
 	EventToolCallFinish EventType = "tool_call_finish"
 	EventUserMessage    EventType = "user_message"
@@ -70,8 +77,14 @@ type ToolCall struct {
 }
 
 type Message struct {
-	Role          Role           `json:"role"`
-	Content       string         `json:"content,omitempty"`
+	Role    Role   `json:"role"`
+	Content string `json:"content,omitempty"`
+	// Reasoning carries the model's internal reasoning (e.g. the
+	// OpenAI-compatible reasoning_content field) so protocol adapters can
+	// echo it back when the provider requires it for tool-call
+	// continuation. It is transient: never part of Content and never
+	// persisted in transcripts.
+	Reasoning     string         `json:"-"`
 	ContentBlocks []ContentBlock `json:"contentBlocks,omitempty"`
 	ToolCalls     []ToolCall     `json:"toolCalls,omitempty"`
 	ToolCallID    string         `json:"toolCallId,omitempty"`
