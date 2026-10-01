@@ -306,7 +306,10 @@ func (c Config) WithSelection(selection string) (Config, error) {
 	next.Selection = providerName + ":" + model
 	next.ProviderType = provider.Type
 	next.BaseURL = first(next.baseURLOverride, provider.BaseURL, wellKnownBaseURLs[strings.ToLower(providerName)], DefaultBaseURL)
-	next.APIKey = first(next.apiKeyOverride, provider.APIKey, os.Getenv(strings.TrimSpace(provider.APIKeyEnv)))
+	next.APIKey = AuthResolver{
+		CLIOverride:     next.apiKeyOverride,
+		CredentialsPath: filepath.Join(c.HomeDir, ".gg", CredentialsFileName),
+	}.APIKey(providerName, provider)
 	next.Compat = provider.Compat
 	return next, nil
 }

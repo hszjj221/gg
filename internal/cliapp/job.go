@@ -9,11 +9,10 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/app"
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/daemon"
-	"github.com/hszjj221/gg/internal/provider/openai"
+	"github.com/hszjj221/gg/internal/provider"
 	"github.com/hszjj221/gg/internal/scheduler"
 	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/skills"
@@ -358,17 +357,7 @@ func runJobRun(ctx context.Context, cfg config.Config, options Options, store *s
 	}
 	providerFactory := options.ProviderFactory
 	if providerFactory == nil {
-		providerFactory = func(cfg config.Config) agent.Provider {
-			return openai.NewClient(openai.Config{
-				APIKey:  cfg.APIKey,
-				BaseURL: cfg.BaseURL,
-				Model:   cfg.Model,
-				Compat: openai.Compat{
-					NoStreamUsage:    cfg.Compat.NoStreamUsage,
-					CompletionTokens: cfg.Compat.CompletionTokens,
-				},
-			})
-		}
+		providerFactory = provider.New
 	}
 	executor := app.NewService(app.Options{
 		Config:          cfg,
