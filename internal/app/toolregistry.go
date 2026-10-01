@@ -215,10 +215,9 @@ func buildKBTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
 	// built with; prefer dedicated embedding config, fall back to the
 	// chat provider. An endpoint mismatch is rejected at call time
 	// (fail closed) rather than silently querying the wrong service.
-	embedKey := tc.Config.EmbedAPIKey
-	if embedKey == "" {
-		embedKey = tc.Config.APIKey
-	}
+	// The key resolves through Config.ResolveEmbedKey — the same chain
+	// `gg kb` uses — so CLI-built indexes are always queryable here.
+	embedKey := tc.Config.ResolveEmbedKey("")
 	embedBase := tc.Config.EmbedBaseURL
 	if embedBase == "" {
 		embedBase = tc.Config.BaseURL

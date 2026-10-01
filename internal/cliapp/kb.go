@@ -39,13 +39,16 @@ type embedConfig struct {
 
 func resolveEmbedConfig(cfg config.Config, args cli.Args) (embedConfig, error) {
 	// Precedence: explicit flag > dedicated embedding config > chat provider.
+	// The key goes through Config.ResolveEmbedKey so `gg kb` and the agent's
+	// kb_search tool resolve identically (explicit > credentials.json
+	// "embed" > GG_EMBED_API_KEY > chat provider key).
 	ec := embedConfig{
-		apiKey:  firstNonEmpty(args.KBEmbedKey, cfg.EmbedAPIKey, cfg.APIKey),
+		apiKey:  cfg.ResolveEmbedKey(args.KBEmbedKey),
 		baseURL: firstNonEmpty(args.KBEmbedBase, cfg.EmbedBaseURL, cfg.BaseURL),
 		model:   firstNonEmpty(args.KBEmbedModel, defaultEmbedModel),
 	}
 	if ec.apiKey == "" {
-		return ec, fmt.Errorf("embeddings API key is required: set OPENAI_API_KEY, GG_EMBED_API_KEY, or pass --embed-api-key")
+		return ec, fmt.Errorf("embeddings API key is required: pass --embed-api-key, set GG_EMBED_API_KEY, add an \"embed\" entry to ~/.gg/credentials.json, or configure the chat provider key")
 	}
 	if ec.baseURL == "" {
 		return ec, fmt.Errorf("embeddings base URL is required: set OPENAI_BASE_URL, GG_EMBED_BASE_URL, or pass --embed-base-url")
@@ -63,6 +66,13 @@ func checkEmbedEndpoint(ix *kb.Index, baseURL string) error {
 			ix.EmbedBaseURL, baseURL, ix.EmbedBaseURL)
 	}
 	return nil
+}
+
+// embedKeyEphemeral reports whether the embeddings key comes only from the
+// --embed-api-key flag: visible to this CLI invocation, invisible to the
+// agent's later kb_search queries (which resolve without the flag).
+func embedKeyEphemeral(cfg config.Config, args cli.Args) bool {
+	return args.KBEmbedKey != "" && cfg.ResolveEmbedKey("") == ""
 }
 
 func firstNonEmpty(vals ...string) string {
@@ -86,6 +96,12 @@ func runKBIndex(ctx context.Context, cfg config.Config, args cli.Args, stdout, s
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
+	}
+	// A flag-only key is visible to this invocation alone: the agent's
+	// kb_search resolves without the flag, so warn instead of building an
+	// index the agent cannot query.
+	if embedKeyEphemeral(cfg, args) {
+		fmt.Fprintln(stderr, "warning: --embed-api-key is only visible to this command; configure the key persistently (GG_EMBED_API_KEY, ~/.gg/credentials.json \"embed\", or the chat provider key) or the agent will not be able to query this index")
 	}
 	name := kbName(args)
 	emb := kb.NewOpenAIEmbedder(ec.apiKey, ec.baseURL, ec.model)
