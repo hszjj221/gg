@@ -102,7 +102,7 @@ func (t TTSTool) Name() string { return "tts" }
 func (t TTSTool) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "tts",
-		Description: "Convert text to speech and save as an audio file. Returns the file path.",
+		Description: "Convert text to speech and save as an audio file. Returns the file path. Requires user approval.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -115,12 +115,35 @@ func (t TTSTool) Definition() agent.ToolDefinition {
 	}
 }
 
-func (t TTSTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {
-	var input struct {
-		Text   string `json:"text"`
-		Voice  string `json:"voice"`
-		Format string `json:"format"`
+type ttsInput struct {
+	Text   string `json:"text"`
+	Voice  string `json:"voice"`
+	Format string `json:"format"`
+}
+
+func (t TTSTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, error) {
+	var input ttsInput
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return agent.ApprovalRequest{}, fmt.Errorf("invalid tts arguments: %w", err)
 	}
+	voice := input.Voice
+	if voice == "" {
+		voice = media.DefaultVoice
+	}
+	format := input.Format
+	if format == "" {
+		format = "mp3"
+	}
+	return agent.ApprovalRequest{
+		ToolName:  "tts",
+		Summary:   fmt.Sprintf("synthesize speech [%s/%s]: %q", voice, format, truncateRunes(input.Text, 80)),
+		Details:   fmt.Sprintf("voice: %s\nformat: %s\ntext: %s", voice, format, input.Text),
+		Arguments: raw,
+	}, nil
+}
+
+func (t TTSTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {
+	var input ttsInput
 	if err := json.Unmarshal(raw, &input); err != nil {
 		return errorResult(fmt.Errorf("invalid tts arguments: %w", err))
 	}
@@ -152,7 +175,7 @@ func (t STTTool) Name() string { return "stt" }
 func (t STTTool) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "stt",
-		Description: "Transcribe a local audio file (voice message, recording) to text.",
+		Description: "Transcribe a local audio file (voice message, recording) to text. Requires user approval.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -162,6 +185,33 @@ func (t STTTool) Definition() agent.ToolDefinition {
 			"required": []string{"audio_path"},
 		},
 	}
+}
+
+// sttInput mirrors the STT tool's declared parameters so ApprovalRequest
+// and Execute parse the same shape.
+type sttInput struct {
+	AudioPath string `json:"audio_path"`
+	Language  string `json:"language"`
+}
+
+// ApprovalRequest describes the STT call for the approval gate: uploading
+// a local audio file to a paid transcription API is a billable external
+// operation, not a local read.
+func (t STTTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, error) {
+	var input sttInput
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return agent.ApprovalRequest{}, fmt.Errorf("invalid stt arguments: %w", err)
+	}
+	language := input.Language
+	if language == "" {
+		language = "auto"
+	}
+	return agent.ApprovalRequest{
+		ToolName:  "stt",
+		Summary:   fmt.Sprintf("transcribe audio [%s]: %q", language, truncateRunes(input.AudioPath, 80)),
+		Details:   fmt.Sprintf("audio_path: %s\nlanguage: %s", input.AudioPath, language),
+		Arguments: raw,
+	}, nil
 }
 
 func (t STTTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {

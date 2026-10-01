@@ -206,10 +206,15 @@ func readCappedBody(resp *http.Response, limit int64, op string) ([]byte, error)
 	return raw, nil
 }
 
+// DefaultVoice is the provider voice used when SpeakRequest.Voice is empty.
+// It is a named constant (rather than a literal in Speak) so approval
+// prompts and API calls describe the same effective voice.
+const DefaultVoice = "alloy"
+
 // SpeakRequest describes one TTS synthesis.
 type SpeakRequest struct {
 	Text string
-	// Voice selects the provider voice; empty means provider default.
+	// Voice selects the provider voice; empty means DefaultVoice.
 	Voice string
 	// Format is the audio container, e.g. "mp3". Empty means mp3.
 	Format string
@@ -231,7 +236,7 @@ func (c *Client) Speak(ctx context.Context, req SpeakRequest) (string, error) {
 	}
 	voice := req.Voice
 	if voice == "" {
-		voice = "alloy"
+		voice = DefaultVoice
 	}
 	payload := map[string]any{
 		"input":           text,

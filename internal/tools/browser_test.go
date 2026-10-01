@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -64,5 +65,21 @@ func TestBrowserToolsShareServicePool(t *testing.T) {
 	}
 	if got := NewBrowserScreenshotTool(pool).pool; got != pool {
 		t.Fatal("browser_screenshot does not share the Service pool")
+	}
+}
+
+func TestBrowserNavigateApprovalRequest(t *testing.T) {
+	// Navigation is approval-gated: the user sees the exact URL Chromium
+	// is about to load (the SSRF check only inspects the initial URL).
+	tool := NewBrowserNavigateTool(NewBrowserSessionPool())
+	req, err := tool.ApprovalRequest(json.RawMessage(`{"url":"https://example.com/docs"}`))
+	if err != nil {
+		t.Fatalf("approval: %v", err)
+	}
+	if req.ToolName != "browser_navigate" || !strings.Contains(req.Summary, "https://example.com/docs") {
+		t.Fatalf("unexpected approval request: %+v", req)
+	}
+	if _, err := tool.ApprovalRequest(json.RawMessage(`{bad json`)); err == nil {
+		t.Fatal("expected error for invalid arguments")
 	}
 }
