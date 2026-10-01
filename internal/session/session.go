@@ -225,7 +225,12 @@ func NewStore(path, cwd string) (*Store, error) {
 	if path == "" {
 		return nil, fmt.Errorf("session path is required")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	// MkdirAll does not tighten an existing directory: enforce owner-only
+	// so upgrades from older versions (0755) are corrected.
+	if err := os.Chmod(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
 	release, err := acquireWriterLock(path)

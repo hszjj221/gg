@@ -1,9 +1,12 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -256,5 +259,73 @@ func waitForRun(t *testing.T, run *Run, onEvent func(Event)) []Event {
 		if done {
 			return all
 		}
+	}
+}
+
+// panicProvider blows up inside Complete, simulating a bug in the agent
+// pipeline: the run must be recorded as failed, not take the process down.
+type panicProvider struct{}
+
+func (panicProvider) Complete(ctx context.Context, request agent.Request, onEvent func(agent.Event)) (agent.AssistantMessage, error) {
+	panic("boom")
+}
+
+func TestManagerRunPanicRecordedAsFailed(t *testing.T) {
+	var logs bytes.Buffer
+	manager, sessionID := runtimeTestManagerWithOptions(t, panicProvider{},
+		ManagerOptions{Log: slog.New(slog.NewTextHandler(&logs, nil))})
+	run, err := manager.StartTurn(context.Background(), sessionID, "hello", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := waitForRun(t, run, nil)
+	last := events[len(events)-1]
+	if last.Type != EventRunFailed {
+		t.Fatalf("last event = %s, want %s", last.Type, EventRunFailed)
+	}
+	if !strings.Contains(last.Error, "panic: boom") {
+		t.Errorf("run error = %q, want it to mention the panic", last.Error)
+	}
+	if !strings.Contains(logs.String(), "agent run panicked") {
+		t.Errorf("manager log = %q, want the panic report with stack trace", logs.String())
+	}
+	// The failed run released the session: a new turn is accepted, i.e. the
+	// manager was not left in a wedged state. (It panics again on purpose;
+	// the point is StartTurn itself works.) The first run's goroutine clears
+	// its active-session slot just after publishing the terminal event, so
+	// retry briefly on run_conflict: waitForRun can return in that window.
+	var again *Run
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var err error
+		again, err = manager.StartTurn(context.Background(), sessionID, "again", false)
+		if err == nil {
+			break
+		}
+		var appErr *AppError
+		if errors.As(err, &appErr) && appErr.Code == ErrorRunConflict && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		t.Fatalf("StartTurn after panic = %v, want no conflict error", err)
+	}
+	// Wait for it to finish: the test must not return while its goroutine
+	// is still writing to the session store, or TempDir cleanup fails with
+	// "directory not empty".
+	events = waitForRun(t, again, nil)
+	if last := events[len(events)-1]; last.Type != EventRunFailed {
+		t.Fatalf("second run last event = %s, want %s", last.Type, EventRunFailed)
+	}
+}
+
+func TestManagerRunPanicWithoutLogger(t *testing.T) {
+	manager, sessionID := runtimeTestManager(t, panicProvider{})
+	run, err := manager.StartTurn(context.Background(), sessionID, "hello", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := waitForRun(t, run, nil)
+	if last := events[len(events)-1]; last.Type != EventRunFailed {
+		t.Fatalf("last event = %s, want %s", last.Type, EventRunFailed)
 	}
 }

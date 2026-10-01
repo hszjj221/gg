@@ -24,10 +24,29 @@ type Handler struct {
 	rpc       *jsonrpc.Handler
 	workspace *app.Workspace
 	token     string
+	// channelStatus, when set, reports daemon background-channel states on
+	// the authenticated /health endpoint. It is a callback (not a concrete
+	// daemon type) so this transport package does not import the daemon.
+	channelStatus func() []ChannelStatus
+}
+
+// ChannelStatus is the last known runtime state of one daemon background
+// channel (scheduler, telegram, ...), served on /health.
+type ChannelStatus struct {
+	Name     string `json:"name"`
+	State    string `json:"state"` // running | failed | stopped
+	Error    string `json:"error,omitempty"`
+	FailedAt string `json:"failedAt,omitempty"`
 }
 
 func NewHandler(rpc *jsonrpc.Handler, workspace *app.Workspace, token string) *Handler {
 	return &Handler{rpc: rpc, workspace: workspace, token: token}
+}
+
+// SetChannelStatus installs the callback backing the "channels" field of
+// /health. A nil callback omits the field.
+func (h *Handler) SetChannelStatus(fn func() []ChannelStatus) {
+	h.channelStatus = fn
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -67,7 +86,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			methodNotAllowed(w)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "protocolVersion": jsonrpc.ProtocolVersion})
+		body := map[string]any{"ok": true, "protocolVersion": jsonrpc.ProtocolVersion}
+		if h.channelStatus != nil {
+			body["channels"] = h.channelStatus()
+		}
+		writeJSON(w, http.StatusOK, body)
 	case "/rpc":
 		h.handleRPC(w, r)
 	case "/events":

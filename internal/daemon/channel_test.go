@@ -83,10 +83,11 @@ func TestLaunchChannelReportsRuntimeError(t *testing.T) {
 	var out lockedBuffer
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	mon := NewMonitor()
 	launchChannel(ctx, &fakeChannel{
 		name: "testchan",
 		run:  func(ctx context.Context) error { return errors.New("boom") },
-	}, testLogger(&out))
+	}, testLogger(&out), mon)
 
 	waitFor(t, "error report", func() bool {
 		for _, rec := range logRecords(t, &out) {
@@ -117,7 +118,7 @@ func TestLaunchChannelSilentOnCleanShutdown(t *testing.T) {
 			<-ctx.Done()
 			return nil
 		},
-	}, testLogger(&out))
+	}, testLogger(&out), NewMonitor())
 	cancel()
 	// Give the goroutine a chance to (incorrectly) report.
 	time.Sleep(100 * time.Millisecond)
@@ -137,7 +138,7 @@ func TestLaunchChannelIgnoresErrorAfterCancel(t *testing.T) {
 			<-release
 			return errors.New("too late")
 		},
-	}, testLogger(&out))
+	}, testLogger(&out), NewMonitor())
 	cancel()
 	close(release)
 	time.Sleep(100 * time.Millisecond)
@@ -153,7 +154,7 @@ func TestStartChannelsWithNothingConfigured(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	deps := channelDeps{logger: testLogger(&out), noScheduler: true}
-	if err := startChannels(ctx, deps); err != nil {
+	if _, err := startChannels(ctx, deps); err != nil {
 		t.Fatalf("no channels configured: %v", err)
 	}
 	if out.String() != "" {
@@ -173,7 +174,7 @@ func TestStartChannelsLaunchesNothingWhenConstructionFails(t *testing.T) {
 	cfg := config.Config{TelegramBotToken: "test-token", HomeDir: homeFile}
 	cfg.Scheduler.Dir = filepath.Join(home, "sched")
 	deps := channelDeps{cfg: cfg, workspace: &app.Workspace{}, logger: testLogger(&out)}
-	if err := startChannels(context.Background(), deps); err == nil {
+	if _, err := startChannels(context.Background(), deps); err == nil {
 		t.Fatal("expected telegram construction error")
 	}
 	for _, rec := range logRecords(t, &out) {

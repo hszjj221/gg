@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -175,6 +176,16 @@ func (b *Bot) Run(ctx context.Context) error {
 			u := u
 			acker.add(u.UpdateID)
 			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						b.logPanic("update handler panicked", r, "update_id", u.UpdateID)
+						// A panic is deterministic for this input: letting
+						// the offset stay would re-deliver the same update
+						// and crash again on every restart. Ack the poisoned
+						// update so the daemon keeps serving the rest.
+						acker.mark(u.UpdateID)
+					}
+				}()
 				b.handleUpdateSync(ctx, u)
 				// At-least-once: ack only fully handled updates. If our
 				// context was canceled mid-handling the turn did not
@@ -280,8 +291,19 @@ func (b *Bot) chatState(chatID int64) *chatState {
 // handleUpdateSync processes one update and returns only after the message
 // is fully handled. Updates from the same chat are serialized so two
 // messages never interleave agent turns; different chats run concurrently.
-func (b *Bot) handleUpdateSync(ctx context.Context, u Update) {
-	msg := u.Message
+// logPanic reports a recovered panic with a stack trace, tolerating a nil
+// logger by falling back to stderr like the rest of the bot.
+func (b *Bot) logPanic(msg string, r any, args ...any) {
+	stack := string(debug.Stack())
+	args = append([]any{"panic", fmt.Sprintf("%v", r), "stack", stack}, args...)
+	if b.logger != nil {
+		b.logger.Error(msg, args...)
+		return
+	}
+	fmt.Fprintf(b.stderr, "telegram: %s panic=%v\n%s\n", msg, r, stack)
+}
+
+func (b *Bot) handleUpdateSync(ctx context.Context, u Update) {	msg := u.Message
 	if msg == nil {
 		return
 	}

@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
+	"runtime/debug"
 	"sort"
 	"sync"
 	"time"
@@ -259,6 +261,10 @@ type ManagerOptions struct {
 	MaxEventsPerRun int
 	// Clock is primarily useful for deterministic lifecycle tests.
 	Clock func() time.Time
+	// Log optionally receives panic reports from agent runs. Nil disables
+	// logging; the daemon sets it to its stderr logger. A panicking run is
+	// always recorded as a failed run even when Log is nil.
+	Log *slog.Logger
 }
 
 const (
@@ -389,10 +395,26 @@ func (m *Manager) startTurn(parent context.Context, sessionID, prompt string, ap
 	run.publish(Event{Type: EventRunStarted})
 	go func() {
 		approver := approverFor(run)
-		result, err := service.Run(ctx, prompt, func(agentEvent agent.Event) {
-			event := agentEvent
-			run.publish(Event{Type: EventAgent, Agent: &event})
-		}, approver)
+		// A panic in the agent run must not kill the host process (the
+		// daemon serves many turns): recover it and let the normal
+		// completion path below record the run as failed.
+		result, err := func() (result Result, err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					stack := debug.Stack()
+					if m.options.Log != nil {
+						m.options.Log.Error("agent run panicked",
+							"session", sessionID, "run", run.id,
+							"panic", fmt.Sprintf("%v", r), "stack", string(stack))
+					}
+					err = fmt.Errorf("panic: %v (see daemon log for stack trace)", r)
+				}
+			}()
+			return service.Run(ctx, prompt, func(agentEvent agent.Event) {
+				event := agentEvent
+				run.publish(Event{Type: EventAgent, Agent: &event})
+			}, approver)
+		}()
 		cancel()
 		completed := m.options.Clock()
 		if err == nil {

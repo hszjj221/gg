@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -319,7 +320,19 @@ func (s *Scheduler) executeJob(ctx context.Context, job Job) {
 		ID: runID, JobID: job.ID, JobName: job.Name,
 		StartedAt: started, Status: "running",
 	})
-	summary, sessionPath, err := s.exec.Execute(ectx, job)
+	// A panic in job execution must not kill the daemon: recover it, report
+	// the stack, and let the normal path below record it as a failed run
+	// (so job bookkeeping like LastRun/RunCount stays consistent).
+	summary, sessionPath, err := func() (summary, sessionPath string, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				stack := debug.Stack()
+				s.report(fmt.Errorf("scheduled job %q panicked: %v\n%s", job.Name, r, stack))
+				err = fmt.Errorf("panic: %v (see daemon log for stack trace)", r)
+			}
+		}()
+		return s.exec.Execute(ectx, job)
+	}()
 	finished := s.clock()
 
 	rec := RunRecord{
