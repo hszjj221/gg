@@ -68,16 +68,16 @@ type SystemInfo struct {
 }
 
 type Handler struct {
-	workspace  *app.Workspace
+	rt         *app.Runtime
 	runContext context.Context
 }
 
-func NewHandler(workspace *app.Workspace) *Handler {
-	return NewHandlerWithContext(context.Background(), workspace)
+func NewHandler(rt *app.Runtime) *Handler {
+	return NewHandlerWithContext(context.Background(), rt)
 }
 
-func NewHandlerWithContext(ctx context.Context, workspace *app.Workspace) *Handler {
-	return &Handler{workspace: workspace, runContext: ctx}
+func NewHandlerWithContext(ctx context.Context, rt *app.Runtime) *Handler {
+	return &Handler{rt: rt, runContext: ctx}
 }
 
 func (h *Handler) Handle(ctx context.Context, request Request) Response {
@@ -111,10 +111,10 @@ func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) 
 		return SystemInfo{
 			ProtocolVersion:   ProtocolVersion,
 			Capabilities:      append([]string(nil), capabilities...),
-			DegradedProviders: h.workspace.DegradedProviders(),
+			DegradedProviders: h.rt.DegradedProviders(),
 		}, nil
 	case "session.list":
-		return h.workspace.ListSessions()
+		return h.rt.ListSessions()
 	case "session.create":
 		var params struct {
 			Name string `json:"name"`
@@ -122,7 +122,7 @@ func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) 
 		if err := decodeParams(raw, &params); err != nil {
 			return nil, err
 		}
-		return h.workspace.CreateSession(params.Name)
+		return h.rt.CreateSession(params.Name)
 	case "session.open", "session.get":
 		var params sessionParams
 		if err := decodeParams(raw, &params); err != nil {
@@ -132,9 +132,9 @@ func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) 
 			return nil, invalidParams("sessionId is required")
 		}
 		if method == "session.open" {
-			return h.workspace.OpenSession(params.SessionID)
+			return h.rt.OpenSession(params.SessionID)
 		}
-		return h.workspace.Snapshot(params.SessionID)
+		return h.rt.Snapshot(params.SessionID)
 	case "session.rename":
 		var params struct {
 			SessionID string `json:"sessionId"`
@@ -146,7 +146,7 @@ func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) 
 		if params.SessionID == "" {
 			return nil, invalidParams("sessionId is required")
 		}
-		return h.workspace.RenameSession(params.SessionID, params.Name)
+		return h.rt.RenameSession(params.SessionID, params.Name)
 	case "session.action":
 		var params struct {
 			SessionID string            `json:"sessionId"`
@@ -159,7 +159,7 @@ func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) 
 		if params.SessionID == "" || params.Action == "" {
 			return nil, invalidParams("sessionId and action are required")
 		}
-		return h.workspace.SessionAction(params.SessionID, params.Action, params.NodeID)
+		return h.rt.SessionAction(params.SessionID, params.Action, params.NodeID)
 	case "run.start":
 		var params struct {
 			SessionID string `json:"sessionId"`
@@ -180,7 +180,7 @@ func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) 
 		if params.RequireApproval != nil {
 			requireApproval = *params.RequireApproval
 		}
-		run, err := h.workspace.StartTurn(h.runContext, params.SessionID, params.Prompt, requireApproval)
+		run, err := h.rt.StartTurn(h.runContext, params.SessionID, params.Prompt, requireApproval)
 		if err != nil {
 			return nil, err
 		}
@@ -196,7 +196,7 @@ func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) 
 		if params.RunID == "" {
 			return nil, invalidParams("runId is required")
 		}
-		events, done, err := h.workspace.WaitRun(ctx, params.RunID, params.AfterSequence)
+		events, done, err := h.rt.WaitRun(ctx, params.RunID, params.AfterSequence)
 		if err != nil {
 			return nil, err
 		}
@@ -209,7 +209,7 @@ func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) 
 		if params.RunID == "" {
 			return nil, invalidParams("runId is required")
 		}
-		return h.workspace.RunStatus(params.RunID)
+		return h.rt.RunStatus(params.RunID)
 	case "run.active":
 		var params sessionParams
 		if err := decodeParams(raw, &params); err != nil {
@@ -218,7 +218,7 @@ func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) 
 		if params.SessionID == "" {
 			return nil, invalidParams("sessionId is required")
 		}
-		return h.workspace.ActiveRun(params.SessionID)
+		return h.rt.ActiveRun(params.SessionID)
 	case "run.cancel":
 		var params runParams
 		if err := decodeParams(raw, &params); err != nil {
@@ -227,7 +227,7 @@ func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) 
 		if params.RunID == "" {
 			return nil, invalidParams("runId is required")
 		}
-		return okResult(), h.workspace.CancelRun(params.RunID)
+		return okResult(), h.rt.CancelRun(params.RunID)
 	case "run.approve":
 		var params struct {
 			RunID      string `json:"runId"`
@@ -240,7 +240,7 @@ func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) 
 		if params.RunID == "" || params.ApprovalID == "" {
 			return nil, invalidParams("runId and approvalId are required")
 		}
-		return okResult(), h.workspace.Approve(params.RunID, params.ApprovalID, params.Allow)
+		return okResult(), h.rt.Approve(params.RunID, params.ApprovalID, params.Allow)
 	case "run.steer":
 		var params struct {
 			SessionID string `json:"sessionId"`
@@ -253,9 +253,9 @@ func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) 
 		if params.SessionID == "" || strings.TrimSpace(params.Text) == "" {
 			return nil, invalidParams("sessionId and text are required")
 		}
-		return okResult(), h.workspace.Steer(params.SessionID, params.Text, params.FollowUp)
+		return okResult(), h.rt.Steer(params.SessionID, params.Text, params.FollowUp)
 	case "artifact.list":
-		return h.workspace.ListArtifacts()
+		return h.rt.ListArtifacts()
 	case "artifact.get":
 		var params struct {
 			ArtifactID string `json:"artifactId"`
@@ -266,7 +266,7 @@ func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) 
 		if params.ArtifactID == "" {
 			return nil, invalidParams("artifactId is required")
 		}
-		return h.workspace.GetArtifact(params.ArtifactID)
+		return h.rt.GetArtifact(params.ArtifactID)
 	case "artifact.publish":
 		var params struct {
 			ArtifactID string `json:"artifactId"`
@@ -277,7 +277,7 @@ func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) 
 		if params.ArtifactID == "" {
 			return nil, invalidParams("artifactId is required")
 		}
-		return h.workspace.PublishArtifact(params.ArtifactID)
+		return h.rt.PublishArtifact(params.ArtifactID)
 	default:
 		return nil, &Error{Code: -32601, Message: fmt.Sprintf("method %q not found", method)}
 	}

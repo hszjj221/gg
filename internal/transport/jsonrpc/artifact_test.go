@@ -26,7 +26,7 @@ func testArtifactHandler(t *testing.T) (*Handler, *artifact.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workspace, err := app.NewWorkspace(app.WorkspaceOptions{
+	rt, err := app.NewRuntime(app.RuntimeOptions{
 		Config:          config.Config{CWD: filepath.Join(root, "project"), Selection: "test:model"},
 		ProviderFactory: func(config.Config) agent.Provider { return fakeProvider{} },
 		Repository:      session.NewFileRepository(filepath.Join(root, "sessions")),
@@ -36,7 +36,7 @@ func testArtifactHandler(t *testing.T) (*Handler, *artifact.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewHandler(workspace), astore
+	return NewHandler(rt), astore
 }
 
 func callMethod(t *testing.T, h *Handler, method, params string) Response {

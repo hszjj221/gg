@@ -16,7 +16,7 @@ import (
 	"github.com/hszjj221/gg/internal/userprofile"
 )
 
-type WorkspaceOptions struct {
+type RuntimeOptions struct {
 	Config          config.Config
 	ProviderFactory ProviderFactory
 	Skills          skills.Set
@@ -31,9 +31,9 @@ type WorkspaceOptions struct {
 	Log *slog.Logger
 }
 
-// Workspace is the application facade used by non-terminal transports. It
+// Runtime is the application host used by non-terminal transports. It
 // exposes stable IDs and deliberately keeps filesystem paths private.
-type Workspace struct {
+type Runtime struct {
 	cfg             config.Config
 	providerFactory ProviderFactory
 	skills          skills.Set
@@ -44,7 +44,7 @@ type Workspace struct {
 	artifacts       *artifact.Store
 	libraryStore    *library.Store
 	logger          *slog.Logger
-	// degraded is shared by every conversation service in the workspace:
+	// degraded is shared by every conversation service in the runtime:
 	// all sessions report provider build outcomes into it, so a provider
 	// that recovers in any session is cleared everywhere instead of
 	// lingering as a stale failure from a session that hasn't run since.
@@ -59,14 +59,14 @@ type SessionSummary struct {
 	Preview      string `json:"preview"`
 }
 
-func NewWorkspace(options WorkspaceOptions) (*Workspace, error) {
+func NewRuntime(options RuntimeOptions) (*Runtime, error) {
 	if options.Repository == nil {
 		return nil, fmt.Errorf("session repository is required")
 	}
 	if options.ProviderFactory == nil {
 		return nil, fmt.Errorf("provider factory is required")
 	}
-	return &Workspace{
+	return &Runtime{
 		cfg:             options.Config,
 		providerFactory: options.ProviderFactory,
 		skills:          options.Skills,
@@ -81,7 +81,7 @@ func NewWorkspace(options WorkspaceOptions) (*Workspace, error) {
 	}, nil
 }
 
-func (w *Workspace) ListSessions() ([]SessionSummary, error) {
+func (w *Runtime) ListSessions() ([]SessionSummary, error) {
 	infos, err := w.repository.List(w.cfg.CWD)
 	if err != nil {
 		return nil, err
@@ -99,7 +99,7 @@ func (w *Workspace) ListSessions() ([]SessionSummary, error) {
 	return result, nil
 }
 
-func (w *Workspace) CreateSession(name string) (Snapshot, error) {
+func (w *Runtime) CreateSession(name string) (Snapshot, error) {
 	store, loaded, err := w.repository.Create(w.cfg.CWD)
 	if err != nil {
 		return Snapshot{}, err
@@ -117,7 +117,7 @@ func (w *Workspace) CreateSession(name string) (Snapshot, error) {
 	return service.Snapshot(), nil
 }
 
-func (w *Workspace) OpenSession(sessionID string) (Snapshot, error) {
+func (w *Runtime) OpenSession(sessionID string) (Snapshot, error) {
 	if service, ok := w.manager.Get(sessionID); ok {
 		return service.Snapshot(), nil
 	}
@@ -135,7 +135,7 @@ func (w *Workspace) OpenSession(sessionID string) (Snapshot, error) {
 	return service.Snapshot(), nil
 }
 
-func (w *Workspace) Snapshot(sessionID string) (Snapshot, error) {
+func (w *Runtime) Snapshot(sessionID string) (Snapshot, error) {
 	service, err := w.service(sessionID)
 	if err != nil {
 		return Snapshot{}, err
@@ -143,7 +143,7 @@ func (w *Workspace) Snapshot(sessionID string) (Snapshot, error) {
 	return service.Snapshot(), nil
 }
 
-func (w *Workspace) RenameSession(sessionID, name string) (Snapshot, error) {
+func (w *Runtime) RenameSession(sessionID, name string) (Snapshot, error) {
 	service, err := w.service(sessionID)
 	if err != nil {
 		return Snapshot{}, err
@@ -154,7 +154,7 @@ func (w *Workspace) RenameSession(sessionID, name string) (Snapshot, error) {
 	return service.Snapshot(), nil
 }
 
-func (w *Workspace) SessionAction(sessionID string, action SessionAction, entryID string) (SessionUpdate, error) {
+func (w *Runtime) SessionAction(sessionID string, action SessionAction, entryID string) (SessionUpdate, error) {
 	service, err := w.service(sessionID)
 	if err != nil {
 		return SessionUpdate{}, err
@@ -186,7 +186,7 @@ func (w *Workspace) SessionAction(sessionID string, action SessionAction, entryI
 	}
 }
 
-func (w *Workspace) StartTurn(ctx context.Context, sessionID, prompt string, requireApproval bool) (*Run, error) {
+func (w *Runtime) StartTurn(ctx context.Context, sessionID, prompt string, requireApproval bool) (*Run, error) {
 	if _, err := w.service(sessionID); err != nil {
 		return nil, err
 	}
@@ -195,14 +195,14 @@ func (w *Workspace) StartTurn(ctx context.Context, sessionID, prompt string, req
 
 // StartTurnWithApprover starts a turn with an explicit approver; see
 // Manager.StartTurnWithApprover.
-func (w *Workspace) StartTurnWithApprover(ctx context.Context, sessionID, prompt string, approver agent.Approver) (*Run, error) {
+func (w *Runtime) StartTurnWithApprover(ctx context.Context, sessionID, prompt string, approver agent.Approver) (*Run, error) {
 	if _, err := w.service(sessionID); err != nil {
 		return nil, err
 	}
 	return w.manager.StartTurnWithApprover(ctx, sessionID, prompt, approver)
 }
 
-func (w *Workspace) WaitRun(ctx context.Context, runID string, afterSequence int64) ([]Event, bool, error) {
+func (w *Runtime) WaitRun(ctx context.Context, runID string, afterSequence int64) ([]Event, bool, error) {
 	run, ok := w.manager.Run(runID)
 	if !ok {
 		return nil, false, errorf(ErrorRunNotFound, false, "run %q not found", runID)
@@ -210,7 +210,7 @@ func (w *Workspace) WaitRun(ctx context.Context, runID string, afterSequence int
 	return run.Wait(ctx, afterSequence)
 }
 
-func (w *Workspace) RunStatus(runID string) (RunStatus, error) {
+func (w *Runtime) RunStatus(runID string) (RunStatus, error) {
 	status, ok := w.manager.RunStatus(runID)
 	if !ok {
 		return RunStatus{}, errorf(ErrorRunNotFound, false, "run %q not found", runID)
@@ -218,7 +218,7 @@ func (w *Workspace) RunStatus(runID string) (RunStatus, error) {
 	return status, nil
 }
 
-func (w *Workspace) ActiveRun(sessionID string) (*RunStatus, error) {
+func (w *Runtime) ActiveRun(sessionID string) (*RunStatus, error) {
 	if _, err := w.service(sessionID); err != nil {
 		return nil, err
 	}
@@ -229,22 +229,22 @@ func (w *Workspace) ActiveRun(sessionID string) (*RunStatus, error) {
 	return &status, nil
 }
 
-func (w *Workspace) CancelRun(runID string) error {
+func (w *Runtime) CancelRun(runID string) error {
 	return w.manager.Cancel(runID)
 }
 
-func (w *Workspace) Approve(runID, approvalID string, allow bool) error {
+func (w *Runtime) Approve(runID, approvalID string, allow bool) error {
 	return w.manager.Approve(runID, approvalID, agent.ApprovalDecision{Allow: allow})
 }
 
-func (w *Workspace) Steer(sessionID, text string, followUp bool) error {
+func (w *Runtime) Steer(sessionID, text string, followUp bool) error {
 	if _, err := w.service(sessionID); err != nil {
 		return err
 	}
 	return w.manager.Steer(sessionID, text, followUp)
 }
 
-func (w *Workspace) service(sessionID string) (*Service, error) {
+func (w *Runtime) service(sessionID string) (*Service, error) {
 	if service, ok := w.manager.Get(sessionID); ok {
 		return service, nil
 	}
@@ -264,11 +264,11 @@ func (w *Workspace) service(sessionID string) (*Service, error) {
 // one session clears a failure recorded by another — a fixed provider
 // stops being reported as degraded without every session having to run.
 // Empty means every build since the last failure succeeded.
-func (w *Workspace) DegradedProviders() []DegradedProvider {
+func (w *Runtime) DegradedProviders() []DegradedProvider {
 	return w.degraded.List()
 }
 
-func (w *Workspace) addLoaded(store *session.Store, loaded session.Loaded) (*Service, error) {
+func (w *Runtime) addLoaded(store *session.Store, loaded session.Loaded) (*Service, error) {
 	cfg := w.cfg
 	var err error
 	if loaded.LastModel != nil {
@@ -296,7 +296,7 @@ func (w *Workspace) addLoaded(store *session.Store, loaded session.Loaded) (*Ser
 	return service, nil
 }
 
-func (w *Workspace) sessionError(sessionID string, err error) error {
+func (w *Runtime) sessionError(sessionID string, err error) error {
 	if err == nil {
 		return nil
 	}

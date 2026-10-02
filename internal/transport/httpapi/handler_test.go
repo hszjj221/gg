@@ -189,11 +189,11 @@ func TestHTTPEventStreamUsesLastEventID(t *testing.T) {
 
 func TestHTTPEventStreamResumesAfterLastEventID(t *testing.T) {
 	handler := testHandler(t, "secret")
-	snapshot, err := handler.workspace.CreateSession("")
+	snapshot, err := handler.rt.CreateSession("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := handler.workspace.StartTurn(context.Background(), snapshot.SessionID, "hello", false)
+	run, err := handler.rt.StartTurn(context.Background(), snapshot.SessionID, "hello", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func testHandler(t *testing.T, token string) *Handler {
 	t.Helper()
 	root := t.TempDir()
 	cfg := config.Config{CWD: filepath.Join(root, "project"), Selection: "test:model"}
-	workspace, err := app.NewWorkspace(app.WorkspaceOptions{
+	rt, err := app.NewRuntime(app.RuntimeOptions{
 		Config:          cfg,
 		ProviderFactory: func(config.Config) agent.Provider { return fakeProvider{} },
 		Repository:      session.NewFileRepository(filepath.Join(root, "sessions")),
@@ -228,6 +228,6 @@ func testHandler(t *testing.T, token string) *Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rpc := jsonrpc.NewHandlerWithContext(context.Background(), workspace)
-	return NewHandler(rpc, workspace, token)
+	rpc := jsonrpc.NewHandlerWithContext(context.Background(), rt)
+	return NewHandler(rpc, rt, token)
 }

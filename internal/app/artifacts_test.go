@@ -13,7 +13,7 @@ import (
 	"github.com/hszjj221/gg/internal/session"
 )
 
-func testArtifactWorkspace(t *testing.T) (*Workspace, *artifact.Store) {
+func testArtifactWorkspace(t *testing.T) (*Runtime, *artifact.Store) {
 	t.Helper()
 	root := t.TempDir()
 	astore, err := artifact.Open(filepath.Join(root, "artifacts"))
@@ -24,7 +24,7 @@ func testArtifactWorkspace(t *testing.T) (*Workspace, *artifact.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workspace, err := NewWorkspace(WorkspaceOptions{
+	rt, err := NewRuntime(RuntimeOptions{
 		Config:          config.Config{CWD: filepath.Join(root, "project"), Selection: "test:model"},
 		ProviderFactory: func(config.Config) agent.Provider { return &runtimeProvider{} },
 		Repository:      session.NewFileRepository(filepath.Join(root, "sessions")),
@@ -34,7 +34,7 @@ func testArtifactWorkspace(t *testing.T) (*Workspace, *artifact.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return workspace, astore
+	return rt, astore
 }
 
 func TestWorkspaceArtifactFlow(t *testing.T) {
@@ -129,7 +129,7 @@ func isArtifactNotFound(err error) bool {
 
 func TestWorkspaceArtifactStoreUnavailable(t *testing.T) {
 	root := t.TempDir()
-	w, err := NewWorkspace(WorkspaceOptions{
+	w, err := NewRuntime(RuntimeOptions{
 		Config:          config.Config{CWD: filepath.Join(root, "project"), Selection: "test:model"},
 		ProviderFactory: func(config.Config) agent.Provider { return &runtimeProvider{} },
 		Repository:      session.NewFileRepository(filepath.Join(root, "sessions")),

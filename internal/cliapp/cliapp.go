@@ -20,6 +20,7 @@ import (
 	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/skills"
 	"github.com/hszjj221/gg/internal/userprofile"
+	"github.com/hszjj221/gg/internal/workspace"
 )
 
 type Options struct {
@@ -71,6 +72,14 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		NoContextFiles: parsed.NoContextFiles,
 	})
 	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	// P1 workspace: the process working directory is auto-registered as the
+	// "default" workspace on first run after upgrade. Today the runtime
+	// still serves this single root exactly like before; later phases bind
+	// sessions to workspaces.
+	if _, _, err := workspace.EnsureDefaultWorkspace(cfg.HomeDir, cfg.CWD); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}

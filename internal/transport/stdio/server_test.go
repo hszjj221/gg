@@ -24,7 +24,7 @@ func (fakeProvider) Complete(context.Context, agent.Request, func(agent.Event)) 
 
 func TestServerProcessesNewlineDelimitedRequests(t *testing.T) {
 	root := t.TempDir()
-	workspace, err := app.NewWorkspace(app.WorkspaceOptions{
+	rt, err := app.NewRuntime(app.RuntimeOptions{
 		Config:          config.Config{CWD: filepath.Join(root, "project"), Selection: "test:model"},
 		ProviderFactory: func(config.Config) agent.Provider { return fakeProvider{} },
 		Repository:      session.NewFileRepository(filepath.Join(root, "sessions")),
@@ -34,7 +34,7 @@ func TestServerProcessesNewlineDelimitedRequests(t *testing.T) {
 	}
 	input := strings.NewReader("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session.create\",\"params\":{\"name\":\"desktop\"}}\n{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"session.list\"}\n")
 	var output bytes.Buffer
-	server := NewServer(jsonrpc.NewHandler(workspace), input, &output)
+	server := NewServer(jsonrpc.NewHandler(rt), input, &output)
 	if err := server.Serve(context.Background()); err != nil {
 		t.Fatal(err)
 	}

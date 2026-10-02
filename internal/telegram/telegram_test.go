@@ -20,7 +20,7 @@ func testBot(t *testing.T, allow []int64) *Bot {
 	b, err := New(Config{
 		Token:      "test-token",
 		AllowChats: allow,
-		Workspace:  &app.Workspace{},
+		Runtime:    &app.Runtime{},
 		HomeDir:    home,
 	})
 	if err != nil {
@@ -35,9 +35,9 @@ func TestNewValidation(t *testing.T) {
 		name string
 		cfg  Config
 	}{
-		{"empty token", Config{Workspace: &app.Workspace{}, HomeDir: home}},
-		{"nil workspace", Config{Token: "x", HomeDir: home}},
-		{"empty home", Config{Token: "x", Workspace: &app.Workspace{}}},
+		{"empty token", Config{Runtime: &app.Runtime{}, HomeDir: home}},
+		{"nil rt", Config{Token: "x", HomeDir: home}},
+		{"empty home", Config{Token: "x", Runtime: &app.Runtime{}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := New(tc.cfg); err == nil {
@@ -68,7 +68,7 @@ func TestOffsetPersistence(t *testing.T) {
 		b, err := New(Config{
 			Token:      "x",
 			AllowChats: []int64{1},
-			Workspace:  &app.Workspace{},
+			Runtime:    &app.Runtime{},
 			HomeDir:    home,
 		})
 		if err != nil {
@@ -255,10 +255,10 @@ func TestStderrInjection(t *testing.T) {
 	home := t.TempDir()
 	var buf strings.Builder
 	b, err := New(Config{
-		Token:     "test-token",
-		Workspace: &app.Workspace{},
-		HomeDir:   home,
-		Stderr:    &buf,
+		Token:   "test-token",
+		Runtime: &app.Runtime{},
+		HomeDir: home,
+		Stderr:  &buf,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -268,9 +268,9 @@ func TestStderrInjection(t *testing.T) {
 	}
 	// Nil defaults to os.Stderr (back-compat).
 	b2, err := New(Config{
-		Token:     "test-token",
-		Workspace: &app.Workspace{},
-		HomeDir:   home,
+		Token:   "test-token",
+		Runtime: &app.Runtime{},
+		HomeDir: home,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -22,7 +22,7 @@ import (
 // Bot runs the Telegram long-polling loop and routes updates to the agent.
 type Bot struct {
 	api      *API
-	ws       *app.Workspace
+	ws       *app.Runtime
 	mclient  *media.Client
 	mediaDir string
 
@@ -44,11 +44,11 @@ type chatState struct {
 	mu sync.Mutex
 }
 
-// Config wires the bot to the daemon's workspace and media client.
+// Config wires the bot to the daemon's runtime and media client.
 type Config struct {
 	Token      string
 	AllowChats []int64
-	Workspace  *app.Workspace
+	Runtime    *app.Runtime
 	Media      *media.Client
 	// HomeDir is used for the offset file and voice downloads
 	// (~/.gg/telegram/).
@@ -68,8 +68,8 @@ func New(cfg Config) (*Bot, error) {
 	if cfg.Token == "" {
 		return nil, errors.New("telegram: bot token is required")
 	}
-	if cfg.Workspace == nil {
-		return nil, errors.New("telegram: workspace is required")
+	if cfg.Runtime == nil {
+		return nil, errors.New("telegram: runtime is required")
 	}
 	if cfg.HomeDir == "" {
 		return nil, errors.New("telegram: home dir is required")
@@ -84,7 +84,7 @@ func New(cfg Config) (*Bot, error) {
 	}
 	b := &Bot{
 		api:        NewAPI(cfg.Token),
-		ws:         cfg.Workspace,
+		ws:         cfg.Runtime,
 		mclient:    cfg.Media,
 		mediaDir:   dir,
 		allow:      allow,
@@ -303,7 +303,8 @@ func (b *Bot) logPanic(msg string, r any, args ...any) {
 	fmt.Fprintf(b.stderr, "telegram: %s panic=%v\n%s\n", msg, r, stack)
 }
 
-func (b *Bot) handleUpdateSync(ctx context.Context, u Update) {	msg := u.Message
+func (b *Bot) handleUpdateSync(ctx context.Context, u Update) {
+	msg := u.Message
 	if msg == nil {
 		return
 	}

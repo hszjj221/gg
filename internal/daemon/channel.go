@@ -79,7 +79,7 @@ func (m *Monitor) Snapshot() []httpapi.ChannelStatus {
 
 type channelDeps struct {
 	cfg         config.Config
-	workspace   *app.Workspace
+	rt          *app.Runtime
 	logger      *slog.Logger
 	noScheduler bool
 }
@@ -94,14 +94,14 @@ func startChannels(ctx context.Context, deps channelDeps) (*Monitor, error) {
 	mon := NewMonitor()
 	var channels []Channel
 	if !deps.noScheduler {
-		ch, err := newSchedulerChannel(deps.cfg, deps.workspace, deps.logger)
+		ch, err := newSchedulerChannel(deps.cfg, deps.rt, deps.logger)
 		if err != nil {
 			return nil, fmt.Errorf("scheduler: %w", err)
 		}
 		channels = append(channels, ch)
 	}
 	if deps.cfg.TelegramBotToken != "" {
-		ch, err := newTelegramChannel(deps.cfg, deps.workspace, deps.logger)
+		ch, err := newTelegramChannel(deps.cfg, deps.rt, deps.logger)
 		if err != nil {
 			return nil, fmt.Errorf("telegram: %w", err)
 		}

@@ -252,7 +252,7 @@ type ManagerOptions struct {
 	// Zero uses the default; a negative value disables count-based eviction.
 	MaxCompletedRuns int
 	// MaxOpenSessions bounds in-memory conversation services. Inactive sessions
-	// are evicted least-recently-used and transparently reopened by Workspace.
+	// are evicted least-recently-used and transparently reopened by the Runtime.
 	// Zero uses the default; a negative value disables count-based eviction.
 	MaxOpenSessions int
 	// MaxEventsPerRun bounds each replay buffer. Clients that fall behind the
