@@ -24,6 +24,7 @@ import (
 	"github.com/hszjj221/gg/internal/transport/httpapi"
 	"github.com/hszjj221/gg/internal/transport/jsonrpc"
 	"github.com/hszjj221/gg/internal/transport/stdio"
+	"github.com/hszjj221/gg/internal/workspace"
 )
 
 type Options struct {
@@ -125,6 +126,14 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	// P1 workspace: the process working directory is auto-registered as the
+	// "default" workspace on first run after upgrade. Today the daemon still
+	// serves this single root exactly like before; later phases bind
+	// sessions and channels to workspaces.
+	if _, _, err := workspace.EnsureDefaultWorkspace(cfg.HomeDir, cfg.CWD); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	skillSet := skills.Set{}
 	if !noSkills {
 		skillSet, err = skills.Load(skills.LoadOptions{CWD: cfg.CWD, HomeDir: options.HomeDir})
@@ -146,7 +155,7 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	if notice != "" {
 		logger.Info("startup notice", "notice", notice)
 	}
-	workspace, err := app.NewWorkspace(app.WorkspaceOptions{
+	rt, err := app.NewRuntime(app.RuntimeOptions{
 		Config:          cfg,
 		ProviderFactory: providerFactory,
 		Skills:          skillSet,
@@ -159,10 +168,10 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		Log:             logger,
 	})
 	if err != nil {
-		logger.Error("open workspace", "error", err)
+		logger.Error("open runtime", "error", err)
 		return 1
 	}
-	rpc := jsonrpc.NewHandlerWithContext(ctx, workspace)
+	rpc := jsonrpc.NewHandlerWithContext(ctx, rt)
 	// The pidfile lock is the single-instance guard, so its outcome is
 	// fail-closed: a second full daemon is refused, and any failure to
 	// establish the lock at all refuses startup rather than running
@@ -192,7 +201,7 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	if !channelsDisabled {
 		monitor, err = startChannels(ctx, channelDeps{
 			cfg:         cfg,
-			workspace:   workspace,
+			rt:          rt,
 			logger:      logger,
 			noScheduler: noScheduler,
 		})
@@ -224,7 +233,7 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		return 1
 	}
 	server := &http.Server{
-		Handler:           httpHealthHandler(rpc, workspace, token, monitor),
+		Handler:           httpHealthHandler(rpc, rt, token, monitor),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -254,8 +263,8 @@ func Run(ctx context.Context, argv []string, options Options) int {
 
 // httpHealthHandler builds the HTTP handler with the channel monitor wired
 // into the authenticated /health endpoint.
-func httpHealthHandler(rpc *jsonrpc.Handler, workspace *app.Workspace, token string, monitor *Monitor) *httpapi.Handler {
-	h := httpapi.NewHandler(rpc, workspace, token)
+func httpHealthHandler(rpc *jsonrpc.Handler, rt *app.Runtime, token string, monitor *Monitor) *httpapi.Handler {
+	h := httpapi.NewHandler(rpc, rt, token)
 	h.SetChannelStatus(monitor.Snapshot)
 	return h
 }

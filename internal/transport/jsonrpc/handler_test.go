@@ -90,8 +90,8 @@ func TestHandlerReturnsStableApplicationError(t *testing.T) {
 }
 
 func TestHandlerFindsActiveRunForSession(t *testing.T) {
-	workspace := testWorkspaceWithProvider(t, blockingProvider{})
-	handler := NewHandler(workspace)
+	rt := testWorkspaceWithProvider(t, blockingProvider{})
+	handler := NewHandler(rt)
 	created := handler.Handle(context.Background(), Request{JSONRPC: Version, ID: []byte(`1`), Method: "session.create"})
 	snapshot, ok := created.Result.(app.Snapshot)
 	if created.Error != nil || !ok {
@@ -138,7 +138,7 @@ func TestHandlerFindsActiveRunForSession(t *testing.T) {
 	defer cancel()
 	var after int64
 	for {
-		events, done, err := workspace.WaitRun(ctx, status.ID, after)
+		events, done, err := rt.WaitRun(ctx, status.ID, after)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -151,15 +151,15 @@ func TestHandlerFindsActiveRunForSession(t *testing.T) {
 	}
 }
 
-func testWorkspace(t *testing.T) *app.Workspace {
+func testWorkspace(t *testing.T) *app.Runtime {
 	return testWorkspaceWithProvider(t, fakeProvider{})
 }
 
-func testWorkspaceWithProvider(t *testing.T, provider agent.Provider) *app.Workspace {
+func testWorkspaceWithProvider(t *testing.T, provider agent.Provider) *app.Runtime {
 	t.Helper()
 	root := t.TempDir()
 	cfg := config.Config{CWD: filepath.Join(root, "project"), Selection: "test:model"}
-	workspace, err := app.NewWorkspace(app.WorkspaceOptions{
+	rt, err := app.NewRuntime(app.RuntimeOptions{
 		Config:          cfg,
 		ProviderFactory: func(config.Config) agent.Provider { return provider },
 		Repository:      session.NewFileRepository(filepath.Join(root, "sessions")),
@@ -167,7 +167,7 @@ func testWorkspaceWithProvider(t *testing.T, provider agent.Provider) *app.Works
 	if err != nil {
 		t.Fatal(err)
 	}
-	return workspace
+	return rt
 }
 
 func containsJSONKey(data []byte, key string) bool {
@@ -232,13 +232,13 @@ func startRunViaHandler(t *testing.T, handler *Handler, sessionID, params string
 
 // waitForApproval polls run events until an approval is requested or the
 // run finishes, returning the approval ID ("") when none was requested.
-func waitForApproval(t *testing.T, workspace *app.Workspace, runID string) (approvalID string) {
+func waitForApproval(t *testing.T, rt *app.Runtime, runID string) (approvalID string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var after int64
 	for {
-		events, done, err := workspace.WaitRun(ctx, runID, after)
+		events, done, err := rt.WaitRun(ctx, runID, after)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -269,12 +269,12 @@ func TestRunStartDefaultsToRequireApproval(t *testing.T) {
 	}
 
 	t.Run("absent requires approval", func(t *testing.T) {
-		workspace := testWorkspaceWithProvider(t, &toolOnceProvider{})
-		handler := NewHandler(workspace)
+		rt := testWorkspaceWithProvider(t, &toolOnceProvider{})
+		handler := NewHandler(rt)
 		sessionID := newSession(t, handler)
 		runID := startRunViaHandler(t, handler, sessionID,
 			`{"sessionId":"`+sessionID+`","prompt":"hi"}`)
-		approvalID := waitForApproval(t, workspace, runID)
+		approvalID := waitForApproval(t, rt, runID)
 		if approvalID == "" {
 			t.Fatal("expected approval_requested for run.start without requireApproval")
 		}
@@ -288,7 +288,7 @@ func TestRunStartDefaultsToRequireApproval(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		for {
-			_, done, err := workspace.WaitRun(ctx, runID, 0)
+			_, done, err := rt.WaitRun(ctx, runID, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -299,12 +299,12 @@ func TestRunStartDefaultsToRequireApproval(t *testing.T) {
 	})
 
 	t.Run("explicit false skips approval", func(t *testing.T) {
-		workspace := testWorkspaceWithProvider(t, &toolOnceProvider{})
-		handler := NewHandler(workspace)
+		rt := testWorkspaceWithProvider(t, &toolOnceProvider{})
+		handler := NewHandler(rt)
 		sessionID := newSession(t, handler)
 		runID := startRunViaHandler(t, handler, sessionID,
 			`{"sessionId":"`+sessionID+`","prompt":"hi","requireApproval":false}`)
-		if approvalID := waitForApproval(t, workspace, runID); approvalID != "" {
+		if approvalID := waitForApproval(t, rt, runID); approvalID != "" {
 			t.Fatalf("unexpected approval_requested with requireApproval=false")
 		}
 	})
@@ -327,7 +327,7 @@ func TestSystemInfoOmitsDegradedProvidersWhenHealthy(t *testing.T) {
 		t.Fatalf("system.info lost its core fields: %+v", info)
 	}
 	if len(info.DegradedProviders) != 0 {
-		t.Fatalf("expected no degraded providers on a fresh workspace, got %+v", info.DegradedProviders)
+		t.Fatalf("expected no degraded providers on a fresh rt, got %+v", info.DegradedProviders)
 	}
 	data, err := json.Marshal(resp.Result)
 	if err != nil {

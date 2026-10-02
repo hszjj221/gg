@@ -32,11 +32,11 @@ func (a *recordingApprover) consulted() []string {
 	return append([]string(nil), a.tools...)
 }
 
-func unattendedTestWorkspace(t *testing.T) *Workspace {
+func unattendedTestRuntime(t *testing.T) *Runtime {
 	t.Helper()
 	root := t.TempDir()
 	provider := &runtimeProvider{toolFirst: true}
-	workspace, err := NewWorkspace(WorkspaceOptions{
+	rt, err := NewRuntime(RuntimeOptions{
 		Config:          config.Config{CWD: filepath.Join(root, "project"), Selection: "test:model"},
 		ProviderFactory: func(config.Config) agent.Provider { return provider },
 		Repository:      session.NewFileRepository(filepath.Join(root, "sessions")),
@@ -44,20 +44,20 @@ func unattendedTestWorkspace(t *testing.T) *Workspace {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return workspace
+	return rt
 }
 
 // The injected approver must be consulted for approval-gated tools (bash);
 // previously requireApproval=false meant a nil approver and tools executed
 // without any policy check.
 func TestStartTurnWithApproverConsultsInjectedApprover(t *testing.T) {
-	workspace := unattendedTestWorkspace(t)
-	snapshot, err := workspace.CreateSession("")
+	rt := unattendedTestRuntime(t)
+	snapshot, err := rt.CreateSession("")
 	if err != nil {
 		t.Fatal(err)
 	}
 	approver := &recordingApprover{}
-	run, err := workspace.StartTurnWithApprover(context.Background(), snapshot.SessionID, "hi", approver)
+	run, err := rt.StartTurnWithApprover(context.Background(), snapshot.SessionID, "hi", approver)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,13 +73,13 @@ func TestStartTurnWithApproverConsultsInjectedApprover(t *testing.T) {
 // A denied tool must not execute: the run should finish with the provider's
 // follow-up response rather than the tool's output.
 func TestStartTurnWithApproverDeniesToolCall(t *testing.T) {
-	workspace := unattendedTestWorkspace(t)
-	snapshot, err := workspace.CreateSession("")
+	rt := unattendedTestRuntime(t)
+	snapshot, err := rt.CreateSession("")
 	if err != nil {
 		t.Fatal(err)
 	}
 	approver := &recordingApprover{allow: false}
-	run, err := workspace.StartTurnWithApprover(context.Background(), snapshot.SessionID, "hi", approver)
+	run, err := rt.StartTurnWithApprover(context.Background(), snapshot.SessionID, "hi", approver)
 	if err != nil {
 		t.Fatal(err)
 	}

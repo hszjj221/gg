@@ -13,7 +13,7 @@ import (
 
 // newTelegramChannel builds the Telegram bot channel. A construction error
 // is fatal to daemon startup.
-func newTelegramChannel(cfg config.Config, workspace *app.Workspace, logger *slog.Logger) (Channel, error) {
+func newTelegramChannel(cfg config.Config, rt *app.Runtime, logger *slog.Logger) (Channel, error) {
 	var mclient *media.Client
 	if baseURL := nonEmpty(cfg.MediaBaseURL, cfg.BaseURL); baseURL != "" {
 		mclient = media.NewClient(media.Config{
@@ -28,7 +28,7 @@ func newTelegramChannel(cfg config.Config, workspace *app.Workspace, logger *slo
 	bot, err := telegram.New(telegram.Config{
 		Token:      cfg.TelegramBotToken,
 		AllowChats: cfg.TelegramAllowChats,
-		Workspace:  workspace,
+		Runtime:    rt,
 		Media:      mclient,
 		HomeDir:    cfg.HomeDir,
 		Logger:     logger,

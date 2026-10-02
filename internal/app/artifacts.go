@@ -26,7 +26,7 @@ type PublishResult struct {
 	LibraryName      string `json:"libraryName"`
 }
 
-func (w *Workspace) artifactStore() (*artifact.Store, error) {
+func (w *Runtime) artifactStore() (*artifact.Store, error) {
 	if w.artifacts == nil {
 		return nil, fmt.Errorf("artifact store is not available")
 	}
@@ -34,7 +34,7 @@ func (w *Workspace) artifactStore() (*artifact.Store, error) {
 }
 
 // ListArtifacts returns all artifacts, most recently updated first.
-func (w *Workspace) ListArtifacts() ([]*artifact.Artifact, error) {
+func (w *Runtime) ListArtifacts() ([]*artifact.Artifact, error) {
 	store, err := w.artifactStore()
 	if err != nil {
 		return nil, err
@@ -43,7 +43,7 @@ func (w *Workspace) ListArtifacts() ([]*artifact.Artifact, error) {
 }
 
 // GetArtifact returns the artifact view for id.
-func (w *Workspace) GetArtifact(id string) (ArtifactView, error) {
+func (w *Runtime) GetArtifact(id string) (ArtifactView, error) {
 	store, err := w.artifactStore()
 	if err != nil {
 		return ArtifactView{}, err
@@ -66,7 +66,7 @@ func (w *Workspace) GetArtifact(id string) (ArtifactView, error) {
 
 // PublishArtifact marks the latest version published and saves a copy of
 // that version into the library — the same flow as `gg artifact publish`.
-func (w *Workspace) PublishArtifact(id string) (PublishResult, error) {
+func (w *Runtime) PublishArtifact(id string) (PublishResult, error) {
 	store, err := w.artifactStore()
 	if err != nil {
 		return PublishResult{}, err
@@ -102,7 +102,7 @@ func (w *Workspace) PublishArtifact(id string) (PublishResult, error) {
 	}
 }
 
-func (w *Workspace) wrapArtifactError(err error, id string) error {
+func (w *Runtime) wrapArtifactError(err error, id string) error {
 	if errors.Is(err, artifact.ErrNotFound) {
 		return wrapError(ErrorArtifactNotFound, false, err, "artifact %q not found", id)
 	}

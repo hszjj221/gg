@@ -14,17 +14,17 @@ import (
 )
 
 // daemonJobExecutor runs scheduled jobs as agent turns inside the daemon's
-// workspace. Each firing gets a fresh session named scheduler/<job>-<time> so
+// runtime. Each firing gets a fresh session named scheduler/<job>-<time> so
 // runs are auditable and can be reopened with gg resume.
 type daemonJobExecutor struct {
-	workspace *app.Workspace
-	logger    *slog.Logger
+	rt     *app.Runtime
+	logger *slog.Logger
 }
 
 func (e *daemonJobExecutor) Execute(ctx context.Context, job scheduler.Job) (string, string, error) {
 	name := fmt.Sprintf("scheduler/%s-%s", sanitizeJobName(job.Name), time.Now().Format("20060102-150405"))
 	e.logger.Info("scheduled job started", "job", job.Name, "session", name)
-	snap, err := e.workspace.CreateSession(name)
+	snap, err := e.rt.CreateSession(name)
 	if err != nil {
 		return "", "", fmt.Errorf("create scheduler session: %w", err)
 	}
@@ -34,11 +34,11 @@ func (e *daemonJobExecutor) Execute(ctx context.Context, job scheduler.Job) (str
 		job.Name, firedAt, job.Prompt,
 	)
 	approver := scheduler.UnattendedApprover{AllowAll: job.AutoApprove}
-	run, err := e.workspace.StartTurnWithApprover(ctx, snap.SessionID, prompt, approver)
+	run, err := e.rt.StartTurnWithApprover(ctx, snap.SessionID, prompt, approver)
 	if err != nil {
 		return "", snap.SessionPath, fmt.Errorf("start scheduled turn: %w", err)
 	}
-	summary, err := waitRunSummary(ctx, e.workspace, run.ID())
+	summary, err := waitRunSummary(ctx, e.rt, run.ID())
 	if err != nil {
 		return "", snap.SessionPath, err
 	}
@@ -48,7 +48,7 @@ func (e *daemonJobExecutor) Execute(ctx context.Context, job scheduler.Job) (str
 
 // waitRunSummary drains run events until the run completes, fails, or is
 // canceled, and returns the final text output.
-func waitRunSummary(ctx context.Context, w *app.Workspace, runID string) (string, error) {
+func waitRunSummary(ctx context.Context, w *app.Runtime, runID string) (string, error) {
 	var after int64
 	for {
 		events, done, err := w.WaitRun(ctx, runID, after)
@@ -79,13 +79,13 @@ func waitRunSummary(ctx context.Context, w *app.Workspace, runID string) (string
 }
 
 // startScheduler loads persisted jobs and runs the scheduling loop in the
-// background. Jobs fire as agent turns in the daemon's workspace.
-func newSchedulerChannel(cfg config.Config, workspace *app.Workspace, logger *slog.Logger) (Channel, error) {
+// background. Jobs fire as agent turns in the daemon's rt.
+func newSchedulerChannel(cfg config.Config, rt *app.Runtime, logger *slog.Logger) (Channel, error) {
 	store, err := scheduler.Open(cfg.Scheduler.Dir)
 	if err != nil {
 		return nil, fmt.Errorf("open scheduler store: %w", err)
 	}
-	sched := scheduler.New(store, &daemonJobExecutor{workspace: workspace, logger: logger},
+	sched := scheduler.New(store, &daemonJobExecutor{rt: rt, logger: logger},
 		scheduler.WithWorkspaceDir(cfg.CWD),
 		scheduler.WithErrorReporter(func(err error) {
 			logger.Error("scheduled job failed", "error", err)

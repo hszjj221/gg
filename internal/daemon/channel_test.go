@@ -173,7 +173,7 @@ func TestStartChannelsLaunchesNothingWhenConstructionFails(t *testing.T) {
 	}
 	cfg := config.Config{TelegramBotToken: "test-token", HomeDir: homeFile}
 	cfg.Scheduler.Dir = filepath.Join(home, "sched")
-	deps := channelDeps{cfg: cfg, workspace: &app.Workspace{}, logger: testLogger(&out)}
+	deps := channelDeps{cfg: cfg, rt: &app.Runtime{}, logger: testLogger(&out)}
 	if _, err := startChannels(context.Background(), deps); err == nil {
 		t.Fatal("expected telegram construction error")
 	}
@@ -186,7 +186,7 @@ func TestStartChannelsLaunchesNothingWhenConstructionFails(t *testing.T) {
 
 func TestNewTelegramChannelRejectsEmptyToken(t *testing.T) {
 	var out lockedBuffer
-	// Token validation fires before workspace validation in telegram.New.
+	// Token validation fires before rt validation in telegram.New.
 	if _, err := newTelegramChannel(config.Config{}, nil, testLogger(&out)); err == nil {
 		t.Fatal("expected error for empty token")
 	}

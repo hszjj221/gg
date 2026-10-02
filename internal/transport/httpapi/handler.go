@@ -21,9 +21,9 @@ const maxRequestBytes = 4 * 1024 * 1024
 const sseHeartbeatInterval = 15 * time.Second
 
 type Handler struct {
-	rpc       *jsonrpc.Handler
-	workspace *app.Workspace
-	token     string
+	rpc   *jsonrpc.Handler
+	rt    *app.Runtime
+	token string
 	// channelStatus, when set, reports daemon background-channel states on
 	// the authenticated /health endpoint. It is a callback (not a concrete
 	// daemon type) so this transport package does not import the daemon.
@@ -39,8 +39,8 @@ type ChannelStatus struct {
 	FailedAt string `json:"failedAt,omitempty"`
 }
 
-func NewHandler(rpc *jsonrpc.Handler, workspace *app.Workspace, token string) *Handler {
-	return &Handler{rpc: rpc, workspace: workspace, token: token}
+func NewHandler(rpc *jsonrpc.Handler, rt *app.Runtime, token string) *Handler {
+	return &Handler{rpc: rpc, rt: rt, token: token}
 }
 
 // SetChannelStatus installs the callback backing the "channels" field of
@@ -147,7 +147,7 @@ func (h *Handler) handleEvents(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 	for {
 		waitContext, cancel := context.WithTimeout(r.Context(), sseHeartbeatInterval)
-		events, done, err := h.workspace.WaitRun(waitContext, runID, after)
+		events, done, err := h.rt.WaitRun(waitContext, runID, after)
 		cancel()
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {

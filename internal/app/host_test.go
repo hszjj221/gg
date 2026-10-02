@@ -14,38 +14,38 @@ import (
 )
 
 func TestWorkspaceForkCreatesIndependentOpenSession(t *testing.T) {
-	workspace, root := workspaceForTest(t)
-	source, err := workspace.CreateSession("source")
+	rt, root := runtimeForTest(t)
+	source, err := rt.CreateSession("source")
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := workspace.StartTurn(context.Background(), source.SessionID, "question", false)
+	run, err := rt.StartTurn(context.Background(), source.SessionID, "question", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitForRun(t, run, nil)
-	source, err = workspace.Snapshot(source.SessionID)
+	source, err = rt.Snapshot(source.SessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(source.TreeItems) < 2 {
 		t.Fatalf("missing conversation tree: %+v", source.TreeItems)
 	}
-	update, err := workspace.SessionAction(source.SessionID, SessionActionFork, source.TreeItems[0].ID)
+	update, err := rt.SessionAction(source.SessionID, SessionActionFork, source.TreeItems[0].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if update.SessionID == source.SessionID || update.Draft != "question" {
 		t.Fatalf("fork did not create an independent session: %+v", update)
 	}
-	unchanged, err := workspace.Snapshot(source.SessionID)
+	unchanged, err := rt.Snapshot(source.SessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if unchanged.SessionID != source.SessionID || len(unchanged.Messages) != len(source.Messages) {
 		t.Fatalf("fork mutated source session: before=%+v after=%+v", source, unchanged)
 	}
-	child, err := workspace.Snapshot(update.SessionID)
+	child, err := rt.Snapshot(update.SessionID)
 	if err != nil || child.SessionID != update.SessionID {
 		t.Fatalf("forked session was not registered: child=%+v err=%v", child, err)
 	}
@@ -59,15 +59,15 @@ func TestWorkspaceForkCreatesIndependentOpenSession(t *testing.T) {
 }
 
 func TestWorkspaceListsAndRenamesSessions(t *testing.T) {
-	workspace, _ := workspaceForTest(t)
-	snapshot, err := workspace.CreateSession("")
+	rt, _ := runtimeForTest(t)
+	snapshot, err := rt.CreateSession("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := workspace.RenameSession(snapshot.SessionID, "renamed"); err != nil {
+	if _, err := rt.RenameSession(snapshot.SessionID, "renamed"); err != nil {
 		t.Fatal(err)
 	}
-	items, err := workspace.ListSessions()
+	items, err := rt.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,8 +77,8 @@ func TestWorkspaceListsAndRenamesSessions(t *testing.T) {
 }
 
 func TestWorkspaceNewSessionUsesJSONArrayCollections(t *testing.T) {
-	workspace, _ := workspaceForTest(t)
-	snapshot, err := workspace.CreateSession("")
+	rt, _ := runtimeForTest(t)
+	snapshot, err := rt.CreateSession("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,8 +98,8 @@ func TestWorkspaceInvalidatesSessionAfterExternalWriteConflict(t *testing.T) {
 	root := t.TempDir()
 	cwd := filepath.Join(root, "project")
 	repository := session.NewFileRepository(filepath.Join(root, "sessions"))
-	newWorkspace := func() *Workspace {
-		workspace, err := NewWorkspace(WorkspaceOptions{
+	newRuntime := func() *Runtime {
+		rt, err := NewRuntime(RuntimeOptions{
 			Config:          config.Config{CWD: cwd, Selection: "test:model"},
 			ProviderFactory: func(config.Config) agent.Provider { return &runtimeProvider{} },
 			Repository:      repository,
@@ -107,14 +107,14 @@ func TestWorkspaceInvalidatesSessionAfterExternalWriteConflict(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return workspace
+		return rt
 	}
-	first := newWorkspace()
+	first := newRuntime()
 	created, err := first.CreateSession("initial")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second := newWorkspace()
+	second := newRuntime()
 	if _, err := second.OpenSession(created.SessionID); err != nil {
 		t.Fatal(err)
 	}
@@ -135,12 +135,12 @@ func TestWorkspaceInvalidatesSessionAfterExternalWriteConflict(t *testing.T) {
 	}
 }
 
-func workspaceForTest(t *testing.T) (*Workspace, string) {
+func runtimeForTest(t *testing.T) (*Runtime, string) {
 	t.Helper()
 	root := t.TempDir()
 	cwd := filepath.Join(root, "project")
 	provider := &runtimeProvider{}
-	workspace, err := NewWorkspace(WorkspaceOptions{
+	rt, err := NewRuntime(RuntimeOptions{
 		Config:          config.Config{CWD: cwd, Selection: "test:model"},
 		ProviderFactory: func(config.Config) agent.Provider { return provider },
 		Repository:      session.NewFileRepository(filepath.Join(root, "sessions")),
@@ -148,5 +148,5 @@ func workspaceForTest(t *testing.T) (*Workspace, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return workspace, root
+	return rt, root
 }
