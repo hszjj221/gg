@@ -247,6 +247,13 @@ func (r *Runner) prepareToolCall(ctx context.Context, call ToolCall, onEvent fun
 	req, reqErr := describeToolCall(tool, call)
 	summary := req.Summary
 	details := req.Details
+	// A tool may pre-approve its own request for a narrow, path-scoped
+	// exemption (write/edit inside the workspace agent area). The
+	// annotation keeps the exemption visible in the event stream.
+	preApproved := reqErr == nil && req.PreApproved
+	if preApproved {
+		summary += " [agent area]"
+	}
 	emitToolEvent(onEvent, Event{Type: EventToolCallStart, ToolCallID: call.ID, ToolName: call.Name, Summary: summary, Details: details})
 	if reqErr != nil {
 		result := toolError(fmt.Errorf("approval request for tool %q failed: %w", call.Name, reqErr))
@@ -261,16 +268,22 @@ func (r *Runner) prepareToolCall(ctx context.Context, call ToolCall, onEvent fun
 			if len(req.Arguments) == 0 {
 				req.Arguments = call.Arguments
 			}
-			decision, err := r.approver.Approve(ctx, req)
-			if err != nil {
-				result := toolError(fmt.Errorf("approval failed for tool %q: %w", call.Name, err))
-				emitToolFinish(onEvent, call, summary, result)
-				return nil, "", &result
-			}
-			if !decision.Allow {
-				result := toolError(fmt.Errorf("tool call %q denied by user", call.Name))
-				emitToolFinish(onEvent, call, summary, result)
-				return nil, "", &result
+			// A pre-approved request skips the approver entirely: the tool
+			// asserted a narrow, registry-allowed exemption (agent-area
+			// writes). The start/finish events above and below are still
+			// emitted, with the summary annotated for transparency.
+			if !req.PreApproved {
+				decision, err := r.approver.Approve(ctx, req)
+				if err != nil {
+					result := toolError(fmt.Errorf("approval failed for tool %q: %w", call.Name, err))
+					emitToolFinish(onEvent, call, summary, result)
+					return nil, "", &result
+				}
+				if !decision.Allow {
+					result := toolError(fmt.Errorf("tool call %q denied by user", call.Name))
+					emitToolFinish(onEvent, call, summary, result)
+					return nil, "", &result
+				}
 			}
 		}
 	}

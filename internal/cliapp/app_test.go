@@ -453,7 +453,10 @@ func TestRunMemoryAddToolWritesMemoryFileAndSessionMessages(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
 	}
-	content, err := os.ReadFile(filepath.Join(home, ".gg", "memory", "MEMORY.md"))
+	// memory_add defaults to the workspace target: the CLI's CWD is
+	// auto-registered as a workspace, so the write lands in the
+	// workspace layer, not the global store.
+	content, err := os.ReadFile(filepath.Join(dir, ".gg", "memory", "MEMORY.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -704,13 +707,20 @@ func TestCompactCommandWritesSummaryWithoutAppendingMessages(t *testing.T) {
 // A failed summarization no longer kills the turn: auto-compact degrades
 // to hard truncation (explicit marker, prefix dropped) and the main request
 // proceeds.
+//
+// The budget sits between the post-truncation total (~1450) and the
+// pre-truncation total (~2450) with wide margins on both sides. The totals
+// drift with the environment — the system prompt embeds the absolute working
+// directory and tool definitions grow over time — so a tightly tuned budget
+// flakes on CI runners with longer temp paths (2026-10-02: 1616/1627 vs a
+// 1600 budget). Keep both margins in the hundreds.
 func TestAutoCompactProviderErrorFallsBackToTruncation(t *testing.T) {
 	dir := t.TempDir()
 	provider := &appContextProvider{err: errors.New("summarizer down")}
 	cfg := config.Config{
 		CWD:       dir,
 		Selection: "openai:gpt-4.1",
-		Context:   config.ContextConfig{MaxPromptTokens: 1600, TailTurns: 1, SummaryMaxTokens: 100, AutoCompact: true},
+		Context:   config.ContextConfig{MaxPromptTokens: 2000, TailTurns: 1, SummaryMaxTokens: 100, AutoCompact: true},
 	}
 	executor := newTurnExecutor(
 		cfg,
@@ -1231,7 +1241,8 @@ func TestMemoryAddCommandWritesMarkdownWithoutCallingProvider(t *testing.T) {
 	if !strings.Contains(stdout.String(), "memory added") {
 		t.Fatalf("unexpected memory add output: %q", stdout.String())
 	}
-	content, err := os.ReadFile(filepath.Join(home, ".gg", "memory", "MEMORY.md"))
+	// /memory add defaults to the workspace target, like memory_add.
+	content, err := os.ReadFile(filepath.Join(dir, ".gg", "memory", "MEMORY.md"))
 	if err != nil {
 		t.Fatal(err)
 	}

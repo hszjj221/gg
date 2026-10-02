@@ -136,6 +136,15 @@ type ApprovalRequest struct {
 	Summary   string          `json:"summary"`
 	Details   string          `json:"details,omitempty"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`
+	// PreApproved marks a request the tool itself pre-approved, so the
+	// runner skips the approver. Only set for narrow, path-scoped
+	// exemptions the tool registry explicitly allows (currently:
+	// write/edit targeting the workspace's agent area). Reads and every
+	// other tool keep the normal approval policy.
+	PreApproved bool `json:"preApproved,omitempty"`
+	// PreApprovedReason is a short human-readable reason for the
+	// pre-approval, e.g. "agent area". Kept visible for transparency.
+	PreApprovedReason string `json:"preApprovedReason,omitempty"`
 }
 
 type ApprovalDecision struct {

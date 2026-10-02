@@ -25,6 +25,20 @@ const maxSearchHits = 10
 // Scope is one of "all", "curated", "daily", "people", "groups". Results are
 // ordered by match count, then by file recency.
 func (s *Store) Search(query, scope string) ([]Hit, error) {
+	hits, err := s.searchAll(query, scope)
+	if err != nil {
+		return nil, err
+	}
+	if len(hits) > maxSearchHits {
+		hits = hits[:maxSearchHits]
+	}
+	return hits, nil
+}
+
+// searchAll is Search without the result cap, for layered merges that
+// dedup across layers before applying their own cap. Capping each layer
+// first would discard distinct matches that survive dedup.
+func (s *Store) searchAll(query, scope string) ([]Hit, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, fmt.Errorf("search query is required")
@@ -40,11 +54,30 @@ func (s *Store) Search(query, scope string) ([]Hit, error) {
 	}
 	lowered := strings.ToLower(query)
 	var hits []Hit
-	err := filepath.WalkDir(s.dir, func(path string, entry os.DirEntry, err error) error {
+	walkRoot := s.dir
+	if s.strict {
+		// Never walk a symlinked workspace layer: its target is not the
+		// workspace's memory.
+		realDir, err := resolveWorkspaceDir(s.dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		walkRoot = realDir
+	}
+	err := filepath.WalkDir(walkRoot, func(path string, entry os.DirEntry, err error) error {
 		if err != nil || entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
 			return nil
 		}
-		rel, err := filepath.Rel(s.dir, path)
+		if s.strict && entry.Type()&os.ModeSymlink != 0 {
+			// A symlinked memory file could point outside the
+			// workspace; skip it instead of following it into the
+			// prompt.
+			return nil
+		}
+		rel, err := filepath.Rel(walkRoot, path)
 		if err != nil || !scopeMatch(scope, rel) {
 			return nil
 		}
@@ -84,9 +117,6 @@ func (s *Store) Search(query, scope string) ([]Hit, error) {
 		}
 		return hits[i].mtime > hits[j].mtime
 	})
-	if len(hits) > maxSearchHits {
-		hits = hits[:maxSearchHits]
-	}
 	return hits, nil
 }
 

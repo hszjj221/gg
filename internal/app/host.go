@@ -31,6 +31,9 @@ type workspaceState struct {
 	manager  *Manager
 	skills   skills.Set
 	degraded *DegradedRegistry
+	// memStore is the per-workspace memory overlay: <root>/.gg/memory/
+	// searched before (and shadowing) the global store. Built in getState.
+	memStore memory.StoreAPI
 }
 
 type RuntimeOptions struct {
@@ -145,6 +148,22 @@ func (w *Runtime) getState(workspaceID string) (*workspaceState, error) {
 		return nil, errorf(ErrorWorkspaceMismatch, false, "workspace %q is not registered", workspaceID)
 	}
 	st := &workspaceState{ws: ws, degraded: &DegradedRegistry{}}
+	// Each workspace gets its own memory overlay: <root>/.gg/memory/
+	// searched before (and shadowing) the global store. The overlay
+	// directory is created lazily on first write; reads never create it.
+	global := w.memStore
+	if global == nil {
+		global = memory.NewStore(w.cfg.Memory.Dir)
+	}
+	st.memStore = memory.NewOverlay(memory.OverlayDir(ws.Root), global)
+	// Prune expired workspace daily logs at state init (the global store
+	// is pruned in SetupPersonal). A missing lazily-created layer counts
+	// as empty; failures are warnings, not fatal.
+	if ov, ok := st.memStore.(*memory.Overlay); ok {
+		if _, err := ov.PruneWorkspaceDaily(w.cfg.Memory.DailyLogRetentionDays); err != nil && w.logger != nil {
+			w.logger.Warn("prune workspace daily memory", "workspace", ws.Name, "error", err)
+		}
+	}
 	if !w.noSkills {
 		skillSet, err := skills.Load(skills.LoadOptions{CWD: ws.Root, HomeDir: w.cfg.HomeDir})
 		if err != nil {
@@ -564,7 +583,7 @@ func (w *Runtime) addLoaded(store *session.Store, loaded session.Loaded) (*works
 		Skills:          st.skills,
 		ModelRecorded:   loaded.LastModel != nil && loaded.LastModel.Selection == cfg.Selection,
 		Profile:         w.profile,
-		MemoryStore:     w.memStore,
+		MemoryStore:     st.memStore,
 		Log:             w.logger,
 		Degraded:        st.degraded,
 	})

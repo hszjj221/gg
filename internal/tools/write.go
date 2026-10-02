@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/hszjj221/gg/internal/agent"
+	"github.com/hszjj221/gg/internal/workspace"
 )
 
 type WriteTool struct {
@@ -23,7 +24,7 @@ func (t WriteTool) Name() string { return "write" }
 func (t WriteTool) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "write",
-		Description: "Create or overwrite a text file within the current working directory, creating parent directories as needed.",
+		Description: "Create or overwrite a text file within the current working directory, creating parent directories as needed. Prefer writing drafts, downloads, and intermediate files to `.gg/agent/` — that directory is the agent's private area and writes there skip the approval prompt.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -56,12 +57,22 @@ func (t WriteTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, 
 		return agent.ApprovalRequest{}, err
 	}
 	details := fmt.Sprintf("path: %s\noperation: %s\ncontent bytes: %d\n\n%s", input.Path, operation, len(input.Content), contentChangePreview(before, input.Content))
-	return agent.ApprovalRequest{
+	req := agent.ApprovalRequest{
 		ToolName:  "write",
 		Summary:   fmt.Sprintf("write %s %s (%d bytes)", operation, input.Path, len(input.Content)),
 		Details:   details,
 		Arguments: raw,
-	}, nil
+	}
+	// Writes into the workspace's agent area are pre-approved: that
+	// directory is the agent's private area, so the agent writing its own
+	// files there needs no user consent. Everything else keeps the
+	// normal approval policy. The check is symlink-aware (InRealAgentDir):
+	// a symlinked agent area never grants the exemption.
+	if workspace.InRealAgentDir(t.cwd, path) {
+		req.PreApproved = true
+		req.PreApprovedReason = "agent area"
+	}
+	return req, nil
 }
 
 func (t WriteTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {
@@ -78,6 +89,16 @@ func (t WriteTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult 
 	path, err := resolveWritableInsideCWD(t.cwd, input.Path)
 	if err != nil {
 		return errorResult(err)
+	}
+	// Lazily create the agent area on first use; writes there are
+	// pre-approved, so the directory must exist before the tool runs.
+	// Fail closed: if the agent area is a symlink (or became one after
+	// approval), refuse the write instead of letting it land outside the
+	// real agent area without the approval those paths would need.
+	if workspace.InAgentDir(t.cwd, path) {
+		if _, err := workspace.EnsureRealAgentDir(t.cwd); err != nil {
+			return errorResult(err)
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return errorResult(err)

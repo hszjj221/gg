@@ -375,7 +375,7 @@ func runJobRun(ctx context.Context, cfg config.Config, options Options, store *s
 		Store:           sessionStore,
 		Skills:          skillSet,
 		Profile:         personal.Profile,
-		MemoryStore:     personal.Store,
+		MemoryStore:     workspaceMemoryStore(cfg, personal.Store),
 	})
 	prompt := fmt.Sprintf("[Manual trigger of scheduled job %q. You are running unattended: no human will see approval prompts, so only tools permitted by policy will execute. Complete the task and finish with a concise summary.]\n\n%s",
 		job.Name, job.Prompt)
