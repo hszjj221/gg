@@ -19,11 +19,14 @@ import (
 const CurrentVersion = 3
 
 type Header struct {
-	Type            string  `json:"type"`
-	Version         int     `json:"version"`
-	ID              string  `json:"id"`
-	Timestamp       string  `json:"timestamp"`
-	CWD             string  `json:"cwd"`
+	Type      string `json:"type"`
+	Version   int    `json:"version"`
+	ID        string `json:"id"`
+	Timestamp string `json:"timestamp"`
+	CWD       string `json:"cwd"`
+	// WorkspaceID is the stable ID of the workspace this session belongs to.
+	// Empty for sessions written before workspace binding existed.
+	WorkspaceID     string  `json:"workspaceId,omitempty"`
 	ParentSessionID string  `json:"parentSessionId,omitempty"`
 	ParentEntryID   *string `json:"parentEntryId,omitempty"`
 	// ParentSession is retained only for reading session v2 lineage.
@@ -444,6 +447,7 @@ func (s *Store) Fork(id *string) (*Store, error) {
 		ID:              newID(),
 		Timestamp:       now(),
 		CWD:             s.header.CWD,
+		WorkspaceID:     s.header.WorkspaceID,
 		ParentSessionID: s.header.ID,
 		ParentEntryID:   cloneStringPtr(id),
 	}
@@ -457,6 +461,32 @@ func (s *Store) Fork(id *string) (*Store, error) {
 		store.lastID = &last
 	}
 	return store, nil
+}
+
+// SetWorkspaceID persists a workspace binding on the session header.
+// No-op when the header already carries id. The file is rewritten
+// atomically (temp file + rename, reuse rewriteSession) under the writer
+// lock; use validateCurrentLocked so concurrent appends fail with
+// ErrConflict instead of silently forking the file.
+func (s *Store) SetWorkspaceID(id string) error {
+	if s == nil {
+		return fmt.Errorf("session persistence is disabled")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.header.WorkspaceID == id {
+		return nil
+	}
+	release, err := acquireWriterLock(s.path)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if err := s.validateCurrentLocked(); err != nil {
+		return err
+	}
+	s.header.WorkspaceID = id
+	return rewriteSession(s.path, s.header, s.records)
 }
 
 func (s *Store) AppendMessage(message agent.Message) error {

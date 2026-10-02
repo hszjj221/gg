@@ -267,7 +267,7 @@ func TestEnsureDefaultReusesExistingName(t *testing.T) {
 	}
 }
 
-func TestEnsureDefaultKeepsForeignDefault(t *testing.T) {
+func TestEnsureDefaultDerivesNameWhenDefaultTaken(t *testing.T) {
 	home := tempHome(t)
 	root := t.TempDir()
 	other := t.TempDir()
@@ -276,13 +276,56 @@ func TestEnsureDefaultKeepsForeignDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A "default" pointing elsewhere is left alone (P1: zero behavior change).
+	// A "default" pointing elsewhere must not be silently adopted: root
+	// gets its own workspace with a derived name, and the foreign default
+	// is left untouched.
 	w, added, err := r.EnsureDefault(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if added || w.ID != def.ID {
-		t.Fatalf("EnsureDefault = %+v, added=%v; want existing default untouched", w, added)
+	if !added || w.Name == DefaultName || w.ID == def.ID {
+		t.Fatalf("EnsureDefault = %+v, added=%v; want new workspace with derived name", w, added)
+	}
+	if d, ok := r.FindByName(DefaultName); !ok || d.ID != def.ID {
+		t.Fatalf("foreign default was disturbed: %+v", d)
+	}
+	// Idempotent: the derived workspace is found by root on retry.
+	w2, added2, err := r.EnsureDefault(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added2 || w2.ID != w.ID {
+		t.Fatalf("EnsureDefault retry = %+v, added=%v; want same workspace", w2, added2)
+	}
+}
+
+func TestEnsureDefaultDerivesNameDedupes(t *testing.T) {
+	home := tempHome(t)
+	r, _ := Load(home)
+	if _, err := r.Add(DefaultName, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	// Two sibling directories share a base name: the second registration
+	// gets a suffixed name.
+	parent := t.TempDir()
+	first := filepath.Join(parent, "proj")
+	second := filepath.Join(parent, "sub", "proj")
+	if err := os.MkdirAll(first, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(second, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	w1, _, err := r.EnsureDefault(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w2, _, err := r.EnsureDefault(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w1.Name != "proj" || w2.Name != "proj-2" {
+		t.Fatalf("derived names = %q, %q; want %q, %q", w1.Name, w2.Name, "proj", "proj-2")
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/skills"
 	"github.com/hszjj221/gg/internal/userprofile"
+	"github.com/hszjj221/gg/internal/workspace"
 )
 
 const jobUsage = `usage:
@@ -92,6 +93,15 @@ func runJobAdd(cfg config.Config, store *scheduler.Store, args []string, stdout,
 		Timezone:    timezone,
 		Workspace:   cfg.CWD,
 		AutoApprove: allowAll,
+	}
+	// Bind the job to the workspace whose root is the current directory so
+	// the daemon runs it inside the right workspace. When the registry
+	// cannot be read the ID stays empty and the daemon falls back to the
+	// default workspace.
+	if reg, err := workspace.Load(cfg.HomeDir); err == nil {
+		if ws, ok := reg.FindByRoot(cfg.CWD); ok {
+			job.WorkspaceID = ws.ID
+		}
 	}
 	set := 0
 	if cronExpr != "" {

@@ -3,6 +3,7 @@ package jsonrpc
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,7 +14,26 @@ import (
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/library"
 	"github.com/hszjj221/gg/internal/session"
+	"github.com/hszjj221/gg/internal/workspace"
 )
+
+func testRegistry(t *testing.T) *workspace.Registry {
+	t.Helper()
+	reg, err := workspace.Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reg
+}
+
+func testWorkspaceDir(t *testing.T, root, name string) string {
+	t.Helper()
+	dir := filepath.Join(root, name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
 
 func testArtifactHandler(t *testing.T) (*Handler, *artifact.Store) {
 	t.Helper()
@@ -27,11 +47,13 @@ func testArtifactHandler(t *testing.T) (*Handler, *artifact.Store) {
 		t.Fatal(err)
 	}
 	rt, err := app.NewRuntime(app.RuntimeOptions{
-		Config:          config.Config{CWD: filepath.Join(root, "project"), Selection: "test:model"},
-		ProviderFactory: func(config.Config) agent.Provider { return fakeProvider{} },
-		Repository:      session.NewFileRepository(filepath.Join(root, "sessions")),
-		ArtifactStore:   astore,
-		LibraryStore:    lstore,
+		Config:            config.Config{CWD: testWorkspaceDir(t, root, "project"), Selection: "test:model"},
+		ProviderFactory:   func(config.Config) agent.Provider { return fakeProvider{} },
+		WorkspaceRegistry: testRegistry(t),
+		NoSkills:          true,
+		Repository:        session.NewFileRepository(filepath.Join(root, "sessions")),
+		ArtifactStore:     astore,
+		LibraryStore:      lstore,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/hszjj221/gg/internal/scheduler"
+	"github.com/hszjj221/gg/internal/workspace"
 )
 
 func TestSanitizeJobName(t *testing.T) {
@@ -68,4 +71,43 @@ func writePidFileForTest(t *testing.T, home string) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, "ggd.pid"), []byte("2147483647\n"), 0o644)
+}
+
+func TestResolveJobWorkspaceRef(t *testing.T) {
+	home := t.TempDir()
+	legacyDir := t.TempDir()
+	reg, err := workspace.Load(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, err := reg.Add("legacy", legacyDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		job  scheduler.Job
+		want string
+	}{
+		// WorkspaceID wins over the legacy dir.
+		{"id wins", scheduler.Job{WorkspaceID: "w_explicit", Workspace: legacyDir}, "w_explicit"},
+		{"id only", scheduler.Job{WorkspaceID: "w_explicit"}, "w_explicit"},
+		// Legacy dir resolves through the registry.
+		{"legacy dir", scheduler.Job{Workspace: legacyDir}, ws.ID},
+		// Unknown legacy dir falls back to default.
+		{"unknown dir", scheduler.Job{Workspace: t.TempDir()}, ""},
+		// Pre-P2 jobs (no binding at all) land in the default workspace.
+		{"no binding", scheduler.Job{}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveJobWorkspaceRef(tc.job, reg); got != tc.want {
+				t.Fatalf("resolveJobWorkspaceRef(%+v) = %q, want %q", tc.job, got, tc.want)
+			}
+		})
+	}
 }

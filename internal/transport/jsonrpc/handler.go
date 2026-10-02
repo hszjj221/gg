@@ -18,7 +18,9 @@ const Version = "2.0"
 // that omit it must handle approval_requested events.
 // 1.3: system.info results gain degradedProviders (omitted when healthy),
 // listing tool providers whose build failed and degraded to absent.
-const ProtocolVersion = "1.3"
+// 1.4: run.start accepts an optional workspace (name or ID); absent → the
+// session's bound workspace.
+const ProtocolVersion = "1.4"
 
 // capabilities lists transport-level features. Tool capabilities are
 // derived from app.ToolCapabilities so the advertised set cannot drift
@@ -169,6 +171,11 @@ func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) 
 			// not silently disable the approval pipeline (fail closed).
 			// Pass explicit false only from trusted automation.
 			RequireApproval *bool `json:"requireApproval"`
+			// Workspace optionally pins the turn to a workspace (name or
+			// ID). Absent keeps the session's own bound workspace: a
+			// non-empty value that names a different workspace than the
+			// session is bound to fails with workspace_mismatch.
+			Workspace string `json:"workspace"`
 		}
 		if err := decodeParams(raw, &params); err != nil {
 			return nil, err
@@ -180,7 +187,7 @@ func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) 
 		if params.RequireApproval != nil {
 			requireApproval = *params.RequireApproval
 		}
-		run, err := h.rt.StartTurn(h.runContext, params.SessionID, params.Prompt, requireApproval)
+		run, err := h.rt.StartTurnInWorkspace(h.runContext, params.SessionID, params.Prompt, requireApproval, params.Workspace)
 		if err != nil {
 			return nil, err
 		}
@@ -324,6 +331,7 @@ func ErrorFrom(err error) *Error {
 		app.ErrorEventHistoryExpired: -32005,
 		app.ErrorSessionConflict:     -32006,
 		app.ErrorInvalidAction:       -32007,
+		app.ErrorWorkspaceMismatch:   -32008,
 	}[appErr.Code]
 	if numeric == 0 {
 		numeric = -32000

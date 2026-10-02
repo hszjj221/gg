@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -35,11 +36,17 @@ func (a *recordingApprover) consulted() []string {
 func unattendedTestRuntime(t *testing.T) *Runtime {
 	t.Helper()
 	root := t.TempDir()
+	cwd := filepath.Join(root, "project")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	provider := &runtimeProvider{toolFirst: true}
 	rt, err := NewRuntime(RuntimeOptions{
-		Config:          config.Config{CWD: filepath.Join(root, "project"), Selection: "test:model"},
-		ProviderFactory: func(config.Config) agent.Provider { return provider },
-		Repository:      session.NewFileRepository(filepath.Join(root, "sessions")),
+		Config:            config.Config{CWD: cwd, Selection: "test:model"},
+		ProviderFactory:   func(config.Config) agent.Provider { return provider },
+		WorkspaceRegistry: testRegistry(t),
+		NoSkills:          true,
+		Repository:        session.NewFileRepository(filepath.Join(root, "sessions")),
 	})
 	if err != nil {
 		t.Fatal(err)

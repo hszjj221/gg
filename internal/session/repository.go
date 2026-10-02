@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -48,7 +49,17 @@ func (r *FileRepository) OpenForCWD(cwd, target string, allowPath bool) (*Store,
 	}
 	path, err := FindForCWD(r.root, cwd, target)
 	if err != nil {
-		return nil, Loaded{}, err
+		if !errors.Is(err, ErrNotFound) {
+			return nil, Loaded{}, err
+		}
+		// Upgrade fallback: sessions written before directory keys were
+		// canonicalized (raw CWD spellings like "." or symlinked paths)
+		// live outside the canonical directory.
+		anywhere, ferr := FindSessionAnywhere(r.root, target)
+		if ferr != nil {
+			return nil, Loaded{}, err
+		}
+		path = anywhere
 	}
 	return r.OpenPath(path, cwd)
 }

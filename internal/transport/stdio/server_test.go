@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/transport/jsonrpc"
+	"github.com/hszjj221/gg/internal/workspace"
 )
 
 type fakeProvider struct{}
@@ -24,10 +26,20 @@ func (fakeProvider) Complete(context.Context, agent.Request, func(agent.Event)) 
 
 func TestServerProcessesNewlineDelimitedRequests(t *testing.T) {
 	root := t.TempDir()
+	cwd := filepath.Join(root, "project")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := workspace.Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	rt, err := app.NewRuntime(app.RuntimeOptions{
-		Config:          config.Config{CWD: filepath.Join(root, "project"), Selection: "test:model"},
-		ProviderFactory: func(config.Config) agent.Provider { return fakeProvider{} },
-		Repository:      session.NewFileRepository(filepath.Join(root, "sessions")),
+		Config:            config.Config{CWD: cwd, Selection: "test:model"},
+		ProviderFactory:   func(config.Config) agent.Provider { return fakeProvider{} },
+		WorkspaceRegistry: reg,
+		NoSkills:          true,
+		Repository:        session.NewFileRepository(filepath.Join(root, "sessions")),
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -28,13 +28,17 @@ const DefaultTimeout = 10 * time.Minute
 // Job is a scheduled unit of work: at the scheduled time the daemon wakes an
 // agent with Job.Prompt.
 type Job struct {
-	ID          string        `json:"id"`
-	Name        string        `json:"name"`
-	Kind        Kind          `json:"kind"`
-	Schedule    string        `json:"schedule"` // cron: 5-field expression; once: RFC3339 timestamp
-	Prompt      string        `json:"prompt"`
-	Timezone    string        `json:"timezone"`
-	Workspace   string        `json:"workspace,omitempty"` // workspace dir the job was created from; the daemon only fires jobs for its own workspace
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Kind      Kind   `json:"kind"`
+	Schedule  string `json:"schedule"` // cron: 5-field expression; once: RFC3339 timestamp
+	Prompt    string `json:"prompt"`
+	Timezone  string `json:"timezone"`
+	Workspace string `json:"workspace,omitempty"` // workspace dir the job was created from (legacy; kept for jobs created before workspace IDs were bound)
+	// WorkspaceID is the stable workspace the job runs in. It takes
+	// precedence over Workspace; empty means "the default workspace"
+	// (jobs created before workspace binding existed).
+	WorkspaceID string        `json:"workspace_id,omitempty"`
 	Enabled     bool          `json:"enabled"`
 	AutoApprove bool          `json:"auto_approve"`
 	Timeout     time.Duration `json:"timeout"`

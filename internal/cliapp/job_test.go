@@ -12,6 +12,7 @@ import (
 	"github.com/hszjj221/gg/internal/cli"
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/scheduler"
+	"github.com/hszjj221/gg/internal/workspace"
 )
 
 func jobTestOptions(dir string, stdout, stderr *strings.Builder) Options {
@@ -438,5 +439,50 @@ func TestJobPromptFallback(t *testing.T) {
 	}
 	if args.Command != cli.CommandJob {
 		t.Fatalf("got command %q, want job", args.Command)
+	}
+}
+
+func TestJobAddBindsWorkspaceID(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr strings.Builder
+	opts := jobTestOptions(dir, &stdout, &stderr)
+
+	// Register the job's CWD as a workspace so the add path can bind it.
+	reg, err := workspace.Load(opts.HomeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, err := reg.Add("homebase", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	if code := Run(context.Background(), []string{"job", "add", "--in", "30m", "--name", "w", "prompt"}, opts); code != 0 {
+		t.Fatalf("job add exit %d: %s", code, stderr.String())
+	}
+	cfg, err := resolveJobTestConfig(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := scheduler.Open(cfg.Scheduler.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("listed %d jobs, want 1", len(jobs))
+	}
+	if jobs[0].WorkspaceID != ws.ID {
+		t.Fatalf("WorkspaceID = %q, want %q", jobs[0].WorkspaceID, ws.ID)
+	}
+	// The legacy dir field is still recorded alongside the ID.
+	if jobs[0].Workspace != dir {
+		t.Fatalf("Workspace = %q, want legacy dir %q", jobs[0].Workspace, dir)
 	}
 }
