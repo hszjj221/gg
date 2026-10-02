@@ -158,11 +158,13 @@ func testWorkspace(t *testing.T) *app.Runtime {
 func testWorkspaceWithProvider(t *testing.T, provider agent.Provider) *app.Runtime {
 	t.Helper()
 	root := t.TempDir()
-	cfg := config.Config{CWD: filepath.Join(root, "project"), Selection: "test:model"}
+	cfg := config.Config{CWD: testWorkspaceDir(t, root, "project"), Selection: "test:model"}
 	rt, err := app.NewRuntime(app.RuntimeOptions{
-		Config:          cfg,
-		ProviderFactory: func(config.Config) agent.Provider { return provider },
-		Repository:      session.NewFileRepository(filepath.Join(root, "sessions")),
+		Config:            cfg,
+		ProviderFactory:   func(config.Config) agent.Provider { return provider },
+		WorkspaceRegistry: testRegistry(t),
+		NoSkills:          true,
+		Repository:        session.NewFileRepository(filepath.Join(root, "sessions")),
 	})
 	if err != nil {
 		t.Fatal(err)

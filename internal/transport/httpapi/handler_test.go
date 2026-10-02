@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/transport/jsonrpc"
+	"github.com/hszjj221/gg/internal/workspace"
 )
 
 type fakeProvider struct{}
@@ -219,11 +221,21 @@ func TestWriteSSEIncludesEventID(t *testing.T) {
 func testHandler(t *testing.T, token string) *Handler {
 	t.Helper()
 	root := t.TempDir()
-	cfg := config.Config{CWD: filepath.Join(root, "project"), Selection: "test:model"}
+	cwd := filepath.Join(root, "project")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := workspace.Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{CWD: cwd, Selection: "test:model"}
 	rt, err := app.NewRuntime(app.RuntimeOptions{
-		Config:          cfg,
-		ProviderFactory: func(config.Config) agent.Provider { return fakeProvider{} },
-		Repository:      session.NewFileRepository(filepath.Join(root, "sessions")),
+		Config:            cfg,
+		ProviderFactory:   func(config.Config) agent.Provider { return fakeProvider{} },
+		WorkspaceRegistry: reg,
+		NoSkills:          true,
+		Repository:        session.NewFileRepository(filepath.Join(root, "sessions")),
 	})
 	if err != nil {
 		t.Fatal(err)

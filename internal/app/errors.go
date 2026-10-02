@@ -16,6 +16,10 @@ const (
 	ErrorSessionConflict     ErrorCode = "session_conflict"
 	ErrorInvalidAction       ErrorCode = "invalid_action"
 	ErrorArtifactNotFound    ErrorCode = "artifact_not_found"
+	// ErrorWorkspaceMismatch reports a session bound to a different
+	// workspace than the one requested. Messages name the workspace only;
+	// roots stay private to the daemon host.
+	ErrorWorkspaceMismatch ErrorCode = "workspace_mismatch"
 )
 
 // AppError carries a stable code while retaining the original cause for

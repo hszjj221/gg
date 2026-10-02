@@ -16,6 +16,10 @@ import (
 func testArtifactWorkspace(t *testing.T) (*Runtime, *artifact.Store) {
 	t.Helper()
 	root := t.TempDir()
+	cwd := filepath.Join(root, "project")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	astore, err := artifact.Open(filepath.Join(root, "artifacts"))
 	if err != nil {
 		t.Fatal(err)
@@ -25,11 +29,13 @@ func testArtifactWorkspace(t *testing.T) (*Runtime, *artifact.Store) {
 		t.Fatal(err)
 	}
 	rt, err := NewRuntime(RuntimeOptions{
-		Config:          config.Config{CWD: filepath.Join(root, "project"), Selection: "test:model"},
-		ProviderFactory: func(config.Config) agent.Provider { return &runtimeProvider{} },
-		Repository:      session.NewFileRepository(filepath.Join(root, "sessions")),
-		ArtifactStore:   astore,
-		LibraryStore:    lstore,
+		Config:            config.Config{CWD: cwd, Selection: "test:model"},
+		ProviderFactory:   func(config.Config) agent.Provider { return &runtimeProvider{} },
+		WorkspaceRegistry: testRegistry(t),
+		NoSkills:          true,
+		Repository:        session.NewFileRepository(filepath.Join(root, "sessions")),
+		ArtifactStore:     astore,
+		LibraryStore:      lstore,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -129,10 +135,16 @@ func isArtifactNotFound(err error) bool {
 
 func TestWorkspaceArtifactStoreUnavailable(t *testing.T) {
 	root := t.TempDir()
+	cwd := filepath.Join(root, "project")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	w, err := NewRuntime(RuntimeOptions{
-		Config:          config.Config{CWD: filepath.Join(root, "project"), Selection: "test:model"},
-		ProviderFactory: func(config.Config) agent.Provider { return &runtimeProvider{} },
-		Repository:      session.NewFileRepository(filepath.Join(root, "sessions")),
+		Config:            config.Config{CWD: cwd, Selection: "test:model"},
+		ProviderFactory:   func(config.Config) agent.Provider { return &runtimeProvider{} },
+		WorkspaceRegistry: testRegistry(t),
+		NoSkills:          true,
+		Repository:        session.NewFileRepository(filepath.Join(root, "sessions")),
 	})
 	if err != nil {
 		t.Fatal(err)

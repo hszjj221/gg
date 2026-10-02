@@ -11,6 +11,7 @@ import (
 	"github.com/hszjj221/gg/internal/app"
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/scheduler"
+	"github.com/hszjj221/gg/internal/workspace"
 )
 
 // daemonJobExecutor runs scheduled jobs as agent turns inside the daemon's
@@ -24,7 +25,7 @@ type daemonJobExecutor struct {
 func (e *daemonJobExecutor) Execute(ctx context.Context, job scheduler.Job) (string, string, error) {
 	name := fmt.Sprintf("scheduler/%s-%s", sanitizeJobName(job.Name), time.Now().Format("20060102-150405"))
 	e.logger.Info("scheduled job started", "job", job.Name, "session", name)
-	snap, err := e.rt.CreateSession(name)
+	snap, err := e.rt.CreateSessionInWorkspace(name, resolveJobWorkspaceRef(job, e.rt.WorkspaceRegistry()))
 	if err != nil {
 		return "", "", fmt.Errorf("create scheduler session: %w", err)
 	}
@@ -44,6 +45,23 @@ func (e *daemonJobExecutor) Execute(ctx context.Context, job scheduler.Job) (str
 	}
 	e.logger.Info("scheduled job finished", "job", job.Name, "session", name)
 	return summary, snap.SessionPath, nil
+}
+
+// resolveJobWorkspaceRef picks the workspace a scheduled job runs in: the
+// job's bound workspace ID first, then a legacy match of its recorded
+// working directory against the registry, then "" — which
+// CreateSessionInWorkspace interprets as the default workspace, where all
+// jobs created before workspace binding landed.
+func resolveJobWorkspaceRef(job scheduler.Job, reg *workspace.Registry) string {
+	if job.WorkspaceID != "" {
+		return job.WorkspaceID
+	}
+	if job.Workspace != "" {
+		if ws, ok := reg.FindByRoot(job.Workspace); ok {
+			return ws.ID
+		}
+	}
+	return ""
 }
 
 // waitRunSummary drains run events until the run completes, fails, or is
@@ -86,7 +104,6 @@ func newSchedulerChannel(cfg config.Config, rt *app.Runtime, logger *slog.Logger
 		return nil, fmt.Errorf("open scheduler store: %w", err)
 	}
 	sched := scheduler.New(store, &daemonJobExecutor{rt: rt, logger: logger},
-		scheduler.WithWorkspaceDir(cfg.CWD),
 		scheduler.WithErrorReporter(func(err error) {
 			logger.Error("scheduled job failed", "error", err)
 		}))

@@ -20,7 +20,6 @@ import (
 	"github.com/hszjj221/gg/internal/library"
 	"github.com/hszjj221/gg/internal/provider"
 	"github.com/hszjj221/gg/internal/session"
-	"github.com/hszjj221/gg/internal/skills"
 	"github.com/hszjj221/gg/internal/transport/httpapi"
 	"github.com/hszjj221/gg/internal/transport/jsonrpc"
 	"github.com/hszjj221/gg/internal/transport/stdio"
@@ -126,21 +125,17 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	// P1 workspace: the process working directory is auto-registered as the
-	// "default" workspace on first run after upgrade. Today the daemon still
-	// serves this single root exactly like before; later phases bind
-	// sessions and channels to workspaces.
+	// P2 workspace: the process working directory is auto-registered as the
+	// "default" workspace on first run after upgrade, and the runtime
+	// partitions sessions, skills, and provider health per workspace.
 	if _, _, err := workspace.EnsureDefaultWorkspace(cfg.HomeDir, cfg.CWD); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	skillSet := skills.Set{}
-	if !noSkills {
-		skillSet, err = skills.Load(skills.LoadOptions{CWD: cfg.CWD, HomeDir: options.HomeDir})
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
+	reg, err := workspace.Load(cfg.HomeDir)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
 	}
 	providerFactory := options.ProviderFactory
 	if providerFactory == nil {
@@ -156,16 +151,17 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		logger.Info("startup notice", "notice", notice)
 	}
 	rt, err := app.NewRuntime(app.RuntimeOptions{
-		Config:          cfg,
-		ProviderFactory: providerFactory,
-		Skills:          skillSet,
-		Repository:      session.NewFileRepository(cfg.SessionDir),
-		Profile:         personal.Profile,
-		MemoryStore:     personal.Store,
-		ArtifactStore:   openArtifactStore(logger, cfg),
-		LibraryStore:    openLibraryStore(logger, cfg),
-		Manager:         app.ManagerOptions{Log: logger},
-		Log:             logger,
+		Config:            cfg,
+		ProviderFactory:   providerFactory,
+		WorkspaceRegistry: reg,
+		NoSkills:          noSkills,
+		Repository:        session.NewFileRepository(cfg.SessionDir),
+		Profile:           personal.Profile,
+		MemoryStore:       personal.Store,
+		ArtifactStore:     openArtifactStore(logger, cfg),
+		LibraryStore:      openLibraryStore(logger, cfg),
+		Manager:           app.ManagerOptions{Log: logger},
+		Log:               logger,
 	})
 	if err != nil {
 		logger.Error("open runtime", "error", err)

@@ -1,7 +1,10 @@
 package session
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -22,7 +25,24 @@ type Info struct {
 }
 
 func CWDDir(sessionDir, cwd string) string {
-	return filepath.Join(sessionDir, sanitizePath(cwd))
+	return filepath.Join(sessionDir, sanitizePath(canonicalCWD(cwd)))
+}
+
+// canonicalCWD maps every spelling of the same directory to one session
+// key: absolute, with symlinks resolved. Callers pass raw values (".", a
+// symlinked project path, ...); without this the CLI and the daemon would
+// shard one project's sessions across different directories, and sessions
+// written before keys were canonicalized would become unreachable after
+// upgrade. Best-effort: falls back to absolute, then to the input unchanged.
+func canonicalCWD(cwd string) string {
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		return cwd
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved
+	}
+	return abs
 }
 
 func ListForCWD(sessionDir, cwd string) ([]Info, error) {
@@ -107,6 +127,65 @@ func FindForCWD(sessionDir, cwd, target string) (string, error) {
 	default:
 		return "", fmt.Errorf("session %q is ambiguous", target)
 	}
+}
+
+// FindSessionAnywhere locates a session by header ID anywhere under
+// sessionDir, independent of the CWD spelling that keyed its directory. It
+// is the upgrade fallback for sessions written before directory keys were
+// canonicalized (keyed by spellings like "." — files sitting directly in
+// sessionDir — or a symlinked path): only the first line (the header) of
+// each candidate file is read, and unreadable files are skipped. New
+// sessions always land in canonical directories, so this never triggers
+// for them; a miss here still reports ErrNotFound.
+func FindSessionAnywhere(sessionDir, targetID string) (string, error) {
+	targetID = strings.TrimSpace(targetID)
+	if targetID == "" {
+		return "", fmt.Errorf("session id is required")
+	}
+	// Session directories are exactly one level deep.
+	patterns := []string{
+		filepath.Join(sessionDir, "*.jsonl"),
+		filepath.Join(sessionDir, "*", "*.jsonl"),
+	}
+	seen := make(map[string]bool)
+	for _, pattern := range patterns {
+		matches, _ := filepath.Glob(pattern)
+		for _, path := range matches {
+			if seen[path] {
+				continue
+			}
+			seen[path] = true
+			if id, ok := peekSessionID(path); ok && id == targetID {
+				return path, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("%w: session %q", ErrNotFound, targetID)
+}
+
+// peekSessionID reads only the first line of a session file and reports
+// the header ID. ok is false when the file cannot be read or parsed.
+func peekSessionID(path string) (id string, ok bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	line, err := bufio.NewReader(f).ReadString('\n')
+	if err != nil && err != io.EOF {
+		return "", false
+	}
+	var probe struct {
+		Type string `json:"type"`
+		ID   string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(line)), &probe); err != nil {
+		return "", false
+	}
+	if probe.Type != "session" || probe.ID == "" {
+		return "", false
+	}
+	return probe.ID, true
 }
 
 func infoFromLoaded(path string, loaded Loaded) Info {

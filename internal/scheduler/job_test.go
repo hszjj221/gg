@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -92,5 +93,49 @@ func TestRefreshNextDisabled(t *testing.T) {
 	j.RefreshNext(time.Now())
 	if j.NextRun != nil {
 		t.Error("disabled job should have nil NextRun")
+	}
+}
+
+func TestJobWorkspaceIDRoundTrip(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	added, err := s.Add(Job{
+		Name: "w", Kind: KindCron, Schedule: "* * * * *", Prompt: "p",
+		Workspace: "/tmp/legacy", WorkspaceID: "w_abc123",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := s.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("listed %d jobs, want 1", len(jobs))
+	}
+	got := jobs[0]
+	if got.WorkspaceID != "w_abc123" {
+		t.Fatalf("WorkspaceID = %q, want %q", got.WorkspaceID, "w_abc123")
+	}
+	// The legacy dir field survives alongside the new ID field.
+	if got.Workspace != "/tmp/legacy" {
+		t.Fatalf("Workspace = %q, want legacy dir preserved", got.Workspace)
+	}
+	// JSON shape: workspace_id is omitempty; legacy workspace key unchanged.
+	raw, err := json.Marshal(added)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["workspace_id"] != "w_abc123" {
+		t.Fatalf("workspace_id missing in %s", raw)
+	}
+	if m["workspace"] != "/tmp/legacy" {
+		t.Fatalf("workspace missing in %s", raw)
 	}
 }

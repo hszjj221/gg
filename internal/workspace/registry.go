@@ -107,6 +107,16 @@ func (r *Registry) FindByName(name string) (Workspace, bool) {
 	return Workspace{}, false
 }
 
+// FindByID returns the workspace with the given stable ID.
+func (r *Registry) FindByID(id string) (Workspace, bool) {
+	for _, w := range r.workspaces {
+		if w.ID == id {
+			return w, true
+		}
+	}
+	return Workspace{}, false
+}
+
 // FindByRoot returns the workspace whose root names the same directory as
 // root. The input is canonicalized the same way as at registration;
 // unresolvable paths simply miss. Comparison is by filesystem identity, not
@@ -189,26 +199,47 @@ func (r *Registry) Remove(nameOrID string) error {
 
 // EnsureDefault makes sure root is registered, returning the workspace and
 // whether it was newly added. If root is already registered under any name,
-// that workspace is returned; otherwise the "default" name is used when free.
+// that workspace is returned. Otherwise it is registered under the
+// "default" name when free, or under a derived name (the directory base
+// name, deduplicated) when "default" is taken by another root: silently
+// adopting the foreign default would point this process at the wrong
+// project (e.g. `ggd --cwd /b` operating on /a's sessions and tools).
 func (r *Registry) EnsureDefault(root string) (Workspace, bool, error) {
 	if w, ok := r.FindByRoot(root); ok {
 		return w, false, nil
 	}
-	if w, ok := r.FindByName(DefaultName); ok {
-		return w, false, nil
+	name := DefaultName
+	if _, ok := r.FindByName(name); ok {
+		name = deriveWorkspaceName(r, root)
 	}
-	w, err := r.Add(DefaultName, root)
+	w, err := r.Add(name, root)
 	if err != nil {
 		return Workspace{}, false, err
 	}
 	return w, true, nil
 }
 
+// deriveWorkspaceName picks a registration name from the directory base
+// name, suffixed until unique.
+func deriveWorkspaceName(r *Registry, root string) string {
+	base := filepath.Base(root)
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		base = "workspace"
+	}
+	name := base
+	for i := 2; ; i++ {
+		if _, ok := r.FindByName(name); !ok {
+			return name
+		}
+		name = fmt.Sprintf("%s-%d", base, i)
+	}
+}
+
 // EnsureDefaultWorkspace loads the registry for homeDir, ensures root is
 // registered (see EnsureDefault), and saves only when something was added.
 // It is the startup hook shared by the daemon and the CLI: after an upgrade,
-// the first run registers the process working directory as "default" with
-// zero user action.
+// the first run registers the process working directory as "default" (or a
+// derived name when "default" is taken) with zero user action.
 //
 // root may be relative (e.g. ggd --cwd .); it is resolved against the process
 // working directory before registration, while the stored root stays
@@ -244,4 +275,40 @@ func EnsureDefaultWorkspace(homeDir, root string) (Workspace, bool, error) {
 		}
 	}
 	return w, added, nil
+}
+
+// ResolveForSession maps a session to its workspace:
+//  1. A non-empty workspaceID present in the registry wins: (ws, false, nil),
+//     no backfill needed.
+//  2. Otherwise the session's cwd is matched by canonical root (FindByRoot);
+//     a hit returns (ws, true, nil) and the caller should backfill ws.ID
+//     into the session header via session.Store.SetWorkspaceID.
+//  3. Unknown workspaceID or unregistered root falls back to the "default"
+//     workspace with (ws, true, nil); an error is returned when even the
+//     default workspace is missing.
+//
+// backfill reports whether the caller should write ws.ID back into the
+// session header.
+func (r *Registry) ResolveForSession(workspaceID, cwd string) (Workspace, bool, error) {
+	if workspaceID != "" {
+		if w, ok := r.FindByID(workspaceID); ok {
+			return w, false, nil
+		}
+	}
+	if cwd != "" {
+		abs, err := filepath.Abs(cwd)
+		if err == nil {
+			// FindByRoot canonicalizes via canonicalRoot and misses when the
+			// cwd cannot be resolved (e.g. it no longer exists): skip root
+			// matching in that case and fall through to default instead of
+			// surfacing the error.
+			if w, ok := r.FindByRoot(abs); ok {
+				return w, true, nil
+			}
+		}
+	}
+	if w, ok := r.FindByName(DefaultName); ok {
+		return w, true, nil
+	}
+	return Workspace{}, false, fmt.Errorf("no default workspace registered")
 }

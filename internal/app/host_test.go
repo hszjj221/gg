@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/session"
+	"github.com/hszjj221/gg/internal/workspace"
 )
 
 func TestWorkspaceForkCreatesIndependentOpenSession(t *testing.T) {
@@ -97,12 +99,18 @@ func TestWorkspaceNewSessionUsesJSONArrayCollections(t *testing.T) {
 func TestWorkspaceInvalidatesSessionAfterExternalWriteConflict(t *testing.T) {
 	root := t.TempDir()
 	cwd := filepath.Join(root, "project")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	repository := session.NewFileRepository(filepath.Join(root, "sessions"))
+	registry := testRegistry(t)
 	newRuntime := func() *Runtime {
 		rt, err := NewRuntime(RuntimeOptions{
-			Config:          config.Config{CWD: cwd, Selection: "test:model"},
-			ProviderFactory: func(config.Config) agent.Provider { return &runtimeProvider{} },
-			Repository:      repository,
+			Config:            config.Config{CWD: cwd, Selection: "test:model"},
+			ProviderFactory:   func(config.Config) agent.Provider { return &runtimeProvider{} },
+			WorkspaceRegistry: registry,
+			NoSkills:          true,
+			Repository:        repository,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -139,14 +147,31 @@ func runtimeForTest(t *testing.T) (*Runtime, string) {
 	t.Helper()
 	root := t.TempDir()
 	cwd := filepath.Join(root, "project")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	provider := &runtimeProvider{}
 	rt, err := NewRuntime(RuntimeOptions{
-		Config:          config.Config{CWD: cwd, Selection: "test:model"},
-		ProviderFactory: func(config.Config) agent.Provider { return provider },
-		Repository:      session.NewFileRepository(filepath.Join(root, "sessions")),
+		Config:            config.Config{CWD: cwd, Selection: "test:model"},
+		ProviderFactory:   func(config.Config) agent.Provider { return provider },
+		WorkspaceRegistry: testRegistry(t),
+		NoSkills:          true,
+		Repository:        session.NewFileRepository(filepath.Join(root, "sessions")),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return rt, root
+}
+
+// testRegistry builds an empty workspace registry backed by a throwaway
+// home directory. NewRuntime registers the configured CWD as the default
+// workspace in memory; nothing is persisted.
+func testRegistry(t *testing.T) *workspace.Registry {
+	t.Helper()
+	reg, err := workspace.Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reg
 }

@@ -38,6 +38,10 @@ type Bot struct {
 	// per-chat serialization: one in-flight turn per chat.
 	chats   map[int64]*chatState
 	chatsMu sync.Mutex
+
+	// chatStore persists which workspace (and current session) each chat
+	// talks in. Loaded in New from ~/.gg/channels/telegram.json.
+	chatStore *chatStore
 }
 
 type chatState struct {
@@ -97,6 +101,11 @@ func New(cfg Config) (*Bot, error) {
 	if b.stderr == nil {
 		b.stderr = os.Stderr
 	}
+	chatStore, err := loadChatStore(cfg.HomeDir)
+	if err != nil {
+		return nil, err
+	}
+	b.chatStore = chatStore
 	b.offset = b.loadOffset()
 	return b, nil
 }
@@ -332,6 +341,10 @@ func (b *Bot) handleMessage(ctx context.Context, msg *Message) {
 }
 
 func (b *Bot) handleText(ctx context.Context, msg *Message, prompt string) {
+	if arg, isCmd := parseWorkspaceCommand(prompt); isCmd {
+		b.handleWorkspaceCommand(ctx, msg.Chat.ID, arg)
+		return
+	}
 	reply, err := b.runAgent(ctx, msg.Chat.ID, prompt)
 	if err != nil {
 		_ = b.api.SendMessage(ctx, msg.Chat.ID, "出错了："+err.Error())
@@ -340,9 +353,53 @@ func (b *Bot) handleText(ctx context.Context, msg *Message, prompt string) {
 	_ = b.api.SendMessage(ctx, msg.Chat.ID, reply)
 }
 
-// sessionIDForChat maps a Telegram chat to a stable agent session.
-func sessionIDForChat(chatID int64) string {
-	return fmt.Sprintf("telegram:%d", chatID)
+// parseWorkspaceCommand recognizes the /workspace command. It reports
+// (arg, true) for "/workspace" and "/workspace <name>"; any other text is
+// not a workspace command. Telegram appends "@botname" to commands typed in
+// groups; the suffix is stripped before matching.
+func parseWorkspaceCommand(text string) (arg string, isCmd bool) {
+	head, rest, _ := strings.Cut(text, " ")
+	if i := strings.Index(head, "@"); i >= 0 {
+		head = head[:i]
+	}
+	if head != "/workspace" {
+		return "", false
+	}
+	return strings.TrimSpace(rest), true
+}
+
+// handleWorkspaceCommand answers /workspace (report the chat's workspace)
+// and /workspace <name> (switch it, starting a fresh session on the next
+// message). Replies name workspaces by name only — never by path.
+func (b *Bot) handleWorkspaceCommand(ctx context.Context, chatID int64, arg string) {
+	current := b.chatStore.get(chatID)
+	if arg == "" {
+		name := b.workspaceName(current.WorkspaceID)
+		_ = b.api.SendMessage(ctx, chatID, "当前 workspace："+name)
+		return
+	}
+	target, err := b.ws.ResolveWorkspace(arg)
+	if err != nil {
+		_ = b.api.SendMessage(ctx, chatID, fmt.Sprintf("未找到 workspace %q", arg))
+		return
+	}
+	// Switching workspaces drops the old session: the next message opens
+	// a fresh session inside the new workspace instead of continuing the
+	// old workspace's conversation.
+	if err := b.chatStore.set(chatID, chatBinding{WorkspaceID: target.ID}); err != nil {
+		_ = b.api.SendMessage(ctx, chatID, "出错了："+err.Error())
+		return
+	}
+	_ = b.api.SendMessage(ctx, chatID, fmt.Sprintf("已切换到 workspace %q", target.Name))
+}
+
+// workspaceName resolves a workspace ID to its display name, falling back
+// to the default workspace for empty or stale references.
+func (b *Bot) workspaceName(workspaceID string) string {
+	if ws, err := b.ws.ResolveWorkspace(workspaceID); err == nil {
+		return ws.Name
+	}
+	return b.ws.DefaultWorkspace().Name
 }
 
 // denyAllApprover refuses every approval request: the bot cannot ask the
@@ -353,14 +410,74 @@ func (denyAllApprover) Approve(_ context.Context, _ agent.ApprovalRequest) (agen
 	return agent.ApprovalDecision{Allow: false}, nil
 }
 
+// repairBinding fixes an empty or stale workspace reference on a chat and
+// returns the effective binding. A stale workspace also drops the stored
+// session: the session belongs to a workspace that no longer exists, and
+// resuming it would run the turn in the removed workspace (per-workspace
+// runtime states are never evicted).
+func (b *Bot) repairBinding(chatID int64) chatBinding {
+	binding := b.chatStore.get(chatID)
+	if _, ok := b.ws.WorkspaceRegistry().FindByID(binding.WorkspaceID); binding.WorkspaceID == "" || !ok {
+		defID := b.ws.DefaultWorkspace().ID
+		if defID != binding.WorkspaceID {
+			if err := b.chatStore.set(chatID, chatBinding{WorkspaceID: defID}); err != nil {
+				if b.logger != nil {
+					b.logger.Warn("telegram: repair chat workspace binding", "chat_id", chatID, "error", err)
+				}
+			} else {
+				binding.WorkspaceID = defID
+				binding.SessionID = ""
+			}
+		}
+	}
+	return binding
+}
+
 // runAgent runs one agent turn in the chat's session and returns the final
-// text.
+// text. The session is created lazily on the first message (or when the
+// stored session is gone) and bound to the chat's workspace; switching the
+// workspace via /workspace clears the stored session so the next message
+// opens a fresh one in the new workspace.
 func (b *Bot) runAgent(ctx context.Context, chatID int64, prompt string) (string, error) {
-	sessionID := sessionIDForChat(chatID)
-	run, err := b.ws.StartTurnWithApprover(ctx, sessionID, prompt, denyAllApprover{})
+	binding := b.repairBinding(chatID)
+	wsID := binding.WorkspaceID
+	if binding.SessionID == "" {
+		return b.runAgentNewSession(ctx, chatID, prompt, wsID)
+	}
+	run, err := b.ws.StartTurnWithApprover(ctx, binding.SessionID, prompt, denyAllApprover{})
+	if err == nil {
+		return b.waitRunResult(ctx, run)
+	}
+	var appErr *app.AppError
+	if errors.As(err, &appErr) && appErr.Code == app.ErrorSessionNotFound {
+		// The stored session is gone (pruned, removed, or the daemon
+		// restarted against a fresh store): start over in the chat's
+		// workspace instead of failing every message.
+		return b.runAgentNewSession(ctx, chatID, prompt, wsID)
+	}
+	return "", err
+}
+
+// runAgentNewSession opens a fresh session in the chat's workspace, records
+// the binding, and runs one turn in it.
+func (b *Bot) runAgentNewSession(ctx context.Context, chatID int64, prompt, wsID string) (string, error) {
+	snap, err := b.ws.CreateSessionInWorkspace(fmt.Sprintf("telegram chat %d", chatID), wsID)
 	if err != nil {
 		return "", err
 	}
+	if err := b.chatStore.set(chatID, chatBinding{WorkspaceID: wsID, SessionID: snap.SessionID}); err != nil {
+		return "", err
+	}
+	run, err := b.ws.StartTurnWithApprover(ctx, snap.SessionID, prompt, denyAllApprover{})
+	if err != nil {
+		return "", err
+	}
+	return b.waitRunResult(ctx, run)
+}
+
+// waitRunResult drains run events until the run completes, fails, or is
+// canceled, and returns the final text output.
+func (b *Bot) waitRunResult(ctx context.Context, run *app.Run) (string, error) {
 	var seq int64
 	for {
 		events, done, err := b.ws.WaitRun(ctx, run.ID(), seq)

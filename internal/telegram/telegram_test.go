@@ -111,12 +111,6 @@ func TestReplayGuard(t *testing.T) {
 	}
 }
 
-func TestSessionIDForChat(t *testing.T) {
-	if got := sessionIDForChat(123); got != "telegram:123" {
-		t.Fatalf("got %q", got)
-	}
-}
-
 func TestSplitMessage(t *testing.T) {
 	if got := splitMessage("abc", 4096); len(got) != 1 || got[0] != "abc" {
 		t.Fatalf("short message split wrong: %q", got)
