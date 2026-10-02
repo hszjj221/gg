@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -122,5 +123,55 @@ func TestEditToolApprovalRequestReportsReplacementFailure(t *testing.T) {
 	_, err := tool.ApprovalRequest(json.RawMessage(`{"path":"file.txt","edits":[{"oldText":"missing","newText":"after"}]}`))
 	if err == nil || !strings.Contains(err.Error(), `oldText "missing" must match exactly once`) {
 		t.Fatalf("expected clear replacement error, got %v", err)
+	}
+}
+
+func TestEditToolApprovalRequestPreApprovedInAgentDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".gg", "agent"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	agentFile := filepath.Join(dir, ".gg", "agent", "notes.txt")
+	if err := os.WriteFile(agentFile, []byte("before"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	userFile := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(userFile, []byte("before"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewEditTool(dir)
+	args := func(path string) json.RawMessage {
+		return json.RawMessage(`{"path":` + strconv.Quote(path) + `,"edits":[{"oldText":"before","newText":"after"}]}`)
+	}
+
+	inside, err := tool.ApprovalRequest(args(".gg/agent/notes.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !inside.PreApproved {
+		t.Fatalf("edit inside .gg/agent must be pre-approved: %+v", inside)
+	}
+	if inside.PreApprovedReason == "" {
+		t.Fatalf("pre-approved edit must carry a reason: %+v", inside)
+	}
+
+	// Boundary: edits to user files — even a sibling directory whose name
+	// merely starts with "agent" — keep the normal approval policy.
+	for _, path := range []string{"notes.txt", ".gg/agent-evil/notes.txt"} {
+		if path == ".gg/agent-evil/notes.txt" {
+			if err := os.MkdirAll(filepath.Join(dir, ".gg", "agent-evil"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, ".gg", "agent-evil", "notes.txt"), []byte("before"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		req, err := tool.ApprovalRequest(args(path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if req.PreApproved {
+			t.Fatalf("edit of %q must not be pre-approved", path)
+		}
 	}
 }

@@ -30,8 +30,10 @@ type Options struct {
 	ModelRecorded   bool
 	// Profile and MemoryStore carry the personal layer. MemoryStore may be
 	// nil; NewService then falls back to a store rooted at Config.Memory.Dir.
+	// It is a memory.StoreAPI so a per-workspace overlay and the plain
+	// global store are interchangeable here.
 	Profile     userprofile.Profile
-	MemoryStore *memory.Store
+	MemoryStore memory.StoreAPI
 	// Log receives operational warnings, e.g. when a tool provider fails
 	// to build and degrades to absent. Nil means slog.Default(); the daemon
 	// passes its stderr logger so failures are visible in daemon logs.
@@ -112,7 +114,7 @@ type Service struct {
 	skillSet        skills.Set
 	modelRecorded   bool
 	profile         userprofile.Profile
-	memStore        *memory.Store
+	memStore        memory.StoreAPI
 	queue           *agent.MessageQueue
 	logger          *slog.Logger
 	degraded        *DegradedRegistry
@@ -468,33 +470,54 @@ func (s *Service) handleMemoryCommand(prompt string) (Result, bool, error) {
 	}
 	store := s.memStore
 	if command == "" {
-		status, err := memory.Status(store.CuratedPath(), s.cfg.Memory.MaxPromptTokens, s.cfg.Memory.Enabled)
+		status, err := store.Status(s.cfg.Memory.MaxPromptTokens, s.cfg.Memory.Enabled)
 		return Result{Content: status, ModelName: s.cfg.Selection}, true, err
 	}
 	switch command {
 	case "add":
-		scope, text := parseScopeFlag(arg)
+		scope, target, text := parseMemoryFlags(arg)
 		if strings.TrimSpace(text) == "" {
-			return Result{}, true, fmt.Errorf("usage: /memory add [--scope=SCOPE] <text>")
+			return Result{}, true, fmt.Errorf("usage: /memory add [--scope=SCOPE] [--target=workspace|global] <text>")
+		}
+		var toGlobal bool
+		switch target {
+		case "", "workspace":
+		case "global":
+			toGlobal = true
+		default:
+			return Result{}, true, fmt.Errorf("unknown target %q: want workspace or global", target)
+		}
+		// On a plain (global-only) store the Global variants are
+		// identical to the plain ones, so target is naturally ignored
+		// without a workspace context.
+		appendCurated := store.AppendCurated
+		appendDaily := store.AppendDaily
+		appendPerson := store.AppendPerson
+		appendGroup := store.AppendGroup
+		if toGlobal {
+			appendCurated = store.AppendCuratedGlobal
+			appendDaily = store.AppendDailyGlobal
+			appendPerson = store.AppendPersonGlobal
+			appendGroup = store.AppendGroupGlobal
 		}
 		var werr error
 		switch {
 		case scope == "" || scope == "general":
-			werr = store.AppendCurated(text)
+			werr = appendCurated(text)
 		case scope == "daily":
-			werr = store.AppendDaily(text)
+			werr = appendDaily(text)
 		case strings.HasPrefix(scope, "person:"):
 			name := strings.TrimSpace(strings.TrimPrefix(scope, "person:"))
 			if name == "" {
 				return Result{}, true, fmt.Errorf("person scope needs a name: /memory add --scope=person:<name> <text>")
 			}
-			werr = store.AppendPerson(name, text)
+			werr = appendPerson(name, text)
 		case strings.HasPrefix(scope, "group:"):
 			name := strings.TrimSpace(strings.TrimPrefix(scope, "group:"))
 			if name == "" {
 				return Result{}, true, fmt.Errorf("group scope needs a name: /memory add --scope=group:<name> <text>")
 			}
-			werr = store.AppendGroup(name, text)
+			werr = appendGroup(name, text)
 		default:
 			return Result{}, true, fmt.Errorf("unknown scope %q: want general, daily, person:<name>, group:<name>", scope)
 		}
@@ -503,14 +526,18 @@ func (s *Service) handleMemoryCommand(prompt string) (Result, bool, error) {
 		}
 		return Result{Content: "memory added", ModelName: s.cfg.Selection}, true, nil
 	case "show":
-		path := store.CuratedPath()
+		// Show the merged view (workspace layer first, then global) —
+		// the same content the prompt snapshot carries.
+		var content string
+		var err error
 		if arg == "daily" {
-			path = store.DailyPath(time.Now())
+			content, err = store.ShowDaily()
+		} else {
+			content, err = store.ShowCurated()
 		}
-		content, err := memory.Show(path)
 		return Result{Content: content, ModelName: s.cfg.Selection}, true, err
 	case "search":
-		hits, err := store.Search(arg, "all")
+		hits, err := store.SearchLayered(arg, "all")
 		if err != nil {
 			return Result{}, true, err
 		}
@@ -519,24 +546,42 @@ func (s *Service) handleMemoryCommand(prompt string) (Result, bool, error) {
 		}
 		var b strings.Builder
 		for _, hit := range hits {
-			fmt.Fprintf(&b, "%s:%d: %s\n", hit.Path, hit.Line, hit.Snippet)
+			fmt.Fprintf(&b, "[%s] %s:%d: %s\n", hit.Layer, hit.Path, hit.Line, hit.Snippet)
 		}
 		return Result{Content: strings.TrimSpace(b.String()), ModelName: s.cfg.Selection}, true, nil
 	default:
-		return Result{}, true, fmt.Errorf("usage: /memory [add [--scope=SCOPE] <text>|show [daily]|search <query>]")
+		return Result{}, true, fmt.Errorf("usage: /memory [add [--scope=SCOPE] [--target=workspace|global] <text>|show [daily]|search <query>]")
 	}
 }
 
-// parseScopeFlag splits a leading "--scope=SCOPE" from /memory add arguments.
-func parseScopeFlag(arg string) (scope, text string) {
-	if head, rest, ok := strings.Cut(arg, " "); ok && strings.HasPrefix(head, "--scope=") {
-		return strings.TrimPrefix(head, "--scope="), strings.TrimSpace(rest)
+// parseMemoryFlags splits leading "--scope=SCOPE" / "--target=TARGET"
+// flags from /memory add arguments.
+func parseMemoryFlags(arg string) (scope, target, text string) {
+	rest := arg
+	for {
+		head, tail, ok := strings.Cut(rest, " ")
+		if !ok {
+			break
+		}
+		if v, ok := strings.CutPrefix(head, "--scope="); ok {
+			scope = v
+		} else if v, ok := strings.CutPrefix(head, "--target="); ok {
+			target = v
+		} else {
+			break
+		}
+		rest = strings.TrimSpace(tail)
 	}
-	// A bare "--scope=X" with no text is a usage error, not literal content.
-	if strings.HasPrefix(arg, "--scope=") {
-		return strings.TrimPrefix(arg, "--scope="), ""
+	// A bare "--scope=X" / "--target=Y" with no text is a usage error,
+	// not literal content.
+	if v, ok := strings.CutPrefix(rest, "--scope="); ok {
+		scope, text = v, ""
+	} else if v, ok := strings.CutPrefix(rest, "--target="); ok {
+		target, text = v, ""
+	} else {
+		text = rest
 	}
-	return "", arg
+	return scope, target, text
 }
 
 type compactResult struct {
@@ -624,7 +669,7 @@ func (s *Service) systemMessages() ([]agent.Message, error) {
 		if err != nil {
 			return nil, err
 		}
-		if prompt := memory.SystemPrompt(snapshot); prompt != "" {
+		if prompt := s.memStore.CuratedSystemPrompt(snapshot); prompt != "" {
 			messages = append(messages, agent.Message{Role: agent.RoleSystem, Content: prompt, Timestamp: time.Now().UnixMilli()})
 		}
 		tail, err := s.memStore.LoadDailyTail(s.cfg.Memory.DailyLogTailTokens)

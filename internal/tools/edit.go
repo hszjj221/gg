@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/hszjj221/gg/internal/agent"
+	"github.com/hszjj221/gg/internal/workspace"
 )
 
 type EditTool struct {
@@ -29,7 +30,7 @@ func (t EditTool) Name() string { return "edit" }
 func (t EditTool) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "edit",
-		Description: "Edit a file with exact text replacements. Each oldText must match exactly once in the original file.",
+		Description: "Edit a file with exact text replacements. Each oldText must match exactly once in the original file. Edits to files under `.gg/agent/` (the agent's private area) skip the approval prompt.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -80,12 +81,21 @@ func (t EditTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, e
 	if len(edits) == 1 {
 		replacementLabel = "replacement"
 	}
-	return agent.ApprovalRequest{
+	req := agent.ApprovalRequest{
 		ToolName:  "edit",
 		Summary:   fmt.Sprintf("edit %s (%d %s)", input.Path, len(edits), replacementLabel),
 		Details:   fmt.Sprintf("path: %s\nreplacements: %d\n\n%s", input.Path, len(edits), contentChangePreview(original, updated)),
 		Arguments: raw,
-	}, nil
+	}
+	// Edits inside the workspace's agent area are pre-approved: that
+	// directory is the agent's private area. Everything else keeps the
+	// normal approval policy. The check is symlink-aware (InRealAgentDir):
+	// a symlinked agent area never grants the exemption.
+	if workspace.InRealAgentDir(t.cwd, path) {
+		req.PreApproved = true
+		req.PreApprovedReason = "agent area"
+	}
+	return req, nil
 }
 
 func (t EditTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {

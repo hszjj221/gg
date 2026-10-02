@@ -93,6 +93,107 @@ func TestMemoryAddToolDefinitionRequiresContent(t *testing.T) {
 	}
 }
 
+func TestMemoryAddToolTargetRoutesLayers(t *testing.T) {
+	tmp := t.TempDir()
+	global := memory.NewStore(filepath.Join(tmp, "global"))
+	if err := global.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	overlay := memory.NewOverlay(filepath.Join(tmp, "ws", ".gg", "memory"), global)
+	tool := NewMemoryAddTool(overlay)
+
+	// Default target is workspace.
+	if result := executeTool(t, tool, `{"content":"project fact"}`); result.IsError {
+		t.Fatalf("default target failed: %+v", result)
+	}
+	data, err := os.ReadFile(filepath.Join(tmp, "ws", ".gg", "memory", "MEMORY.md"))
+	if err != nil || !strings.Contains(string(data), "project fact") {
+		t.Fatalf("default write must land in workspace layer: %q err=%v", data, err)
+	}
+
+	// Explicit workspace target.
+	if result := executeTool(t, tool, `{"content":"daily ws","scope":"daily","target":"workspace"}`); result.IsError {
+		t.Fatalf("workspace target failed: %+v", result)
+	}
+	ddata, err := os.ReadFile(filepath.Join(tmp, "ws", ".gg", "memory", time.Now().Format("2006-01-02")+".md"))
+	if err != nil || !strings.Contains(string(ddata), "daily ws") {
+		t.Fatalf("workspace daily write missing: %q err=%v", ddata, err)
+	}
+
+	// Explicit global target lands in the global layer.
+	if result := executeTool(t, tool, `{"content":"cross-project pref","target":"global"}`); result.IsError {
+		t.Fatalf("global target failed: %+v", result)
+	}
+	gdata, err := os.ReadFile(global.CuratedPath())
+	if err != nil || !strings.Contains(string(gdata), "cross-project pref") {
+		t.Fatalf("global write missing: %q err=%v", gdata, err)
+	}
+	if wdata, _ := os.ReadFile(filepath.Join(tmp, "ws", ".gg", "memory", "MEMORY.md")); strings.Contains(string(wdata), "cross-project pref") {
+		t.Fatal("global-targeted write leaked into the workspace layer")
+	}
+
+	// Global target works for person/group scopes too.
+	if result := executeTool(t, tool, `{"content":"knows Go","scope":"person:Zhang San","target":"global"}`); result.IsError {
+		t.Fatalf("global person write failed: %+v", result)
+	}
+	pdata, err := os.ReadFile(global.PersonPath("Zhang San"))
+	if err != nil || !strings.Contains(string(pdata), "knows Go") {
+		t.Fatalf("global person page missing entry: %q err=%v", pdata, err)
+	}
+
+	// Unknown target is an error.
+	if result := executeTool(t, tool, `{"content":"x","target":"bogus"}`); !result.IsError {
+		t.Fatalf("expected error for unknown target, got %+v", result)
+	}
+}
+
+func TestMemoryAddToolTargetIgnoredWithoutWorkspace(t *testing.T) {
+	// With a plain store (no workspace context) target is ignored:
+	// everything lands in the one store, matching pre-P3 behavior.
+	store := newTestMemoryStore(t)
+	tool := NewMemoryAddTool(store)
+
+	for _, target := range []string{"workspace", "global", ""} {
+		arg := `{"content":"fact for ` + target + `"}`
+		if target != "" {
+			arg = `{"content":"fact for ` + target + `","target":"` + target + `"}`
+		}
+		if result := executeTool(t, tool, arg); result.IsError {
+			t.Fatalf("target %q failed: %+v", target, result)
+		}
+	}
+	data, err := os.ReadFile(store.CuratedPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{"workspace", "global", ""} {
+		if !strings.Contains(string(data), "fact for "+target) {
+			t.Fatalf("target %q write missing from the plain store:\n%s", target, data)
+		}
+	}
+}
+
+func TestMemoryAddToolDefinitionHasTarget(t *testing.T) {
+	def := NewMemoryAddTool(newTestMemoryStore(t)).Definition()
+
+	properties, ok := def.Parameters["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties missing: %+v", def.Parameters)
+	}
+	target, ok := properties["target"].(map[string]any)
+	if !ok {
+		t.Fatalf("target property missing: %+v", properties)
+	}
+	if enum, ok := target["enum"].([]string); !ok || len(enum) != 2 || enum[0] != "workspace" || enum[1] != "global" {
+		t.Fatalf("unexpected target enum: %+v", target["enum"])
+	}
+	for _, want := range []string{"workspace", "global", "When unsure"} {
+		if !strings.Contains(def.Description, want) {
+			t.Fatalf("description must include layer guidance (%q):\n%s", want, def.Description)
+		}
+	}
+}
+
 func TestMemoryAddToolDoesNotRequireApproval(t *testing.T) {
 	var tool any = NewMemoryAddTool(newTestMemoryStore(t))
 	if _, ok := tool.(agent.ApprovalDescriber); ok {

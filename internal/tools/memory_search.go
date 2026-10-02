@@ -12,10 +12,10 @@ import (
 
 // MemorySearchTool searches the user's structured long-term memory.
 type MemorySearchTool struct {
-	store *memory.Store
+	store memory.ToolStore
 }
 
-func NewMemorySearchTool(store *memory.Store) MemorySearchTool {
+func NewMemorySearchTool(store memory.ToolStore) MemorySearchTool {
 	return MemorySearchTool{store: store}
 }
 
@@ -24,7 +24,7 @@ func (t MemorySearchTool) Name() string { return "memory_search" }
 func (t MemorySearchTool) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "memory_search",
-		Description: "Search the user's long-term memory in ~/.gg/memory/ (curated facts, daily logs, people and group pages). Use it to recall past context the current conversation does not contain. Returns up to 10 matches as path:line: snippet.",
+		Description: "Search the user's long-term memory (curated facts, daily logs, people and group pages). Both memory layers are searched: the workspace layer first, then the global layer. Returns up to 10 matches as [layer] path:line: snippet, where layer is workspace or global; on equal match counts the workspace hit sorts first.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -48,7 +48,7 @@ func (t MemorySearchTool) Execute(_ context.Context, raw json.RawMessage) ToolRe
 	if err := json.Unmarshal(raw, &input); err != nil {
 		return errorResult(fmt.Errorf("invalid memory_search arguments: %w", err))
 	}
-	hits, err := t.store.Search(input.Query, input.Scope)
+	hits, err := t.store.SearchLayered(input.Query, input.Scope)
 	if err != nil {
 		return errorResult(err)
 	}
@@ -57,7 +57,7 @@ func (t MemorySearchTool) Execute(_ context.Context, raw json.RawMessage) ToolRe
 	}
 	var b strings.Builder
 	for _, hit := range hits {
-		fmt.Fprintf(&b, "%s:%d: %s\n", hit.Path, hit.Line, hit.Snippet)
+		fmt.Fprintf(&b, "[%s] %s:%d: %s\n", hit.Layer, hit.Path, hit.Line, hit.Snippet)
 	}
 	return textResult(strings.TrimSpace(b.String()))
 }

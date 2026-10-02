@@ -18,12 +18,36 @@ import (
 //	  groups/<slug>.md per-group pages
 type Store struct {
 	dir string
+	// strict rejects symlink escapes on every file access. It is set for
+	// workspace layers (see NewWorkspaceStore), which can come from
+	// untrusted checkouts; the global store keeps the historical
+	// follow-symlinks behavior.
+	strict bool
 }
 
 // NewStore returns a store rooted at dir. It performs no I/O; call
 // EnsureLayout before first use.
 func NewStore(dir string) *Store {
 	return &Store{dir: dir}
+}
+
+// NewWorkspaceStore returns a store rooted at dir that refuses to follow
+// symlinks escaping dir, for workspace memory layers that may live in
+// untrusted checkouts. Reads and writes fail closed instead of following
+// a planted symlink to external files.
+func NewWorkspaceStore(dir string) *Store {
+	return &Store{dir: dir, strict: true}
+}
+
+// resolve returns the real path to use for I/O on path. For ordinary
+// stores it is the path unchanged; for strict workspace stores the path
+// is resolved and contained (see resolveWorkspaceFile), so no symlink is
+// left to be followed after the check.
+func (s *Store) resolve(path string) (string, error) {
+	if !s.strict {
+		return path, nil
+	}
+	return resolveWorkspaceFile(s.dir, path)
 }
 
 // DefaultDir returns the conventional memory directory.
@@ -124,13 +148,21 @@ func (s *Store) MigrateFromFile(oldPath string) (string, error) {
 
 // AppendCurated appends to MEMORY.md (the pre-structured Append behavior).
 func (s *Store) AppendCurated(text string) error {
-	return Append(s.CuratedPath(), text)
+	path, err := s.resolve(s.CuratedPath())
+	if err != nil {
+		return err
+	}
+	return Append(path, text)
 }
 
 // AppendDaily appends a timestamped entry to today's log.
 func (s *Store) AppendDaily(text string) error {
 	now := time.Now()
-	return s.appendDated(s.DailyPath(now), now.Format("15:04"), text)
+	path, err := s.resolve(s.DailyPath(now))
+	if err != nil {
+		return err
+	}
+	return s.appendDated(path, now.Format("15:04"), text)
 }
 
 func (s *Store) appendDated(path, stamp, text string) error {
@@ -156,7 +188,10 @@ func (s *Store) AppendPerson(slug, text string) error {
 	if strings.TrimSpace(slug) == "" {
 		return fmt.Errorf("person name is required")
 	}
-	path := s.PersonPath(slug)
+	path, err := s.resolve(s.PersonPath(slug))
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return err
@@ -174,7 +209,10 @@ func (s *Store) AppendGroup(slug, text string) error {
 	if strings.TrimSpace(slug) == "" {
 		return fmt.Errorf("group name is required")
 	}
-	path := s.GroupPath(slug)
+	path, err := s.resolve(s.GroupPath(slug))
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return err
@@ -193,8 +231,21 @@ func (s *Store) PruneDaily(retentionDays int) (int, error) {
 	if retentionDays <= 0 {
 		return 0, nil
 	}
+	dir := s.dir
+	if s.strict {
+		// A symlinked workspace layer must not have its target's files
+		// pruned; resolve (and validate) first.
+		realDir, err := resolveWorkspaceDir(s.dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return 0, nil
+			}
+			return 0, err
+		}
+		dir = realDir
+	}
 	cutoff := time.Now().AddDate(0, 0, -retentionDays).Format("2006-01-02")
-	entries, err := os.ReadDir(s.dir)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return 0, nil
@@ -212,7 +263,7 @@ func (s *Store) PruneDaily(retentionDays int) (int, error) {
 			continue
 		}
 		if day < cutoff {
-			if err := os.Remove(filepath.Join(s.dir, name)); err != nil {
+			if err := os.Remove(filepath.Join(dir, name)); err != nil {
 				return pruned, err
 			}
 			pruned++

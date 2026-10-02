@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
-	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/app"
@@ -187,7 +186,7 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		Skills:          skillSet,
 		ModelRecorded:   modelRecorded,
 		Profile:         personal.Profile,
-		MemoryStore:     personal.Store,
+		MemoryStore:     workspaceMemoryStore(cfg, personal.Store),
 	})
 
 	if parsed.Prompt != "" {
@@ -354,6 +353,25 @@ func runInit(cfg config.Config, stdout io.Writer, stderr io.Writer) int {
 	return 0
 }
 
+// workspaceMemoryStore returns the memory store for a CLI invocation in
+// cfg.CWD: the workspace overlay when the CWD belongs to a registered
+// workspace, otherwise the global store. The startup path already
+// auto-registers the CWD (EnsureDefaultWorkspace), so the lookup normally
+// hits. Without this, the agent tools' workspace layer (and memory_add's
+// default target=workspace) would silently operate on global memory,
+// leaking project-specific facts across workspaces.
+func workspaceMemoryStore(cfg config.Config, global *memory.Store) memory.StoreAPI {
+	reg, err := workspace.Load(cfg.HomeDir)
+	if err != nil {
+		return global
+	}
+	ws, ok := reg.FindByRoot(cfg.CWD)
+	if !ok {
+		return global
+	}
+	return memory.NewOverlay(memory.OverlayDir(ws.Root), global)
+}
+
 // runMemoryCommand implements `gg memory search <query>` and
 // `gg memory show [daily]`.
 func runMemoryCommand(cfg config.Config, memArgs []string, stdout io.Writer, stderr io.Writer) int {
@@ -366,7 +384,7 @@ func runMemoryCommand(cfg config.Config, memArgs []string, stdout io.Writer, std
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	store := personal.Store
+	store := workspaceMemoryStore(cfg, personal.Store)
 	if len(memArgs) == 0 {
 		fmt.Fprintln(stderr, "usage: gg memory <search <query>|show [daily]>")
 		return 2
@@ -378,7 +396,7 @@ func runMemoryCommand(cfg config.Config, memArgs []string, stdout io.Writer, std
 			fmt.Fprintln(stderr, "usage: gg memory search <query>")
 			return 2
 		}
-		hits, err := store.Search(query, "all")
+		hits, err := store.SearchLayered(query, "all")
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -388,15 +406,16 @@ func runMemoryCommand(cfg config.Config, memArgs []string, stdout io.Writer, std
 			return 0
 		}
 		for _, hit := range hits {
-			fmt.Fprintf(stdout, "%s:%d: %s\n", hit.Path, hit.Line, hit.Snippet)
+			fmt.Fprintf(stdout, "[%s] %s:%d: %s\n", hit.Layer, hit.Path, hit.Line, hit.Snippet)
 		}
 		return 0
 	case "show":
-		path := store.CuratedPath()
+		var content string
 		if len(memArgs) > 1 && memArgs[1] == "daily" {
-			path = store.DailyPath(time.Now())
+			content, err = store.ShowDaily()
+		} else {
+			content, err = store.ShowCurated()
 		}
-		content, err := memory.Show(path)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1

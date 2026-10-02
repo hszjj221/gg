@@ -46,7 +46,7 @@ type ToolContext struct {
 	Config      config.Config
 	Provider    agent.Provider // nil when only definitions are needed (/context)
 	ReadRoots   []string
-	MemStore    *memory.Store
+	MemStore    memory.ToolStore
 	Location    *time.Location
 	LocationErr error
 	BrowserPool *tools.BrowserSessionPool

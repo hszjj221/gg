@@ -3,11 +3,13 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -585,5 +587,171 @@ func TestBuildMCPToolsWarnsOnFailedServer(t *testing.T) {
 	}
 	if out := logBuf.String(); !strings.Contains(out, "ghost") || !strings.Contains(out, "mcp server failed") {
 		t.Fatalf("expected per-server failure warning in log, got %q", out)
+	}
+}
+
+// preApprovalEligible names the only builtin tools allowed to mark an
+// ApprovalRequest as pre-approved. The agent-area exemption exists only
+// for the agent writing its own files (write/edit targeting
+// <workspace>/.gg/agent/); reads, shell commands, and every other
+// approval-gated tool must always pass through the approver. Any tool
+// that starts setting PreApproved fails the invariant test below until
+// it is deliberately allowlisted here — the exemption is a conscious,
+// per-tool policy decision, never a drive-by addition.
+var preApprovalEligible = map[string]bool{
+	"write": true,
+	"edit":  true,
+}
+
+// preApprovalProbeArgs returns valid ApprovalRequest arguments that
+// target the workspace's agent area for the named tool, so the invariant
+// test can check whether the tool claims the pre-approval exemption.
+// Every approval-gated tool needs an entry here: a tool with no entry
+// fails the test loudly, forcing the probe (and the policy decision)
+// to be made up front when the tool is added.
+func preApprovalProbeArgs(t *testing.T, name, cwd string) json.RawMessage {
+	t.Helper()
+	switch name {
+	case "write":
+		return json.RawMessage(`{"path":".gg/agent/probe.txt","content":"probe"}`)
+	case "edit":
+		// edit only describes existing files.
+		agentFile := filepath.Join(cwd, ".gg", "agent", "probe.txt")
+		if err := os.MkdirAll(filepath.Dir(agentFile), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(agentFile, []byte("probe"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return json.RawMessage(`{"path":".gg/agent/probe.txt","edits":[{"oldText":"probe","newText":"x"}]}`)
+	case "bash":
+		// A shell command touching the agent area must still be approved.
+		return json.RawMessage(`{"command":"touch .gg/agent/probe.txt"}`)
+	case "artifact_create":
+		return json.RawMessage(`{"title":"probe","type":"text","content":"probe"}`)
+	case "artifact_edit":
+		return json.RawMessage(`{"artifact_id":"probe","content":"probe"}`)
+	case "open":
+		return json.RawMessage(`{"target":".gg/agent/probe.txt"}`)
+	case "browser_navigate":
+		return json.RawMessage(`{"url":"https://example.com/"}`)
+	case "image_generate":
+		return json.RawMessage(`{"prompt":"probe"}`)
+	case "tts":
+		return json.RawMessage(`{"text":"probe"}`)
+	case "stt":
+		return json.RawMessage(`{"audio_path":".gg/agent/probe.wav"}`)
+	case "gmail_send":
+		return json.RawMessage(`{"to":"probe@example.com","subject":"probe","body":"probe"}`)
+	case "calendar_create":
+		return json.RawMessage(`{"title":"probe","start":"2030-01-01T10:00:00+08:00","end":"2030-01-01T11:00:00+08:00"}`)
+	case "process_kill":
+		return json.RawMessage(`{"pid":987654321}`)
+	case "clipboard_read":
+		return json.RawMessage(`{}`)
+	case "clipboard_write":
+		return json.RawMessage(`{"text":"probe"}`)
+	default:
+		t.Fatalf("no pre-approval probe args for tool %q; add it to preApprovalProbeArgs", name)
+		return nil
+	}
+}
+
+func eligiblePreApprovalTools() string {
+	names := make([]string, 0, len(preApprovalEligible))
+	for name := range preApprovalEligible {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
+}
+
+// TestPreApprovalExemptionInvariant sweeps every approval-gated builtin
+// tool — the registry sweep plus the conditional tools that degrade to
+// absent in a bare test environment (browser, connectors) — and asserts
+// that only the tools in preApprovalEligible ever set
+// ApprovalRequest.PreApproved. This is the guardrail against a future
+// tool casually opting into the agent-area exemption.
+func TestPreApprovalExemptionInvariant(t *testing.T) {
+	cfg := config.Config{
+		HomeDir: t.TempDir(),
+		CWD:     t.TempDir(),
+		BaseURL: "https://api.example.com", // enables the media provider
+	}
+	cfg.Memory.Enabled = true
+	cfg.Artifacts.Dir = t.TempDir()
+	cfg.Connectors.Dir = t.TempDir()
+	tc := testToolContext(t, cfg)
+
+	var all []agent.Tool
+	for _, p := range toolProviders {
+		if p.Available != nil && !p.Available() {
+			continue
+		}
+		built, err := p.Build(context.Background(), tc)
+		if err != nil {
+			t.Fatalf("provider %q build failed: %v", p.Name, err)
+		}
+		all = append(all, built...)
+	}
+	// Conditional tools that degrade to absent in a bare test environment:
+	// the browser pool is lazy so construction never starts Chromium, and
+	// the connector tools build against a stub token store with no HTTP.
+	pool := tools.NewBrowserSessionPool()
+	cstore, err := connector.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cstore.Save(google.Name, connector.Token{
+		AccessToken: "at", RefreshToken: "rt",
+		Expiry: time.Now().Add(time.Hour), Scopes: google.Scopes,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gclient, err := google.NewClient(cstore, google.Config{ClientID: "cid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	all = append(all,
+		tools.NewBrowserNavigateTool(pool),
+		tools.NewGmailSendTool(gclient),
+		tools.NewCalendarCreateTool(gclient, nil, nil),
+	)
+	if len(all) == 0 {
+		t.Fatal("sweep built no tools; test would pass vacuously")
+	}
+
+	probed := map[string]bool{}
+	for _, tool := range all {
+		name := tool.Name()
+		if strings.HasPrefix(name, "mcp_") {
+			// Every MCP tool is approval-gated by construction
+			// (compile-time assertion in internal/mcp); none of them
+			// set PreApproved.
+			continue
+		}
+		describer, ok := tool.(agent.ApprovalDescriber)
+		if !ok {
+			continue
+		}
+		probed[name] = true
+		req, err := describer.ApprovalRequest(preApprovalProbeArgs(t, name, cfg.CWD))
+		if err != nil {
+			t.Fatalf("probe ApprovalRequest for tool %q failed: %v", name, err)
+		}
+		if want := preApprovalEligible[name]; req.PreApproved != want {
+			t.Errorf("tool %q: PreApproved = %v, want %v — only %s may pre-approve",
+				name, req.PreApproved, want, eligiblePreApprovalTools())
+		}
+		if req.PreApproved && req.PreApprovedReason == "" {
+			t.Errorf("tool %q set PreApproved without a reason", name)
+		}
+	}
+	// The eligible tools must actually be probed; otherwise the invariant
+	// would pass vacuously for them.
+	for name := range preApprovalEligible {
+		if !probed[name] {
+			t.Errorf("pre-approval-eligible tool %q was not probed; extend the sweep", name)
+		}
 	}
 }
