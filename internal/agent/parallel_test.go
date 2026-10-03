@@ -18,6 +18,8 @@ type gateTool struct {
 	release <-chan struct{}
 }
 
+func (t *gateTool) ParallelSafe() bool { return true }
+
 func (t *gateTool) Name() string { return t.name }
 func (t *gateTool) Definition() ToolDefinition {
 	return ToolDefinition{Name: t.name, Description: "fake", Parameters: map[string]any{"type": "object"}}
@@ -87,6 +89,8 @@ type concurrencyTool struct {
 	peak *atomic.Int32
 }
 
+func (t *concurrencyTool) ParallelSafe() bool { return true }
+
 func (t *concurrencyTool) Name() string { return t.name }
 func (t *concurrencyTool) Definition() ToolDefinition {
 	return ToolDefinition{Name: t.name, Description: "fake", Parameters: map[string]any{"type": "object"}}
@@ -143,6 +147,8 @@ type delayTool struct {
 	name  string
 	delay time.Duration
 }
+
+func (t *delayTool) ParallelSafe() bool { return true }
 
 func (t *delayTool) Name() string { return t.name }
 func (t *delayTool) Definition() ToolDefinition {

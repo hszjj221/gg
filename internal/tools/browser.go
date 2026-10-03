@@ -18,12 +18,13 @@ import (
 // per turn, so different sessions never share a tab. The session is lazy:
 // Chromium starts on the first tool call and lives until Close.
 type BrowserSessionPool struct {
-	mu sync.Mutex
-	s  *browser.Session
+	mu     sync.Mutex
+	s      *browser.Session
+	closed bool
 }
 
 // NewBrowserSessionPool creates a pool. Call Close when the owning Service
-// is done (best-effort; the OS reaps the process on exit regardless).
+// is done so Chromium is stopped and reaped before the host exits.
 func NewBrowserSessionPool() *BrowserSessionPool {
 	return &BrowserSessionPool{}
 }
@@ -32,6 +33,9 @@ func NewBrowserSessionPool() *BrowserSessionPool {
 func (p *BrowserSessionPool) Get(ctx context.Context) (*browser.Session, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil, fmt.Errorf("browser session pool is closed")
+	}
 	if p.s == nil {
 		s, err := browser.Start(ctx)
 		if err != nil {
@@ -46,6 +50,7 @@ func (p *BrowserSessionPool) Get(ctx context.Context) (*browser.Session, error) 
 func (p *BrowserSessionPool) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.closed = true
 	if p.s == nil {
 		return nil
 	}

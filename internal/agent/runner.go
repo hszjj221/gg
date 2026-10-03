@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"runtime/debug"
 	"strings"
 	"sync"
 )
@@ -196,9 +198,9 @@ type pendingCall struct {
 }
 
 // executeToolCalls runs one assistant message's tool calls: resolve and
-// approve sequentially in call order, execute approved calls with bounded
-// parallelism, and return results in the original call order so the
-// transcript is identical to sequential execution.
+// approve sequentially in call order. Parallel-safe calls overlap within a
+// bounded group; other calls form execution barriers. Results remain in the
+// original call order for a stable transcript.
 func (r *Runner) executeToolCalls(ctx context.Context, calls []ToolCall, onEvent func(Event)) []ToolResult {
 	pending := make([]pendingCall, 0, len(calls))
 	for _, call := range calls {
@@ -211,6 +213,12 @@ func (r *Runner) executeToolCalls(ctx context.Context, calls []ToolCall, onEvent
 	for i, p := range pending {
 		if p.decided != nil {
 			results[i] = *p.decided
+			continue
+		}
+		parallel, ok := p.tool.(ParallelTool)
+		if !ok || !parallel.ParallelSafe() {
+			wg.Wait()
+			results[i] = r.startPreparedCall(ctx, p.tool, p.call, p.summary, onEvent)
 			continue
 		}
 		wg.Add(1)
@@ -309,7 +317,15 @@ func (r *Runner) startPreparedCall(ctx context.Context, tool Tool, call ToolCall
 
 // executePreparedCall runs an approved tool call and emits its finish event.
 func (r *Runner) executePreparedCall(ctx context.Context, tool Tool, call ToolCall, summary string, onEvent func(Event)) ToolResult {
-	result := tool.Execute(ctx, call.Arguments)
+	result := func() (result ToolResult) {
+		defer func() {
+			if value := recover(); value != nil {
+				slog.Error("tool panicked", "tool", call.Name, "panic", value, "stack", string(debug.Stack()))
+				result = toolError(fmt.Errorf("tool %q panicked: %v", call.Name, value))
+			}
+		}()
+		return tool.Execute(ctx, call.Arguments)
+	}()
 	emitToolFinish(onEvent, call, summary, result)
 	return result
 }

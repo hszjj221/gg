@@ -80,6 +80,7 @@ type Runtime struct {
 
 	mu     sync.Mutex
 	states map[string]*workspaceState
+	closed bool
 }
 
 type SessionSummary struct {
@@ -111,6 +112,7 @@ func NewRuntime(options RuntimeOptions) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ensure default workspace: %w", err)
 	}
+	options.Manager.limiter = newRunLimiter(options.Manager.MaxActiveRuns)
 	w := &Runtime{
 		cfg:              options.Config,
 		providerFactory:  options.ProviderFactory,
@@ -140,6 +142,9 @@ func NewRuntime(options RuntimeOptions) (*Runtime, error) {
 func (w *Runtime) getState(workspaceID string) (*workspaceState, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.closed {
+		return nil, errorf(ErrorRuntimeClosed, false, "runtime is closed")
+	}
 	if st, ok := w.states[workspaceID]; ok {
 		return st, nil
 	}
@@ -587,7 +592,8 @@ func (w *Runtime) addLoaded(store *session.Store, loaded session.Loaded) (*works
 		Log:             w.logger,
 		Degraded:        st.degraded,
 	})
-	if _, err := st.manager.Add(service); err != nil {
+	service, err = st.manager.getOrAdd(service)
+	if err != nil {
 		return nil, nil, err
 	}
 	return st, service, nil
@@ -602,4 +608,24 @@ func (w *Runtime) sessionError(st *workspaceState, sessionID string, err error) 
 		return wrapError(ErrorSessionConflict, true, err, "session %q changed in another process; reopen and retry", sessionID)
 	}
 	return err
+}
+
+// Close cancels all workspaces concurrently before waiting for resource cleanup.
+func (w *Runtime) Close(ctx context.Context) error {
+	w.mu.Lock()
+	w.closed = true
+	states := make([]*workspaceState, 0, len(w.states))
+	for _, st := range w.states {
+		states = append(states, st)
+	}
+	w.mu.Unlock()
+	errs := make(chan error, len(states))
+	for _, st := range states {
+		go func() { errs <- st.manager.Close(ctx) }()
+	}
+	var all []error
+	for range states {
+		all = append(all, <-errs)
+	}
+	return errors.Join(all...)
 }

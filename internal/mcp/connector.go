@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"sort"
 	"strconv"
@@ -71,13 +72,18 @@ func (c *Connector) Tools(ctx context.Context) ([]agent.Tool, error) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.lifeCtx.Err() != nil {
+		return nil, errors.New("MCP connector is closed")
+	}
 
 	// Disconnect servers removed from the config, or whose config changed
 	// (a stale subprocess must not keep serving old tools).
-	for name, sess := range c.sessions {
+	for name, previous := range c.configs {
 		sc, ok := cfg.Servers[name]
-		if !ok || !reflect.DeepEqual(c.configs[name], sc) {
-			_ = sess.Close()
+		if !ok || !reflect.DeepEqual(previous, sc) {
+			if sess := c.sessions[name]; sess != nil {
+				_ = sess.Close()
+			}
 			delete(c.sessions, name)
 			delete(c.configs, name)
 			delete(c.toolLists, name)
@@ -132,6 +138,7 @@ func (c *Connector) FailedServers() map[string]error {
 // it is skipped on later calls without retrying. Caller cancellation is
 // not a server failure — the next turn retries.
 func (c *Connector) connectLocked(ctx context.Context, name string, sc ServerConfig) ([]agent.Tool, bool) {
+	c.configs[name] = sc
 	sess, err := c.dial(ctx, c.lifeCtx, name, sc)
 	if err != nil {
 		if ctx.Err() == nil {
@@ -195,9 +202,9 @@ func (c *Connector) uniqueName(server, tool string) string {
 // connector-lifetime context, reaping stdio subprocesses. It is
 // idempotent.
 func (c *Connector) Close() error {
+	c.lifeCancel()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	defer c.lifeCancel()
 	var errs []error
 	for name, sess := range c.sessions {
 		if err := sess.Close(); err != nil {

@@ -61,7 +61,7 @@ type Client struct {
 func NewClient(config Config) *Client {
 	httpClient := config.HTTPClient
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = &http.Client{Timeout: 5 * time.Minute}
 	}
 	return &Client{
 		apiKey:  config.APIKey,

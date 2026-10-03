@@ -126,7 +126,28 @@ func (b *Bot) saveOffset(offset int64) {
 	b.mu.Lock()
 	b.offset = offset
 	b.mu.Unlock()
-	_ = os.WriteFile(b.offsetFile, []byte(strconv.FormatInt(offset, 10)), 0o600)
+	file, err := os.CreateTemp(filepath.Dir(b.offsetFile), ".offset-*")
+	if err == nil {
+		defer os.Remove(file.Name())
+		_, err = file.WriteString(strconv.FormatInt(offset, 10))
+		if err == nil {
+			err = file.Sync()
+		}
+		closeErr := file.Close()
+		if err == nil {
+			err = closeErr
+		}
+		if err == nil {
+			err = os.Rename(file.Name(), b.offsetFile)
+		}
+	}
+	if err != nil {
+		if b.logger != nil {
+			b.logger.Error("save telegram offset", "error", err)
+		} else {
+			fmt.Fprintf(b.stderr, "telegram: save offset: %v\n", err)
+		}
+	}
 }
 
 // allowed reports whether the chat may talk to the bot. An empty allowlist
@@ -137,6 +158,8 @@ func (b *Bot) allowed(chatID int64) bool {
 
 // Run starts the long-polling loop; it returns when ctx is done.
 func (b *Bot) Run(ctx context.Context) error {
+	var workers sync.WaitGroup
+	defer workers.Wait()
 	me, err := b.api.GetMe(ctx)
 	if err != nil {
 		return fmt.Errorf("telegram: verify token: %w", err)
@@ -164,27 +187,37 @@ func (b *Bot) Run(ctx context.Context) error {
 		if err != nil {
 			var rl *RateLimitedError
 			if errors.As(err, &rl) {
-				time.Sleep(rl.RetryAfter)
+				if !waitPollRetry(ctx, rl.RetryAfter) {
+					return nil
+				}
 				continue
 			}
 			if ctx.Err() != nil {
 				return nil
 			}
-			time.Sleep(backoff)
+			if !waitPollRetry(ctx, backoff) {
+				return nil
+			}
 			backoff = min(backoff*2, 30*time.Second)
 			continue
 		}
 		backoff = time.Second
+		batch := make([]Update, 0, len(updates))
 		for _, u := range updates {
-			if b.isReplay(u.UpdateID) {
-				// Already dispatched in this process lifetime; the
-				// original worker will ack it. Marking here would ack
-				// an update whose handling has not finished.
-				continue
+			if acker.add(u.UpdateID) {
+				batch = append(batch, u)
 			}
+		}
+		if len(updates) > 0 && len(batch) == 0 {
+			if !waitPollRetry(ctx, time.Second) {
+				return nil
+			}
+		}
+		for _, u := range batch {
 			u := u
-			acker.add(u.UpdateID)
+			workers.Add(1)
 			go func() {
+				defer workers.Done()
 				defer func() {
 					if r := recover(); r != nil {
 						b.logPanic("update handler panicked", r, "update_id", u.UpdateID)
@@ -216,6 +249,7 @@ func (b *Bot) Run(ctx context.Context) error {
 type offsetAcker struct {
 	mu      sync.Mutex
 	pending map[int64]bool // updateID -> handled
+	order   []int64        // updates in delivery order; numerical gaps are allowed
 	next    int64          // smallest unacked updateID
 	save    func(int64)
 }
@@ -225,10 +259,18 @@ func newOffsetAcker(start int64, save func(int64)) *offsetAcker {
 }
 
 // add registers an update as in-flight.
-func (a *offsetAcker) add(updateID int64) {
+func (a *offsetAcker) add(updateID int64) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if updateID < a.next {
+		return false
+	}
+	if _, exists := a.pending[updateID]; exists {
+		return false
+	}
 	a.pending[updateID] = false
+	a.order = append(a.order, updateID)
+	return true
 }
 
 // mark records an update as handled and persists the offset past every
@@ -242,9 +284,11 @@ func (a *offsetAcker) mark(updateID int64) {
 	}
 	a.pending[updateID] = true
 	moved := false
-	for a.pending[a.next] {
-		delete(a.pending, a.next)
-		a.next++
+	for len(a.order) > 0 && a.pending[a.order[0]] {
+		id := a.order[0]
+		delete(a.pending, id)
+		a.order = a.order[1:]
+		a.next = id + 1
 		moved = true
 	}
 	if moved {
@@ -501,5 +545,16 @@ func (b *Bot) waitRunResult(ctx context.Context, run *app.Run) (string, error) {
 		if done {
 			return "", errors.New("run ended without result")
 		}
+	}
+}
+
+func waitPollRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }

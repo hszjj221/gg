@@ -159,6 +159,13 @@ type ApprovalDescriber interface {
 	ApprovalRequest(json.RawMessage) (ApprovalRequest, error)
 }
 
+// ParallelTool opts into concurrent execution. Only tools whose operations
+// are independent and safe to overlap should implement it. Other tools run
+// in call order, with a barrier before and after execution.
+type ParallelTool interface {
+	ParallelSafe() bool
+}
+
 type Tool interface {
 	Name() string
 	Definition() ToolDefinition

@@ -105,14 +105,29 @@ func (h *Handler) handleRPC(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
+	controller := http.NewResponseController(w)
+	_ = controller.SetReadDeadline(time.Now().Add(15 * time.Second))
+	defer controller.SetReadDeadline(time.Time{})
 	defer r.Body.Close()
-	decoder := json.NewDecoder(io.LimitReader(r.Body, maxRequestBytes+1))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBytes))
+	if err != nil {
+		status := http.StatusBadRequest
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		writeJSON(w, status, jsonrpc.Response{JSONRPC: jsonrpc.Version, Error: &jsonrpc.Error{Code: -32700, Message: "parse error: " + err.Error()}})
+		return
+	}
 	var request jsonrpc.Request
-	if err := decoder.Decode(&request); err != nil {
+	if err := json.Unmarshal(body, &request); err != nil {
 		writeJSON(w, http.StatusBadRequest, jsonrpc.Response{JSONRPC: jsonrpc.Version, Error: &jsonrpc.Error{Code: -32700, Message: "parse error: " + err.Error()}})
 		return
 	}
-	writeJSON(w, http.StatusOK, h.rpc.Handle(r.Context(), request))
+	response := h.rpc.Handle(r.Context(), request)
+	_ = controller.SetWriteDeadline(time.Now().Add(15 * time.Second))
+	defer controller.SetWriteDeadline(time.Time{})
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h *Handler) handleEvents(w http.ResponseWriter, r *http.Request) {
@@ -134,39 +149,56 @@ func (h *Handler) handleEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "after must be a non-negative integer", http.StatusBadRequest)
 		return
 	}
-	flusher, ok := w.(http.Flusher)
+	_, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming is not supported", http.StatusInternalServerError)
 		return
 	}
+	controller := http.NewResponseController(w)
+	_ = controller.SetWriteDeadline(time.Now().Add(15 * time.Second))
+	defer controller.SetWriteDeadline(time.Time{})
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
+	if err := controller.Flush(); err != nil {
+		return
+	}
+	_ = controller.SetWriteDeadline(time.Time{})
 	for {
 		waitContext, cancel := context.WithTimeout(r.Context(), sseHeartbeatInterval)
 		events, done, err := h.rt.WaitRun(waitContext, runID, after)
 		cancel()
+		_ = controller.SetWriteDeadline(time.Now().Add(15 * time.Second))
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
-				_, _ = io.WriteString(w, ": keepalive\n\n")
-				flusher.Flush()
+				if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+					return
+				}
+				if err := controller.Flush(); err != nil {
+					return
+				}
+				_ = controller.SetWriteDeadline(time.Time{})
 				continue
 			}
 			if errors.Is(err, context.Canceled) && r.Context().Err() != nil {
 				return
 			}
-			writeSSE(w, "error", "", jsonrpc.ErrorFrom(err))
-			flusher.Flush()
+			_ = writeSSE(w, "error", "", jsonrpc.ErrorFrom(err))
+			_ = controller.Flush()
 			return
 		}
 		for _, event := range events {
-			writeSSE(w, "event", strconv.FormatInt(event.Sequence, 10), event)
+			if err := writeSSE(w, "event", strconv.FormatInt(event.Sequence, 10), event); err != nil {
+				return
+			}
 			after = event.Sequence
 		}
-		flusher.Flush()
+		if err := controller.Flush(); err != nil {
+			return
+		}
+		_ = controller.SetWriteDeadline(time.Time{})
 		if done {
 			return
 		}
@@ -222,15 +254,18 @@ func isLocalUIOrigin(origin string) bool {
 	return false
 }
 
-func writeSSE(w io.Writer, eventType, eventID string, value any) {
+func writeSSE(w io.Writer, eventType, eventID string, value any) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		data = []byte(fmt.Sprintf(`{"error":%q}`, err.Error()))
 	}
 	if eventID != "" {
-		_, _ = fmt.Fprintf(w, "id: %s\n", eventID)
+		if _, err := fmt.Fprintf(w, "id: %s\n", eventID); err != nil {
+			return err
+		}
 	}
-	_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, data)
+	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, data)
+	return err
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

@@ -48,6 +48,7 @@ type Scheduler struct {
 
 	mu      sync.Mutex
 	running map[string]struct{}
+	workers sync.WaitGroup
 
 	// workspaceDir, when non-empty, scopes which jobs this scheduler fires:
 	// jobs whose Workspace is set to a different directory are left for the
@@ -104,6 +105,7 @@ func (s *Scheduler) report(err error) {
 // Transient store errors (including a failed startup reconciliation) are
 // reported and retried instead of killing the loop.
 func (s *Scheduler) Run(ctx context.Context) error {
+	defer s.workers.Wait()
 	reconciled := false
 	for {
 		if !reconciled {
@@ -183,6 +185,13 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 		return nil
 	})
 	if err != nil {
+		s.mu.Lock()
+		for _, job := range due {
+			if !busy[job.ID] {
+				delete(s.running, job.ID)
+			}
+		}
+		s.mu.Unlock()
 		return err
 	}
 	for _, job := range due {
@@ -194,7 +203,8 @@ func (s *Scheduler) Tick(ctx context.Context) error {
 			})
 			continue
 		}
-		go s.executeJob(ctx, job)
+		s.workers.Add(1)
+		go func() { defer s.workers.Done(); s.executeJob(ctx, job) }()
 	}
 	return nil
 }

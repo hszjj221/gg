@@ -113,11 +113,12 @@ type Loaded struct {
 }
 
 type Store struct {
-	mu      sync.Mutex
-	path    string
-	header  Header
-	records []entryRecord
-	lastID  *string
+	mu       sync.Mutex
+	path     string
+	header   Header
+	records  []entryRecord
+	lastID   *string
+	diskInfo os.FileInfo
 }
 
 type entryRecord struct {
@@ -281,6 +282,10 @@ func NewStore(path, cwd string) (*Store, error) {
 			last := store.records[len(store.records)-1].id()
 			store.lastID = &last
 		}
+		store.diskInfo, err = os.Stat(path)
+		if err != nil {
+			return nil, err
+		}
 		return store, nil
 	}
 
@@ -297,7 +302,11 @@ func NewStore(path, cwd string) (*Store, error) {
 	if err := writeJSONLine(file, header); err != nil {
 		return nil, err
 	}
-	return &Store{path: path, header: header}, nil
+	diskInfo, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	return &Store{path: path, header: header, diskInfo: diskInfo}, nil
 }
 
 func (s *Store) Path() string {
@@ -460,6 +469,10 @@ func (s *Store) Fork(id *string) (*Store, error) {
 		last := records[len(records)-1].id()
 		store.lastID = &last
 	}
+	store.diskInfo, err = os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
 	return store, nil
 }
 
@@ -485,8 +498,14 @@ func (s *Store) SetWorkspaceID(id string) error {
 	if err := s.validateCurrentLocked(); err != nil {
 		return err
 	}
-	s.header.WorkspaceID = id
-	return rewriteSession(s.path, s.header, s.records)
+	header := s.header
+	header.WorkspaceID = id
+	if err := rewriteSession(s.path, header, s.records); err != nil {
+		return err
+	}
+	s.header = header
+	s.diskInfo, err = os.Stat(s.path)
+	return err
 }
 
 func (s *Store) AppendMessage(message agent.Message) error {
@@ -559,6 +578,7 @@ func (s *Store) appendRecord(record entryRecord) error {
 		return err
 	}
 	err = writeJSONLine(file, record.value())
+	diskInfo, statErr := file.Stat()
 	closeErr := file.Close()
 	if err != nil {
 		return err
@@ -566,6 +586,10 @@ func (s *Store) appendRecord(record entryRecord) error {
 	if closeErr != nil {
 		return closeErr
 	}
+	if statErr != nil {
+		return statErr
+	}
+	s.diskInfo = diskInfo
 	s.records = append(s.records, cloneRecord(record))
 	last := record.id()
 	s.lastID = &last
@@ -573,6 +597,14 @@ func (s *Store) appendRecord(record entryRecord) error {
 }
 
 func (s *Store) validateCurrentLocked() error {
+	info, err := os.Stat(s.path)
+	if err != nil {
+		return err
+	}
+	if s.diskInfo != nil && os.SameFile(s.diskInfo, info) && s.diskInfo.Size() == info.Size() && s.diskInfo.ModTime().Equal(info.ModTime()) {
+		return nil
+	}
+
 	loaded, err := Load(s.path)
 	if err != nil {
 		return err
