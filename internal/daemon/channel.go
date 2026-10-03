@@ -44,8 +44,9 @@ type ChannelState struct {
 // exposed here (and surfaced on the authenticated /health endpoint) instead
 // of leaving operators to wonder why the bot went quiet.
 type Monitor struct {
-	mu     sync.Mutex
-	states map[string]ChannelState
+	mu      sync.Mutex
+	states  map[string]ChannelState
+	workers sync.WaitGroup
 }
 
 // NewMonitor returns an empty channel monitor.
@@ -121,7 +122,9 @@ func startChannels(ctx context.Context, deps channelDeps) (*Monitor, error) {
 func launchChannel(ctx context.Context, ch Channel, logger *slog.Logger, mon *Monitor) {
 	mon.set(ch.Name(), ChannelState{State: ChannelRunning})
 	logger.Info("channel starting", "channel", ch.Name())
+	mon.workers.Add(1)
 	go func() {
+		defer mon.workers.Done()
 		defer func() {
 			if r := recover(); r != nil {
 				stack := debug.Stack()
@@ -145,4 +148,15 @@ func launchChannel(ctx context.Context, ch Channel, logger *slog.Logger, mon *Mo
 		}
 		mon.set(ch.Name(), ChannelState{State: ChannelStopped})
 	}()
+}
+
+func (m *Monitor) Wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() { m.workers.Wait(); close(done) }()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

@@ -332,6 +332,8 @@ func ErrorFrom(err error) *Error {
 		app.ErrorSessionConflict:     -32006,
 		app.ErrorInvalidAction:       -32007,
 		app.ErrorWorkspaceMismatch:   -32008,
+		app.ErrorRuntimeClosed:       -32009,
+		app.ErrorRunCapacity:         -32010,
 	}[appErr.Code]
 	if numeric == 0 {
 		numeric = -32000

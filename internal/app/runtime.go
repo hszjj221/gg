@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -69,31 +70,41 @@ type pendingApproval struct {
 	response chan agent.ApprovalDecision
 }
 
+type retainedEvent struct {
+	event Event
+	bytes int
+}
+
 type Run struct {
 	id        string
 	sessionID string
 	cancel    context.CancelFunc
 
-	mu        sync.Mutex
-	events    []Event
-	changed   chan struct{}
-	done      bool
-	started   time.Time
-	completed time.Time
-	nextSeq   int64
-	maxEvents int
-	approvals map[string]pendingApproval
+	mu            sync.Mutex
+	events        []retainedEvent
+	eventHead     int
+	eventCount    int
+	eventBytes    int
+	maxEventBytes int
+	changed       chan struct{}
+	done          bool
+	started       time.Time
+	completed     time.Time
+	nextSeq       int64
+	maxEvents     int
+	approvals     map[string]pendingApproval
 }
 
 func newRun(sessionID string, cancel context.CancelFunc, maxEvents int, started time.Time) *Run {
 	return &Run{
-		id:        newRuntimeID(),
-		sessionID: sessionID,
-		cancel:    cancel,
-		changed:   make(chan struct{}),
-		started:   started,
-		maxEvents: maxEvents,
-		approvals: make(map[string]pendingApproval),
+		id:            newRuntimeID(),
+		sessionID:     sessionID,
+		cancel:        cancel,
+		changed:       make(chan struct{}),
+		started:       started,
+		maxEvents:     maxEvents,
+		maxEventBytes: defaultMaxEventBytes,
+		approvals:     make(map[string]pendingApproval),
 	}
 }
 
@@ -114,8 +125,8 @@ func (r *Run) Status() RunStatus {
 		LastSequence:  r.nextSeq,
 		FirstSequence: r.nextSeq + 1,
 	}
-	if len(r.events) > 0 {
-		status.FirstSequence = r.events[0].Sequence
+	if r.eventCount > 0 {
+		status.FirstSequence = r.events[r.eventHead].event.Sequence
 	}
 	if !r.completed.IsZero() {
 		status.CompletedAt = r.completed.UnixMilli()
@@ -136,20 +147,23 @@ func (r *Run) Status() RunStatus {
 func (r *Run) Wait(ctx context.Context, afterSequence int64) ([]Event, bool, error) {
 	for {
 		r.mu.Lock()
-		if len(r.events) > 0 && afterSequence < r.events[0].Sequence-1 {
-			oldest := r.events[0].Sequence
+		oldest := r.nextSeq + 1
+		if r.eventCount > 0 {
+			oldest = r.events[r.eventHead].event.Sequence
+		}
+		if afterSequence < oldest-1 {
 			r.mu.Unlock()
 			return nil, false, errorf(ErrorEventHistoryExpired, true, "run event history before sequence %d has expired", oldest)
 		}
-		start := len(r.events)
-		for i, event := range r.events {
-			if event.Sequence > afterSequence {
-				start = i
-				break
-			}
+		start := 0
+		if afterSequence >= oldest {
+			start = int(min(afterSequence-oldest+1, int64(r.eventCount)))
 		}
-		if start < len(r.events) {
-			events := append([]Event(nil), r.events[start:]...)
+		if start < r.eventCount {
+			events := make([]Event, r.eventCount-start)
+			for i := range events {
+				events[i] = r.events[(r.eventHead+start+i)%len(r.events)].event
+			}
 			done := r.done
 			r.mu.Unlock()
 			return events, done, nil
@@ -176,15 +190,40 @@ func (r *Run) publish(event Event) {
 	event.RunID = r.id
 	event.Sequence = r.nextSeq
 	event.Timestamp = time.Now().UnixMilli()
-	r.events = append(r.events, event)
-	if r.maxEvents > 0 && len(r.events) > r.maxEvents {
-		drop := len(r.events) - r.maxEvents
-		copy(r.events, r.events[drop:])
-		r.events = r.events[:r.maxEvents]
+	encoded, _ := json.Marshal(event)
+	size := len(encoded)
+	for r.eventCount > 0 && ((r.maxEvents > 0 && r.eventCount >= r.maxEvents) || (r.maxEventBytes > 0 && r.eventBytes+size > r.maxEventBytes)) {
+		r.dropEventLocked()
+	}
+	// An oversized event expires the replay window too. Consumers already
+	// handle this condition by reloading the session snapshot.
+	if r.maxEventBytes <= 0 || size <= r.maxEventBytes {
+		if r.eventCount == len(r.events) {
+			capacity := max(16, len(r.events)*2)
+			if r.maxEvents > 0 {
+				capacity = min(capacity, r.maxEvents)
+			}
+			grown := make([]retainedEvent, capacity)
+			for i := 0; i < r.eventCount; i++ {
+				grown[i] = r.events[(r.eventHead+i)%len(r.events)]
+			}
+			r.events, r.eventHead = grown, 0
+		}
+		index := (r.eventHead + r.eventCount) % len(r.events)
+		r.events[index] = retainedEvent{event: event, bytes: size}
+		r.eventCount++
+		r.eventBytes += size
 	}
 	close(r.changed)
 	r.changed = make(chan struct{})
 	r.mu.Unlock()
+}
+
+func (r *Run) dropEventLocked() {
+	r.eventBytes -= r.events[r.eventHead].bytes
+	r.events[r.eventHead] = retainedEvent{}
+	r.eventHead = (r.eventHead + 1) % len(r.events)
+	r.eventCount--
 }
 
 func (r *Run) finish(event Event, completed time.Time) {
@@ -245,6 +284,18 @@ func (a runApprover) Approve(ctx context.Context, request agent.ApprovalRequest)
 // Manager owns many conversation services and their active runs. A session has
 // at most one active run; separate sessions can execute concurrently.
 type ManagerOptions struct {
+	// RunTimeout bounds a complete turn, including provider calls and approvals.
+	// Zero uses 30 minutes; negative disables the deadline.
+	RunTimeout time.Duration
+	// MaxActiveRuns bounds concurrent turns across a Runtime's workspaces.
+	// Zero uses 16; negative disables the limit.
+	MaxActiveRuns int
+	// MaxEventBytes bounds the serialized replay data retained by each run.
+	// Oversized events expire replay history; clients reload a snapshot.
+	// Zero uses 4 MiB; negative disables the byte limit.
+	MaxEventBytes int
+	limiter       *runLimiter
+
 	// CompletedRunTTL controls how long completed runs remain replayable.
 	// Zero uses the default; a negative value disables age-based eviction.
 	CompletedRunTTL time.Duration
@@ -272,9 +323,39 @@ const (
 	defaultMaxCompletedRuns = 128
 	defaultMaxOpenSessions  = 64
 	defaultMaxEventsPerRun  = 8192
+	defaultMaxEventBytes    = 4 << 20
+	defaultMaxActiveRuns    = 16
+	defaultRunTimeout       = 30 * time.Minute
 )
 
+type runLimiter struct {
+	mu            sync.Mutex
+	active, limit int
+}
+
+func (l *runLimiter) acquire() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.limit >= 0 && l.active >= l.limit {
+		return false
+	}
+	l.active++
+	return true
+}
+func (l *runLimiter) release() { l.mu.Lock(); l.active--; l.mu.Unlock() }
+func newRunLimiter(limit int) *runLimiter {
+	if limit == 0 {
+		limit = defaultMaxActiveRuns
+	}
+	return &runLimiter{limit: limit}
+}
+
 type Manager struct {
+	closed    bool
+	workers   sync.WaitGroup
+	closeDone chan struct{}
+	closeErr  error
+
 	mu            sync.RWMutex
 	sessions      map[string]*Service
 	sessionAccess map[string]uint64
@@ -289,6 +370,16 @@ func NewManager() *Manager {
 }
 
 func NewManagerWithOptions(options ManagerOptions) *Manager {
+	if options.RunTimeout == 0 {
+		options.RunTimeout = defaultRunTimeout
+	}
+	if options.MaxEventBytes == 0 {
+		options.MaxEventBytes = defaultMaxEventBytes
+	}
+	if options.limiter == nil {
+		options.limiter = newRunLimiter(options.MaxActiveRuns)
+	}
+
 	if options.CompletedRunTTL == 0 {
 		options.CompletedRunTTL = defaultCompletedRunTTL
 	}
@@ -310,23 +401,46 @@ func NewManagerWithOptions(options ManagerOptions) *Manager {
 		runs:          make(map[string]*Run),
 		active:        make(map[string]string),
 		options:       options,
+		closeDone:     make(chan struct{}),
 	}
 }
 
 func (m *Manager) Add(service *Service) (string, error) {
-	if service == nil {
-		return "", fmt.Errorf("conversation service is required")
+	canonical, err := m.getOrAdd(service)
+	if err != nil {
+		return "", err
 	}
-	snapshot := service.Snapshot()
-	if snapshot.SessionID == "" {
-		return "", fmt.Errorf("conversation must have a persisted session")
+	return canonical.Snapshot().SessionID, nil
+}
+
+func (m *Manager) getOrAdd(service *Service) (*Service, error) {
+	if service == nil {
+		return nil, fmt.Errorf("conversation service is required")
+	}
+	id := service.Snapshot().SessionID
+	if id == "" {
+		return nil, fmt.Errorf("conversation must have a persisted session")
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.sessions[snapshot.SessionID] = service
-	m.touchSessionLocked(snapshot.SessionID)
-	m.pruneSessionsLocked(snapshot.SessionID)
-	return snapshot.SessionID, nil
+	if m.closed {
+		m.mu.Unlock()
+		_ = service.Close()
+		return nil, errorf(ErrorRuntimeClosed, false, "runtime is closed")
+	}
+	if existing := m.sessions[id]; existing != nil {
+		m.touchSessionLocked(id)
+		m.mu.Unlock()
+		if existing != service {
+			_ = service.Close()
+		}
+		return existing, nil
+	}
+	m.sessions[id] = service
+	m.touchSessionLocked(id)
+	evicted := m.pruneSessionsLocked(id)
+	m.mu.Unlock()
+	closeServices(evicted)
+	return service, nil
 }
 
 func (m *Manager) Get(sessionID string) (*Service, bool) {
@@ -375,6 +489,10 @@ func (m *Manager) StartTurnWithApprover(parent context.Context, sessionID, promp
 
 func (m *Manager) startTurn(parent context.Context, sessionID, prompt string, approverFor func(*Run) agent.Approver) (*Run, error) {
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil, errorf(ErrorRuntimeClosed, false, "runtime is closed")
+	}
 	m.pruneRunsLocked(m.options.Clock())
 	service, ok := m.sessions[sessionID]
 	if !ok {
@@ -385,8 +503,18 @@ func (m *Manager) startTurn(parent context.Context, sessionID, prompt string, ap
 		m.mu.Unlock()
 		return nil, errorf(ErrorRunConflict, true, "session %q already has active run %q", sessionID, runID)
 	}
+	if !m.options.limiter.acquire() {
+		m.mu.Unlock()
+		return nil, errorf(ErrorRunCapacity, true, "active run capacity reached; retry later")
+	}
 	ctx, cancel := context.WithCancel(parent)
+	if m.options.RunTimeout > 0 {
+		cancel()
+		ctx, cancel = context.WithTimeout(parent, m.options.RunTimeout)
+	}
+	m.workers.Add(1)
 	run := newRun(sessionID, cancel, m.options.MaxEventsPerRun, m.options.Clock())
+	run.maxEventBytes = m.options.MaxEventBytes
 	m.runs[run.id] = run
 	m.active[sessionID] = run.id
 	m.touchSessionLocked(sessionID)
@@ -394,6 +522,9 @@ func (m *Manager) startTurn(parent context.Context, sessionID, prompt string, ap
 
 	run.publish(Event{Type: EventRunStarted})
 	go func() {
+		defer m.workers.Done()
+		releaseCapacity := sync.OnceFunc(m.options.limiter.release)
+		defer releaseCapacity()
 		approver := approverFor(run)
 		// A panic in the agent run must not kill the host process (the
 		// daemon serves many turns): recover it and let the normal
@@ -417,6 +548,17 @@ func (m *Manager) startTurn(parent context.Context, sessionID, prompt string, ap
 		}()
 		cancel()
 		completed := m.options.Clock()
+		releaseCapacity()
+		m.mu.Lock()
+		if m.active[sessionID] == run.id {
+			delete(m.active, sessionID)
+		}
+		var evicted []*Service
+		if errors.Is(err, session.ErrConflict) && m.sessions[sessionID] == service {
+			delete(m.sessions, sessionID)
+			delete(m.sessionAccess, sessionID)
+			evicted = append(evicted, service)
+		}
 		if err == nil {
 			run.finish(Event{Type: EventRunCompleted, Result: &result}, completed)
 		} else if errors.Is(err, context.Canceled) {
@@ -425,20 +567,10 @@ func (m *Manager) startTurn(parent context.Context, sessionID, prompt string, ap
 			code, retryable := runtimeErrorDetails(err)
 			run.finish(Event{Type: EventRunFailed, Error: err.Error(), ErrorCode: code, Retryable: retryable, Result: &result}, completed)
 		}
-		m.mu.Lock()
-		if m.active[sessionID] == run.id {
-			delete(m.active, sessionID)
-		}
-		if errors.Is(err, session.ErrConflict) {
-			// The on-disk session was replaced elsewhere; drop the in-memory
-			// Service and release its Chromium session if one was started.
-			_ = service.Close()
-			delete(m.sessions, sessionID)
-			delete(m.sessionAccess, sessionID)
-		}
 		m.pruneRunsLocked(completed)
-		m.pruneSessionsLocked("")
+		evicted = append(evicted, m.pruneSessionsLocked("")...)
 		m.mu.Unlock()
+		closeServices(evicted)
 	}()
 	return run, nil
 }
@@ -503,20 +635,67 @@ func (m *Manager) Steer(sessionID, text string, followUp bool) error {
 
 func (m *Manager) Remove(sessionID string) bool {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.active[sessionID] != "" {
+		m.mu.Unlock()
 		return false
 	}
 	service, ok := m.sessions[sessionID]
-	if !ok {
-		return false
-	}
 	delete(m.sessions, sessionID)
 	delete(m.sessionAccess, sessionID)
-	// Best-effort: release the removed Service's Chromium session if the
-	// browser tools started one.
-	_ = service.Close()
-	return true
+	m.mu.Unlock()
+	if service != nil {
+		_ = service.Close()
+	}
+	return ok
+}
+
+// Close stops admission, cancels all turns, then releases resources after
+// workers exit. A caller deadline limits waiting without abandoning cleanup.
+func (m *Manager) Close(ctx context.Context) error {
+	m.mu.Lock()
+	if !m.closed {
+		m.closed = true
+		runs := make([]*Run, 0, len(m.active))
+		for _, id := range m.active {
+			if run := m.runs[id]; run != nil {
+				runs = append(runs, run)
+			}
+		}
+		go func() {
+			for _, run := range runs {
+				run.Cancel()
+			}
+			m.workers.Wait()
+			m.mu.Lock()
+			services := make([]*Service, 0, len(m.sessions))
+			for _, service := range m.sessions {
+				services = append(services, service)
+			}
+			clear(m.sessions)
+			clear(m.sessionAccess)
+			m.mu.Unlock()
+			var errs []error
+			for _, service := range services {
+				errs = append(errs, service.Close())
+			}
+			m.closeErr = errors.Join(errs...)
+			close(m.closeDone)
+		}()
+	}
+	done := m.closeDone
+	m.mu.Unlock()
+	select {
+	case <-done:
+		return m.closeErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func closeServices(services []*Service) {
+	for _, service := range services {
+		_ = service.Close()
+	}
 }
 
 func (m *Manager) touchSessionLocked(sessionID string) {
@@ -524,7 +703,8 @@ func (m *Manager) touchSessionLocked(sessionID string) {
 	m.sessionAccess[sessionID] = m.accessSeq
 }
 
-func (m *Manager) pruneSessionsLocked(protected string) {
+func (m *Manager) pruneSessionsLocked(protected string) []*Service {
+	var evicted []*Service
 	limit := m.options.MaxOpenSessions
 	for limit >= 0 && len(m.sessions) > limit {
 		var candidate string
@@ -540,15 +720,14 @@ func (m *Manager) pruneSessionsLocked(protected string) {
 			}
 		}
 		if candidate == "" {
-			return
+			return evicted
 		}
-		evicted := m.sessions[candidate]
+		service := m.sessions[candidate]
 		delete(m.sessions, candidate)
 		delete(m.sessionAccess, candidate)
-		// Best-effort: release the evicted Service's Chromium session if the
-		// browser tools started one. Eviction must never fail because of it.
-		_ = evicted.Close()
+		evicted = append(evicted, service)
 	}
+	return evicted
 }
 
 func (m *Manager) pruneRunsLocked(now time.Time) {

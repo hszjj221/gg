@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 func readTextRange(ctx context.Context, path string, offset, limit int) (string, error) {
@@ -109,4 +110,52 @@ func isBinaryContent(data []byte) bool {
 
 func truncationMarker(maxBytes int) string {
 	return fmt.Sprintf("\n... truncated after %d bytes ...", maxBytes)
+}
+
+// Path locks are shared by all tool instances. Reference counting prevents
+// an unbounded map when many different files are edited over the daemon life.
+var fileLocks = struct {
+	sync.Mutex
+	entries map[string]*fileLock
+}{entries: make(map[string]*fileLock)}
+
+type fileLock struct {
+	gate chan struct{}
+	refs int
+}
+
+func lockFile(ctx context.Context, path string) (func(), error) {
+	parent, err := filepath.EvalSymlinks(filepath.Dir(path))
+	if err != nil {
+		return nil, err
+	}
+	path = filepath.Join(parent, filepath.Base(path))
+	fileLocks.Lock()
+	lock := fileLocks.entries[path]
+	if lock == nil {
+		lock = &fileLock{gate: make(chan struct{}, 1)}
+		fileLocks.entries[path] = lock
+	}
+	lock.refs++
+	fileLocks.Unlock()
+	releaseRef := func() {
+		fileLocks.Lock()
+		lock.refs--
+		if lock.refs == 0 {
+			delete(fileLocks.entries, path)
+		}
+		fileLocks.Unlock()
+	}
+	select {
+	case lock.gate <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-lock.gate
+			releaseRef()
+			return nil, err
+		}
+		return func() { <-lock.gate; releaseRef() }, nil
+	case <-ctx.Done():
+		releaseRef()
+		return nil, ctx.Err()
+	}
 }

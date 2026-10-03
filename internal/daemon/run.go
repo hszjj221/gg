@@ -80,6 +80,8 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		noScheduler    bool
 		showVersion    bool
 		exitOnStdinEOF bool
+		runTimeout     time.Duration
+		maxActiveRuns  int
 	)
 	fs.StringVar(&httpAddress, "http", "", "serve HTTP on an address such as 127.0.0.1:8765; otherwise use stdio")
 	fs.StringVar(&token, "token", "", "bearer token required by HTTP mode")
@@ -94,6 +96,8 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	fs.BoolVar(&noMemory, "no-memory", false, "disable memory")
 	fs.BoolVar(&noContextFiles, "no-context-files", false, "disable AGENTS.md discovery")
 	fs.BoolVar(&noScheduler, "no-scheduler", false, "disable the background job scheduler")
+	fs.DurationVar(&runTimeout, "run-timeout", 30*time.Minute, "maximum duration of an agent turn (negative disables)")
+	fs.IntVar(&maxActiveRuns, "max-active-runs", 16, "maximum concurrent agent turns across workspaces (negative disables)")
 	fs.BoolVar(&showVersion, "version", false, "show version")
 	if err := fs.Parse(argv); err != nil {
 		return 2
@@ -160,12 +164,37 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		MemoryStore:       personal.Store,
 		ArtifactStore:     openArtifactStore(logger, cfg),
 		LibraryStore:      openLibraryStore(logger, cfg),
-		Manager:           app.ManagerOptions{Log: logger},
+		Manager:           app.ManagerOptions{Log: logger, RunTimeout: runTimeout, MaxActiveRuns: maxActiveRuns},
 		Log:               logger,
 	})
 	if err != nil {
 		logger.Error("open runtime", "error", err)
 		return 1
+	}
+	monitor := NewMonitor()
+	cleanupPid := func() {}
+	defer func() {
+		cancel()
+		shutdownCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stop()
+		if err := monitor.Wait(shutdownCtx); err != nil {
+			logger.Error("channels shutdown", "error", err)
+		}
+		if err := rt.Close(shutdownCtx); err != nil {
+			logger.Error("runtime shutdown", "error", err)
+		}
+		cleanupPid()
+	}()
+	// Validate HTTP configuration before any background work is launched.
+	if httpAddress != "" {
+		if token == "" {
+			fmt.Fprintln(stderr, "--token is required in HTTP mode")
+			return 2
+		}
+		if !allowRemote && !isLoopbackAddress(httpAddress) {
+			fmt.Fprintln(stderr, "HTTP address must be loopback unless --allow-remote is set")
+			return 2
+		}
 	}
 	rpc := jsonrpc.NewHandlerWithContext(ctx, rt)
 	// The pidfile lock is the single-instance guard, so its outcome is
@@ -179,10 +208,10 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	// (which would make the desktop app unusable whenever a service
 	// daemon is installed) or doubling every channel.
 	channelsDisabled := false
-	cleanupPid, err := WritePidFile(cfg.HomeDir)
+	pidCleanup, err := WritePidFile(cfg.HomeDir)
 	switch {
 	case err == nil:
-		defer cleanupPid()
+		cleanupPid = pidCleanup
 	case errors.Is(err, ErrAlreadyRunning) && exitOnStdinEOF:
 		logger.Warn("another ggd instance is running; starting without channels")
 		channelsDisabled = true
@@ -193,18 +222,18 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		fmt.Fprintln(stderr, "cannot acquire instance lock:", err)
 		return 1
 	}
-	monitor := NewMonitor()
 	if !channelsDisabled {
-		monitor, err = startChannels(ctx, channelDeps{
+		startedMonitor, startErr := startChannels(ctx, channelDeps{
 			cfg:         cfg,
 			rt:          rt,
 			logger:      logger,
 			noScheduler: noScheduler,
 		})
-		if err != nil {
-			logger.Error("start channels", "error", err)
+		if startErr != nil {
+			logger.Error("start channels", "error", startErr)
 			return 1
 		}
+		monitor = startedMonitor
 	}
 	if httpAddress == "" {
 		srv := stdio.NewServer(rpc, stdin, stdout)
@@ -228,11 +257,14 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	defer listener.Close()
 	server := &http.Server{
+		BaseContext:       func(net.Listener) context.Context { return ctx },
 		Handler:           httpHealthHandler(rpc, rt, token, monitor),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	defer server.Close()
 	if exitOnStdinEOF {
 		go watchStdinEOF(stdin, logger, cancel)
 	}

@@ -170,3 +170,6 @@ func isSkippedGrepFile(err error) bool {
 	var skipped skippedGrepFileError
 	return errors.As(err, &skipped)
 }
+
+// ParallelSafe allows independent read-only calls to overlap.
+func (t GrepTool) ParallelSafe() bool { return true }

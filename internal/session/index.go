@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -63,7 +64,8 @@ func ListForCWD(sessionDir, cwd string) ([]Info, error) {
 		path := filepath.Join(dir, entry.Name())
 		loaded, err := Load(path)
 		if err != nil {
-			return nil, fmt.Errorf("load session %s: %w", path, err)
+			slog.Warn("skip unreadable session", "path", path, "error", err)
+			continue
 		}
 		infos = append(infos, infoFromLoaded(path, loaded))
 	}
@@ -107,16 +109,22 @@ func FindForCWD(sessionDir, cwd, target string) (string, error) {
 		return path, nil
 	}
 
-	infos, err := ListForCWD(sessionDir, cwd)
-	if err != nil {
+	dir := CWDDir(sessionDir, cwd)
+	entries, err := os.ReadDir(dir)
+	if err != nil && !os.IsNotExist(err) {
 		return "", err
 	}
 	var matches []string
-	for _, info := range infos {
-		base := filepath.Base(info.Path)
-		stem := strings.TrimSuffix(base, filepath.Ext(base))
-		if target == info.ID || target == base || target == stem {
-			matches = append(matches, info.Path)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		base := entry.Name()
+		stem := strings.TrimSuffix(base, ".jsonl")
+		id, _ := peekSessionID(path)
+		if target == id || target == base || target == stem {
+			matches = append(matches, path)
 		}
 	}
 	switch len(matches) {

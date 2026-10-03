@@ -89,3 +89,6 @@ func (t ReadTool) resolve(path string) (string, error) {
 	}
 	return "", cwdErr
 }
+
+// ParallelSafe allows independent read-only calls to overlap.
+func (t ReadTool) ParallelSafe() bool { return true }

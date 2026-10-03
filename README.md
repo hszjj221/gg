@@ -90,6 +90,8 @@ npm install
 npm run dev:web
 ```
 
+`ggd` defaults to at most 16 concurrent turns across all workspaces and a 30-minute deadline per turn (including approvals). Use `--max-active-runs N` and `--run-timeout 45m` to tune these budgets; negative values disable the corresponding limit. The default provider HTTP client has a 5-minute request timeout. Capacity errors are retryable. Shutdown cancels active work, waits for background workers, and closes Chromium and MCP subprocesses before releasing the instance lock.
+
 Open `http://127.0.0.1:5173`, leave the endpoint blank, and enter the same token. Vite proxies `/rpc` and `/events` to the local daemon. In production, serve `ui/dist` and proxy those paths to `ggd` from the same origin.
 
 Run Electron from source:

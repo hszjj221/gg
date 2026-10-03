@@ -233,8 +233,8 @@ func (s *Service) Queue() *agent.MessageQueue {
 	return s.queue
 }
 
-// Close releases resources held by the Service, currently the shared
-// Chromium session behind the browser tools. It is idempotent and safe to
+// Close releases resources held by the Service, including its shared
+// Chromium session and MCP connections/subprocesses. It is idempotent and safe to
 // call on a Service whose browser tools never started Chromium.
 func (s *Service) Close() error {
 	// Both closings are best-effort and idempotent; report the first error.

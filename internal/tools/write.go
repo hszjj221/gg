@@ -103,6 +103,11 @@ func (t WriteTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return errorResult(err)
 	}
+	unlock, err := lockFile(ctx, path)
+	if err != nil {
+		return errorResult(err)
+	}
+	defer unlock()
 	if err := writeFileAtomic(ctx, path, []byte(input.Content)); err != nil {
 		return errorResult(err)
 	}

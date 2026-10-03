@@ -11,6 +11,8 @@ const (
 	ErrorSessionNotFound     ErrorCode = "session_not_found"
 	ErrorRunNotFound         ErrorCode = "run_not_found"
 	ErrorRunConflict         ErrorCode = "run_conflict"
+	ErrorRuntimeClosed       ErrorCode = "runtime_closed"
+	ErrorRunCapacity         ErrorCode = "run_capacity"
 	ErrorApprovalExpired     ErrorCode = "approval_expired"
 	ErrorEventHistoryExpired ErrorCode = "event_history_expired"
 	ErrorSessionConflict     ErrorCode = "session_conflict"
