@@ -6,6 +6,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/hszjj221/gg/internal/app"
 	"github.com/hszjj221/gg/internal/artifact"
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/library"
@@ -110,51 +111,18 @@ func runArtifactPublish(cfg config.Config, store *artifact.Store, args []string,
 		fmt.Fprintln(stderr, "usage: gg artifact publish <id>")
 		return 2
 	}
-	a, err := store.Get(fs.Arg(0))
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	// Write the library copy first; only mark published when that succeeds.
 	lib, err := library.Open(cfg.Library.Dir)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	content, version, err := readLatestForPublish(store, a)
+	result, err := app.PublishArtifact(store, lib, fs.Arg(0))
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	name := library.ArtifactFileName(a.Title, a.Type)
-	entry, err := lib.AddBytes(name, []byte(content), "artifact:"+a.ID)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	if _, publishedVersion, err := store.Publish(a.ID, version); err != nil {
-		// The artifact changed between our read and the publish mark: drop
-		// the orphan library copy instead of recording a published version
-		// whose bytes were never saved.
-		_ = lib.Remove(entry.ID)
-		fmt.Fprintln(stderr, err)
-		return 1
-	} else {
-		version = publishedVersion
-	}
-	fmt.Fprintf(stdout, "published %s v%d -> library %s\n", a.ID, version, entry.Name)
+	fmt.Fprintf(stdout, "published %s v%d -> library %s\n", result.ID, result.PublishedVersion, result.LibraryName)
 	return 0
-}
-
-// readLatestForPublish reads the latest version without marking published;
-// Publish does both, but the library copy must land first so a library
-// failure leaves the published flag untouched.
-func readLatestForPublish(store *artifact.Store, a *artifact.Artifact) (string, int, error) {
-	content, err := store.ReadVersion(a.ID, a.Version)
-	if err != nil {
-		return "", 0, err
-	}
-	return content, a.Version, nil
 }
 
 func runArtifactRemove(store *artifact.Store, args []string, stdout, stderr io.Writer) int {

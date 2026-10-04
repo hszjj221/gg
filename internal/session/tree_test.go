@@ -143,10 +143,10 @@ func TestBranchCheckoutPersistsWithoutNewMessage(t *testing.T) {
 func TestOpeningV1MigratesSidebandEntriesIntoLinearTree(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "old.jsonl")
 	header := Header{Type: "session", Version: 1, ID: "session-1", CWD: "/project"}
-	message := MessageEntry{Type: "message", ID: "message-1", Message: agent.Message{Role: agent.RoleUser, Content: "hello"}}
+	message := MessageEntry{EntryMetadata: EntryMetadata{Type: "message", ID: "message-1"}, Message: agent.Message{Role: agent.RoleUser, Content: "hello"}}
 	parent := message.ID
-	usage := UsageEntry{Type: "usage", ID: "usage-1", ParentID: &parent, Usage: agent.Usage{TotalTokens: 1}}
-	assistant := MessageEntry{Type: "message", ID: "message-2", ParentID: &parent, Message: agent.Message{Role: agent.RoleAssistant, Content: "hi"}}
+	usage := UsageEntry{EntryMetadata: EntryMetadata{Type: "usage", ID: "usage-1", ParentID: &parent}, Usage: agent.Usage{TotalTokens: 1}}
+	assistant := MessageEntry{EntryMetadata: EntryMetadata{Type: "message", ID: "message-2", ParentID: &parent}, Message: agent.Message{Role: agent.RoleAssistant, Content: "hi"}}
 	data := mustJSONLine(t, header) + mustJSONLine(t, message) + mustJSONLine(t, usage) + mustJSONLine(t, assistant)
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)

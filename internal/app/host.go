@@ -573,25 +573,18 @@ func (w *Runtime) addLoaded(store *session.Store, loaded session.Loaded) (*works
 	// tools run sandboxed to the workspace the session belongs to.
 	cfg := w.cfg
 	cfg.CWD = ws.Root
-	if loaded.LastModel != nil {
-		cfg, err = cfg.WithSelection(loaded.LastModel.Selection)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	service := NewService(Options{
+	service, err := NewSessionService(Options{
 		Config:          cfg,
 		ProviderFactory: w.providerFactory,
-		Store:           store,
-		History:         loaded.Messages,
-		Summary:         loaded.LastSummary,
 		Skills:          st.skills,
-		ModelRecorded:   loaded.LastModel != nil && loaded.LastModel.Selection == cfg.Selection,
 		Profile:         w.profile,
 		MemoryStore:     st.memStore,
 		Log:             w.logger,
 		Degraded:        st.degraded,
-	})
+	}, store, loaded, "")
+	if err != nil {
+		return nil, nil, err
+	}
 	service, err = st.manager.getOrAdd(service)
 	if err != nil {
 		return nil, nil, err

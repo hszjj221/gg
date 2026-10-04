@@ -168,26 +168,22 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		}
 		loaded.LastInfo = &session.SessionInfoEntry{Name: parsed.Name}
 	}
-	if parsed.Model == "" && loaded.LastModel != nil {
-		cfg, err = cfg.WithSelection(loaded.LastModel.Selection)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-	}
-
-	modelRecorded := loaded.LastModel != nil && loaded.LastModel.Selection == cfg.Selection
-	executor := app.NewService(app.Options{
+	executor, err := app.NewSessionService(app.Options{
 		Config:          cfg,
 		ProviderFactory: providerFactory,
-		Store:           sessionStore,
-		History:         loaded.Messages,
-		Summary:         loaded.LastSummary,
 		Skills:          skillSet,
-		ModelRecorded:   modelRecorded,
 		Profile:         personal.Profile,
 		MemoryStore:     workspaceMemoryStore(cfg, personal.Store),
-	})
+	}, sessionStore, loaded, parsed.Model)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer func() {
+		if err := executor.Close(); err != nil {
+			fmt.Fprintln(stderr, "close conversation:", err)
+		}
+	}()
 
 	if parsed.Prompt != "" {
 		return runPrompt(ctx, executor, parsed.Prompt, stdout, stderr, false, parsed.Usage, promptApprover(parsed, stdin, stderr), isTerm)

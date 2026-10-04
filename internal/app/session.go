@@ -20,19 +20,19 @@ func (s *Service) HandleSessionAction(action SessionAction, entryID string) (Ses
 	case SessionActionTree:
 		return s.checkoutLocked(entryID)
 	case SessionActionFork:
-		child, update, err := s.forkLocked(entryID)
+		store, draft, notice, err := s.forkStoreLocked(entryID)
 		if err != nil {
 			return SessionUpdate{}, err
 		}
-		s.adoptLocked(child)
-		return update, nil
+		s.applySessionState(store, store.State())
+		return s.sessionUpdateLocked(draft, notice), nil
 	case SessionActionClone:
-		child, update, err := s.cloneLocked()
+		store, notice, err := s.cloneStoreLocked()
 		if err != nil {
 			return SessionUpdate{}, err
 		}
-		s.adoptLocked(child)
-		return update, nil
+		s.applySessionState(store, store.State())
+		return s.sessionUpdateLocked("", notice), nil
 	default:
 		return SessionUpdate{}, fmt.Errorf("unknown session action %q", action)
 	}
@@ -83,23 +83,34 @@ func (s *Service) Fork(entryID string) (*Service, SessionUpdate, error) {
 }
 
 func (s *Service) forkLocked(entryID string) (*Service, SessionUpdate, error) {
-	if s.store == nil {
-		return nil, SessionUpdate{}, fmt.Errorf("session persistence is disabled")
-	}
-	entry, ok := findTreeEntry(s.store.TreeEntries(), entryID)
-	if !ok || entry.Message.Role != agent.RoleUser {
-		return nil, SessionUpdate{}, fmt.Errorf("select a user message to fork")
-	}
-	parent, found := s.store.ParentID(entry.ID)
-	if !found {
-		return nil, SessionUpdate{}, fmt.Errorf("conversation node %q not found", entryID)
-	}
-	store, err := s.store.Fork(parent)
+	store, draft, notice, err := s.forkStoreLocked(entryID)
 	if err != nil {
 		return nil, SessionUpdate{}, err
 	}
-	child := s.childServiceLocked(store)
-	return child, child.sessionUpdateUnlocked(agent.MessageText(entry.Message), "forked to "+filepath.Base(store.Path())), nil
+	child, err := s.childServiceLocked(store)
+	if err != nil {
+		return nil, SessionUpdate{}, err
+	}
+	return child, child.sessionUpdateUnlocked(draft, notice), nil
+}
+
+func (s *Service) forkStoreLocked(entryID string) (*session.Store, string, string, error) {
+	if s.store == nil {
+		return nil, "", "", fmt.Errorf("session persistence is disabled")
+	}
+	entry, ok := findTreeEntry(s.store.TreeEntries(), entryID)
+	if !ok || entry.Message.Role != agent.RoleUser {
+		return nil, "", "", fmt.Errorf("select a user message to fork")
+	}
+	parent, found := s.store.ParentID(entry.ID)
+	if !found {
+		return nil, "", "", fmt.Errorf("conversation node %q not found", entryID)
+	}
+	store, err := s.store.Fork(parent)
+	if err != nil {
+		return nil, "", "", err
+	}
+	return store, agent.MessageText(entry.Message), "forked to " + filepath.Base(store.Path()), nil
 }
 
 func (s *Service) Clone() (*Service, SessionUpdate, error) {
@@ -109,37 +120,34 @@ func (s *Service) Clone() (*Service, SessionUpdate, error) {
 }
 
 func (s *Service) cloneLocked() (*Service, SessionUpdate, error) {
-	if s.store == nil {
-		return nil, SessionUpdate{}, fmt.Errorf("session persistence is disabled")
-	}
-	store, err := s.store.Fork(s.store.LeafID())
+	store, notice, err := s.cloneStoreLocked()
 	if err != nil {
 		return nil, SessionUpdate{}, err
 	}
-	child := s.childServiceLocked(store)
-	return child, child.sessionUpdateUnlocked("", "cloned to "+filepath.Base(store.Path())), nil
+	child, err := s.childServiceLocked(store)
+	if err != nil {
+		return nil, SessionUpdate{}, err
+	}
+	return child, child.sessionUpdateUnlocked("", notice), nil
 }
 
-func (s *Service) childServiceLocked(store *session.Store) *Service {
-	loaded := store.State()
-	return NewService(Options{
-		Config:          s.cfg,
-		ProviderFactory: s.providerFactory,
-		Store:           store,
-		History:         loaded.Messages,
-		Summary:         loaded.LastSummary,
-		Skills:          s.skillSet,
-		ModelRecorded:   loaded.LastModel != nil && loaded.LastModel.Selection == s.cfg.Selection,
-		Profile:         s.profile,
-		MemoryStore:     s.memStore,
-		Log:             s.logger,
-		Degraded:        s.degraded,
-	})
+func (s *Service) cloneStoreLocked() (*session.Store, string, error) {
+	if s.store == nil {
+		return nil, "", fmt.Errorf("session persistence is disabled")
+	}
+	store, err := s.store.Fork(s.store.LeafID())
+	if err != nil {
+		return nil, "", err
+	}
+	return store, "cloned to " + filepath.Base(store.Path()), nil
 }
 
-func (s *Service) adoptLocked(child *Service) {
-	loaded := child.store.State()
-	s.applySessionState(child.store, loaded)
+func (s *Service) childServiceLocked(store *session.Store) (*Service, error) {
+	return NewSessionService(Options{
+		Config: s.cfg, ProviderFactory: s.providerFactory,
+		Skills: s.skillSet, Profile: s.profile, MemoryStore: s.memStore,
+		Log: s.tools.logger, Degraded: s.tools.degraded, ToolProviders: s.tools.providers,
+	}, store, store.State(), s.cfg.Selection)
 }
 
 func (s *Service) sessionUpdateLocked(draft, notice string) SessionUpdate {
@@ -160,13 +168,6 @@ func (s *Service) sessionUpdateUnlocked(draft, notice string) SessionUpdate {
 		Draft:       draft,
 		Notice:      notice,
 	}
-}
-
-func (s *Service) applySessionState(store *session.Store, loaded session.Loaded) {
-	s.store = store
-	s.history = append([]agent.Message(nil), loaded.Messages...)
-	s.summary = cloneSummaryEntry(loaded.LastSummary)
-	s.modelRecorded = loaded.LastModel != nil && loaded.LastModel.Selection == s.cfg.Selection
 }
 
 func treeItems(store *session.Store) []TreeItem {

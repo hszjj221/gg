@@ -3,13 +3,14 @@ package app
 import (
 	"context"
 	"errors"
-	"github.com/hszjj221/gg/internal/agent"
-	"github.com/hszjj221/gg/internal/config"
-	"github.com/hszjj221/gg/internal/session"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/hszjj221/gg/internal/agent"
+	"github.com/hszjj221/gg/internal/config"
+	"github.com/hszjj221/gg/internal/session"
 )
 
 type reviewBlockingRepository struct {
@@ -128,7 +129,7 @@ func TestManagerCloseCancelsRunsAndRejectsAdmission(t *testing.T) {
 	if err = m.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.browserPool.Get(ctx); err == nil {
+	if _, err := service.tools.browserPool.Get(ctx); err == nil {
 		t.Fatal("closed service can restart browser")
 	}
 	if !run.Status().Done {
@@ -175,7 +176,7 @@ func TestManagerRunDeadlineAndSharedAdmission(t *testing.T) {
 }
 func TestRunRingWrapAndByteBudget(t *testing.T) {
 	run := newRun("session", func() {}, 3, time.Now())
-	run.maxEventBytes = 2048
+	run.replay.maxBytes = 2048
 	for i := 0; i < 20; i++ {
 		run.publish(Event{Type: EventAgent, Agent: &agent.Event{Type: agent.EventTextDelta, Text: "small"}})
 	}
@@ -184,7 +185,7 @@ func TestRunRingWrapAndByteBudget(t *testing.T) {
 		t.Fatalf("ring wrap: %+v %v", events, err)
 	}
 	run.publish(Event{Type: EventAgent, Agent: &agent.Event{Text: strings.Repeat("x", 4096)}})
-	if run.eventBytes > run.maxEventBytes || run.eventCount != 0 {
+	if run.replay.bytes > run.replay.maxBytes || run.replay.count != 0 {
 		t.Fatal("oversized event retained")
 	}
 	if _, _, err = run.Wait(context.Background(), 20); err == nil {
