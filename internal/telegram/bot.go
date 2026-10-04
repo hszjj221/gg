@@ -31,7 +31,6 @@ type Bot struct {
 	offsetFile string
 	mu         sync.Mutex
 	offset     int64
-	seen       map[int64]time.Time // update_id -> first seen (replay guard)
 	stderr     io.Writer
 	logger     *slog.Logger
 
@@ -93,7 +92,6 @@ func New(cfg Config) (*Bot, error) {
 		mediaDir:   dir,
 		allow:      allow,
 		offsetFile: filepath.Join(dir, "offset"),
-		seen:       make(map[int64]time.Time),
 		chats:      make(map[int64]*chatState),
 		stderr:     cfg.Stderr,
 		logger:     cfg.Logger,
@@ -310,26 +308,6 @@ func (b *Bot) currentOffset() int64 {
 	return b.offset
 }
 
-// isReplay reports whether this update_id was already dispatched in this
-// process lifetime. Because the offset only advances past fully handled
-// updates, a poll that runs before earlier updates finish re-delivers them;
-// the guard drops those duplicates so each update is dispatched once.
-func (b *Bot) isReplay(updateID int64) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if _, ok := b.seen[updateID]; ok {
-		return true
-	}
-	b.seen[updateID] = time.Now()
-	// Prune entries older than an hour to bound memory.
-	for id, ts := range b.seen {
-		if time.Since(ts) > time.Hour {
-			delete(b.seen, id)
-		}
-	}
-	return false
-}
-
 func (b *Bot) chatState(chatID int64) *chatState {
 	b.chatsMu.Lock()
 	defer b.chatsMu.Unlock()
@@ -519,33 +497,10 @@ func (b *Bot) runAgentNewSession(ctx context.Context, chatID int64, prompt, wsID
 	return b.waitRunResult(ctx, run)
 }
 
-// waitRunResult drains run events until the run completes, fails, or is
-// canceled, and returns the final text output.
+// waitRunResult waits for execution, independently of transport replay retention.
 func (b *Bot) waitRunResult(ctx context.Context, run *app.Run) (string, error) {
-	var seq int64
-	for {
-		events, done, err := b.ws.WaitRun(ctx, run.ID(), seq)
-		if err != nil {
-			return "", err
-		}
-		for _, ev := range events {
-			seq = ev.Sequence
-			switch ev.Type {
-			case app.EventRunCompleted:
-				if ev.Result != nil {
-					return ev.Result.Content, nil
-				}
-				return "", errors.New("empty result")
-			case app.EventRunFailed:
-				return "", errors.New(ev.Error)
-			case app.EventRunCanceled:
-				return "", errors.New("canceled")
-			}
-		}
-		if done {
-			return "", errors.New("run ended without result")
-		}
-	}
+	result, err := run.Await(ctx)
+	return result.Content, err
 }
 
 func waitPollRetry(ctx context.Context, delay time.Duration) bool {

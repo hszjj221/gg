@@ -14,7 +14,7 @@ func TestServiceOwnsBrowserPool(t *testing.T) {
 	service := NewService(Options{
 		Config: config.Config{CWD: t.TempDir(), Selection: "test:model"},
 	})
-	if service.browserPool == nil {
+	if service.tools.browserPool == nil {
 		t.Fatal("NewService must create the Service-scoped browser pool")
 	}
 	// Closing a pool whose Chromium was never started must be a safe no-op.
@@ -36,8 +36,8 @@ func TestDefaultToolsReusesServicePool(t *testing.T) {
 	service := NewService(Options{
 		Config: config.Config{CWD: t.TempDir(), Selection: "test:model"},
 	})
-	first := service.browserPool
-	second := service.browserPool
+	first := service.tools.browserPool
+	second := service.tools.browserPool
 	if first == nil || first != second {
 		t.Fatal("Service must expose a single stable browser pool across calls")
 	}

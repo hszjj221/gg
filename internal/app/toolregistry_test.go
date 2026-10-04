@@ -65,6 +65,31 @@ func TestComputerCapabilityAbsentOffSupportedPlatforms(t *testing.T) {
 	}
 }
 
+func TestBuildToolsSkipsUnavailableProvider(t *testing.T) {
+	called := false
+	svc := NewService(Options{
+		Config: config.Config{CWD: t.TempDir()},
+		ToolProviders: []ToolProvider{
+			{Build: buildCoreTools},
+			{
+				Name:      "unsupported",
+				Available: func() bool { return false },
+				Build: func(context.Context, ToolContext) ([]agent.Tool, error) {
+					called = true
+					return nil, errors.New("backend is unavailable on this platform")
+				},
+			},
+		},
+	})
+	defer svc.Close()
+	if got := svc.buildTools(context.Background(), nil); len(got) == 0 {
+		t.Fatal("available core tools must still be built")
+	}
+	if called || len(svc.DegradedProviders()) != 0 {
+		t.Fatal("unavailable provider was built or reported as an operational failure")
+	}
+}
+
 func testToolContext(t *testing.T, cfg config.Config) ToolContext {
 	t.Helper()
 	return ToolContext{
@@ -183,15 +208,17 @@ func TestBuildToolsDoesNotPanicWithMinimalService(t *testing.T) {
 // TestBuildToolsSkipsFailingProvider verifies the degrade-to-absent
 // contract: one provider's error must not take down the whole toolset.
 func TestBuildToolsSkipsFailingProvider(t *testing.T) {
-	s := NewService(Options{Config: config.Config{HomeDir: t.TempDir(), CWD: t.TempDir()}})
 	broken := ToolProvider{
 		Name: "broken",
 		Build: func(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
 			return nil, errTestProvider
 		},
 	}
-	toolProviders = append(toolProviders, broken)
-	defer func() { toolProviders = toolProviders[:len(toolProviders)-1] }()
+	s := NewService(Options{
+		Config:        config.Config{HomeDir: t.TempDir(), CWD: t.TempDir()},
+		ToolProviders: []ToolProvider{{Build: buildCoreTools}, broken},
+	})
+	defer s.Close()
 	if got := s.buildTools(context.Background(), nil); len(got) == 0 {
 		t.Fatal("failing provider must degrade to absent, not empty the toolset")
 	}
@@ -390,15 +417,6 @@ func TestApprovalInvariantConditionalTools(t *testing.T) {
 func TestBuildToolsRecordsDegradedProviders(t *testing.T) {
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
-	s := NewService(Options{
-		Config: config.Config{
-			HomeDir:    t.TempDir(),
-			CWD:        t.TempDir(),
-			Artifacts:  config.ArtifactConfig{Dir: t.TempDir()},
-			Connectors: config.ConnectorConfig{Dir: t.TempDir()},
-		},
-		Log: logger,
-	})
 	fail := true
 	broken := ToolProvider{
 		Name: "broken",
@@ -409,8 +427,16 @@ func TestBuildToolsRecordsDegradedProviders(t *testing.T) {
 			return nil, nil
 		},
 	}
-	toolProviders = append(toolProviders, broken)
-	defer func() { toolProviders = toolProviders[:len(toolProviders)-1] }()
+	s := NewService(Options{
+		Config: config.Config{
+			HomeDir:    t.TempDir(),
+			CWD:        t.TempDir(),
+			Artifacts:  config.ArtifactConfig{Dir: t.TempDir()},
+			Connectors: config.ConnectorConfig{Dir: t.TempDir()},
+		},
+		Log:           logger,
+		ToolProviders: []ToolProvider{broken},
+	})
 
 	s.buildTools(context.Background(), nil)
 
@@ -437,19 +463,17 @@ func TestBuildToolsRecordsDegradedProviders(t *testing.T) {
 // branch: a failing provider with an empty name is reported as "core" so
 // the degraded list never carries a blank entry.
 func TestBuildToolsDegradedUnnamedProviderReportedAsCore(t *testing.T) {
-	s := NewService(Options{Config: config.Config{
-		HomeDir:    t.TempDir(),
-		CWD:        t.TempDir(),
-		Artifacts:  config.ArtifactConfig{Dir: t.TempDir()},
-		Connectors: config.ConnectorConfig{Dir: t.TempDir()},
-	}})
 	broken := ToolProvider{
 		Build: func(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
 			return nil, errTestProvider
 		},
 	}
-	toolProviders = append(toolProviders, broken)
-	defer func() { toolProviders = toolProviders[:len(toolProviders)-1] }()
+	s := NewService(Options{Config: config.Config{
+		HomeDir:    t.TempDir(),
+		CWD:        t.TempDir(),
+		Artifacts:  config.ArtifactConfig{Dir: t.TempDir()},
+		Connectors: config.ConnectorConfig{Dir: t.TempDir()},
+	}, ToolProviders: []ToolProvider{broken}})
 
 	s.buildTools(context.Background(), nil)
 
@@ -492,8 +516,6 @@ func TestBuildToolsSharedRegistryClearsStaleFailures(t *testing.T) {
 			return nil, nil
 		},
 	}
-	toolProviders = append(toolProviders, flaky)
-	defer func() { toolProviders = toolProviders[:len(toolProviders)-1] }()
 
 	newSvc := func() *Service {
 		return NewService(Options{
@@ -503,7 +525,8 @@ func TestBuildToolsSharedRegistryClearsStaleFailures(t *testing.T) {
 				Artifacts:  config.ArtifactConfig{Dir: t.TempDir()},
 				Connectors: config.ConnectorConfig{Dir: t.TempDir()},
 			},
-			Degraded: registry,
+			Degraded:      registry,
+			ToolProviders: []ToolProvider{flaky},
 		})
 	}
 	s1, s2 := newSvc(), newSvc()

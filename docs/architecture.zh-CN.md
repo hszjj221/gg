@@ -43,6 +43,23 @@ flowchart LR
 
 依赖指向内层：UI 和传输层依赖应用用例；应用层依赖 agent 和持久化抽象；核心绝不 import UI 或网络包。
 
+## 应用组件
+
+`Service` 是供适配器调用的用例入口，内部组件各自承担明确职责：
+
+| 组件 | 职责 |
+| --- | --- |
+| `conversation` | 会话与分支状态、轮次串行化、持久化提交；模型和摘要在写入成功后才更新内存。 |
+| `turnExecutor` | provider/runner 编排和上下文压缩，不处理传输与命令解析。 |
+| `promptBuilder` | 读取个人、项目和 skill 提示词，不创建工具执行资源。 |
+| `conversationTools` | 工具能力组装、browser/MCP/media 资源缓存与关闭；`Options.ToolProviders` 可供调用方和测试注入工具注册表。 |
+| `NewSessionService` | CLI、daemon 和子会话共享的状态恢复与模型选择规则；显式模型参数优先于持久化选择。 |
+| `Run` / `eventReplay` | 执行结果与审批 / 有界事件回放；定时任务和 Telegram 通过 `Run.Await` 等待结果，事件过期不会把成功执行变成失败。 |
+
+`Service` 的所有者负责关闭资源：CLI 延迟关闭，`Manager` 关闭退出缓存的会话，并在停机时取消、等待工作协程。工具定义查询使用临时工具资源所有者，查询后关闭；MCP 的动态定义仍可能需要实际连接。
+
+CLI 与 Runtime 通过 `app.PublishArtifact` 共用版本校验和失败补偿；补偿失败会和原始发布错误一起报告。JSONL 记录共用 `EntryMetadata` 和一个实际载荷，编解码、文件写入和纯会话树投影分别维护，保留现有 v3 的扁平格式。
+
 ## 个人层（画像 + 记忆）
 
 `app.SetupPersonal(cfg)` 在每次 CLI 和 daemon 启动时运行，把个人层接入系统提示词：
@@ -58,7 +75,7 @@ flowchart LR
 
 1. **存储**：`~/.gg/scheduler/jobs.json`（任务定义，rename 原子写）和 `runs.jsonl`（append-only 运行日志，每行一个 JSON）。所有 `jobs.json` 的读-改-写都用 `jobs.lock` 上的 `flock` 串行化（仅 Linux/macOS），CLI 和 daemon 可以并发改任务。纯读走 `View`，绝不重写文件。状态文件 owner-only（`0600`，目录 `0700`），和会话、记忆持久化一致。
 2. **循环**：daemon 在后台跑 `Scheduler.Run(ctx)`（`ggd --no-scheduler` 关掉）。等下一次触发的等待上限 30s，循环睡觉时 CLI 新增/恢复的任务能及时被捡起。每次 tick 先把到期任务的持久化 `NextRun` 往前推，再派发 goroutine，所以长任务不会让循环在同一次触发上打转；上一轮还没跑完又到触发时间的，记一次 "skipped" 并同样推进 `NextRun`。每个任务还有内存级 guard 防止重叠执行。瞬时的存储错误（包括启动时 reconcile 失败）报到 daemon 的 stderr 并重试，不杀循环。
-3. **执行**：每次触发在一个新会话（`scheduler/<name>-<timestamp>`）里跑一轮 agent，经 `app.Workspace.StartTurnWithApprover`，可审计、可恢复。任务的 `Timeout`（默认 10m）约束这一轮。任务记录创建时的工作区目录；daemon 只触发工作区和自己一致的任务（工作区跟踪之前建的任务，值为空，哪里都触发）。
+3. **执行**：每次触发在一个新会话（`scheduler/<name>-<timestamp>`）里跑一轮 agent，经 `app.Runtime.StartTurnWithApprover`，可审计、可恢复。任务的 `Timeout`（默认 10m）约束这一轮。任务记录创建时的工作区目录；daemon 只触发工作区和自己一致的任务（工作区跟踪之前建的任务，值为空，哪里都触发）。
 4. **审批策略**：`scheduler.UnattendedApprover` 默认拒绝所有走 approval 的工具；建任务时加 `--allow-all` 才放行。这里是显式注入——scheduler 绝不依赖 nil approver（runner 会把 nil 当"全放行"）。
 5. **重启语义**：cron 任务从当前时间重新排（错过的触发不补）；从没跑过、已过期的单次任务在 daemon 启动时补跑一次。daemon 写 `~/.gg/ggd.pid`，没 daemon 活着时 `gg job add` 会警告。
 
@@ -76,13 +93,13 @@ flowchart LR
 
 1. **存储**：`~/.gg/artifacts/<id>/artifact.json`（id、title、type、version、published_version、时间戳）加不可变的 `v<n>.md` / `v<n>.html`，全部原子写（临时文件 + rename）。`artifact_edit` 追加一个完整新版本——绝不做 diff 合并——每个版本都可复现。支持 `markdown` 和 `html` 两种类型；单版本内容上限 1 MiB，artifact 撑不爆 agent 上下文。所有读-改-写用 `artifacts.lock` 上的 `flock`（经 `internal/filelock`）串行化，CLI 和 daemon 并发编辑不会分到同一个版本号。`List` 永远返回非 nil 切片，空库时 JSON 调用方看到 `[]` 而不是 `null`。
 2. **Agent 工具**：`artifact_create(title, type, content)` 和 `artifact_edit(artifact_id, content)`，store 打开时经 `app.toolProviders` 的 `artifact` 条目注册。两者都实现 `ApprovalRequest`（title/type/size 加修改前后内容预览），因为它们写工作区之外；无人值守审批器默认拒绝，除非任务开了 `--allow-all`。
-3. **发布**：`gg artifact publish <id>` 和 Web 的 Publish 按钮（JSON-RPC `artifact.publish`）走同一条 `app.Workspace.PublishArtifact`：先把最新版本的字节存进 library（`library.AddBytes` → `~/.gg/library/<slug>.<ext>`，source `artifact:<id>`），再推进 artifact 的 `published_version`。调用方读和标记之间 artifact 出了新版本时，`Store.Publish(id, expectedVersion)` 报 `ErrVersionChanged` 拒绝——半存的 library 拷贝删掉，调用方重试，而不是记一个字节从没存过的 published 版本。
+3. **发布**：`gg artifact publish <id>` 和 Web 的 Publish 按钮（JSON-RPC `artifact.publish`）走同一条 `app.PublishArtifact`：先把最新版本的字节存进 library（`library.AddBytes` → `~/.gg/library/<slug>.<ext>`，source `artifact:<id>`），再推进 artifact 的 `published_version`。调用方读和标记之间 artifact 出了新版本时，`Store.Publish(id, expectedVersion)` 报 `ErrVersionChanged` 拒绝——半存的 library 拷贝删掉，调用方重试，而不是记一个字节从没存过的 published 版本。
 4. **Library**：`gg library add <path> [--name]` 把普通文件（≤ 50 MiB，按实际拷贝字节数算，不看拷贝前 stat）拷进 `~/.gg/library/`，命名防冲突；`index.json` 是唯一真相，原子更新。命名冲突大小写不敏感检测（macOS 默认文件系统大小写不敏感），`index.json` 是保留名会被拒绝，上传永远盖不掉也删不掉索引。所有修改走 `library.lock` 上的 `flock`，并发添加不会抢到同一个名字或丢条目。`library list|remove|path` 按 id 或大小写不敏感的 name 管理条目。
 5. **Web**：`artifact.list` / `artifact.get` / `artifact.publish` 走现有 JSON-RPC 传输；`system.info` 广告 `artifact` 能力，Web 客户端只在连上的 daemon 报告该能力时才显示 Artifacts 页签。React Artifacts 页签用 `marked` 渲染 markdown，HTML 放在 `<iframe sandbox="">` 里（不执行脚本）。阅读器永远显示最新版本（发布后加的草稿也看得见）；`publishedVersion < version` 时出现 Publish 按钮。信任边界：artifact 内容来自本地用户自己的 agent 或文件，和聊天记录同等信任。
 
 ## 运行时模型
 
-- `Workspace` 按稳定 ID 打开会话，绝不把会话文件路径暴露过网络边界。
+- `Runtime` 按稳定 ID 打开会话，绝不把会话文件路径暴露过网络边界。
 - `Manager` 拥有打开的会话服务。不同会话可以并发跑，一个会话同时只允许一轮。不活跃会话按 LRU 驱逐，已完成的 run 按数量和时间过期。
 - 每轮有一个 run ID。事件带单调递增序号，在有界保留窗口内可通过 `run.wait` 或 `/events` 回放。SSE 帧带序号和 idle 心跳，Web 客户端可以指数退避重连、从上一个事件续。掉队太多的客户端收到 `event_history_expired`，重载会话快照。
 - `run.active` 和 `run.get` 暴露可重连的 run 状态，包括保留的序号窗口和待审批。Web 和 Electron 客户端重载后打开上次选中的会话、重新 attach 到它的 active run。

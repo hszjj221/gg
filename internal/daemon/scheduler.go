@@ -39,12 +39,12 @@ func (e *daemonJobExecutor) Execute(ctx context.Context, job scheduler.Job) (str
 	if err != nil {
 		return "", snap.SessionPath, fmt.Errorf("start scheduled turn: %w", err)
 	}
-	summary, err := waitRunSummary(ctx, e.rt, run.ID())
+	result, err := run.Await(ctx)
 	if err != nil {
 		return "", snap.SessionPath, err
 	}
 	e.logger.Info("scheduled job finished", "job", job.Name, "session", name)
-	return summary, snap.SessionPath, nil
+	return strings.TrimSpace(result.Content), snap.SessionPath, nil
 }
 
 // resolveJobWorkspaceRef picks the workspace a scheduled job runs in: the
@@ -62,38 +62,6 @@ func resolveJobWorkspaceRef(job scheduler.Job, reg *workspace.Registry) string {
 		}
 	}
 	return ""
-}
-
-// waitRunSummary drains run events until the run completes, fails, or is
-// canceled, and returns the final text output.
-func waitRunSummary(ctx context.Context, w *app.Runtime, runID string) (string, error) {
-	var after int64
-	for {
-		events, done, err := w.WaitRun(ctx, runID, after)
-		if err != nil {
-			return "", fmt.Errorf("wait scheduled run: %w", err)
-		}
-		for _, ev := range events {
-			after = ev.Sequence
-			switch ev.Type {
-			case app.EventRunCompleted:
-				if ev.Result != nil {
-					return strings.TrimSpace(ev.Result.Content), nil
-				}
-				return "", nil
-			case app.EventRunFailed:
-				if ev.Error != "" {
-					return "", fmt.Errorf("scheduled run failed: %s", ev.Error)
-				}
-				return "", fmt.Errorf("scheduled run failed")
-			case app.EventRunCanceled:
-				return "", fmt.Errorf("scheduled run canceled")
-			}
-		}
-		if done {
-			return "", fmt.Errorf("scheduled run ended without a result")
-		}
-	}
 }
 
 // startScheduler loads persisted jobs and runs the scheduling loop in the

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/hszjj221/gg/internal/agent"
+	"github.com/hszjj221/gg/internal/config"
 )
 
 const codingInstructions = `You are gg, a coding agent working in the user's project.
@@ -19,26 +20,26 @@ Treat tool errors and interrupted executions as incomplete work. Inspect state b
 Ask concise questions when essential information is missing. Do not claim success without evidence.`
 
 // codingInstructionMessage returns the base coding-agent system prompt.
-func (s *Service) codingInstructionMessage() agent.Message {
-	text := codingInstructions + "\nWorking directory: " + s.cfg.CWD
+func (s *promptBuilder) codingInstructionMessage(cfg config.Config) agent.Message {
+	text := codingInstructions + "\nWorking directory: " + cfg.CWD
 	return agent.Message{Role: agent.RoleSystem, Content: text}
 }
 
 // projectInstructionMessages loads AGENTS.md project instructions, walking
 // from the working directory up to the filesystem root plus ~/.gg.
-func (s *Service) projectInstructionMessages() ([]agent.Message, error) {
-	if s.cfg.NoContextFiles {
+func (s *promptBuilder) projectInstructionMessages(cfg config.Config) ([]agent.Message, error) {
+	if cfg.NoContextFiles {
 		return nil, nil
 	}
 	var paths []string
-	for dir := filepath.Clean(s.cfg.CWD); dir != "."; dir = filepath.Dir(dir) {
+	for dir := filepath.Clean(cfg.CWD); dir != "."; dir = filepath.Dir(dir) {
 		paths = append(paths, filepath.Join(dir, "AGENTS.md"))
 		if filepath.Dir(dir) == dir {
 			break
 		}
 	}
-	if s.cfg.Memory.Dir != "" {
-		paths = append(paths, filepath.Join(filepath.Dir(s.cfg.Memory.Dir), "AGENTS.md"))
+	if cfg.Memory.Dir != "" {
+		paths = append(paths, filepath.Join(filepath.Dir(cfg.Memory.Dir), "AGENTS.md"))
 	}
 	var messages []agent.Message
 	seen := map[string]bool{}

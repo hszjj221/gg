@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/hszjj221/gg/internal/artifact"
-	"github.com/hszjj221/gg/internal/library"
 )
 
 // ArtifactView is the Web-facing shape of one artifact: metadata plus the
@@ -74,32 +73,8 @@ func (w *Runtime) PublishArtifact(id string) (PublishResult, error) {
 	if w.libraryStore == nil {
 		return PublishResult{}, fmt.Errorf("library store is not available")
 	}
-	a, err := store.Get(id)
-	if err != nil {
-		return PublishResult{}, w.wrapArtifactError(err, id)
-	}
-	// Save the library copy first; only mark published when that succeeds.
-	content, err := store.ReadVersion(id, a.Version)
-	if err != nil {
-		return PublishResult{}, err
-	}
-	entry, err := w.libraryStore.AddBytes(
-		library.ArtifactFileName(a.Title, a.Type), []byte(content), "artifact:"+a.ID)
-	if err != nil {
-		return PublishResult{}, fmt.Errorf("save to library: %w", err)
-	}
-	if _, version, err := store.Publish(id, a.Version); err != nil {
-		// The artifact changed between our read and the publish mark: drop
-		// the orphan library copy and ask the caller to retry instead of
-		// recording a published version whose bytes were never saved.
-		_ = w.libraryStore.Remove(entry.ID)
-		if errors.Is(err, artifact.ErrVersionChanged) {
-			return PublishResult{}, fmt.Errorf("artifact %q changed during publish, please retry: %w", id, err)
-		}
-		return PublishResult{}, err
-	} else {
-		return PublishResult{ID: id, PublishedVersion: version, LibraryName: entry.Name}, nil
-	}
+	result, err := PublishArtifact(store, w.libraryStore, id)
+	return result, w.wrapArtifactError(err, id)
 }
 
 func (w *Runtime) wrapArtifactError(err error, id string) error {

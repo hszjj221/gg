@@ -1,12 +1,9 @@
 package session
 
 import (
-	"bufio"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,58 +28,6 @@ type Header struct {
 	ParentEntryID   *string `json:"parentEntryId,omitempty"`
 	// ParentSession is retained only for reading session v2 lineage.
 	ParentSession string `json:"parentSession,omitempty"`
-}
-
-type MessageEntry struct {
-	Type      string        `json:"type"`
-	ID        string        `json:"id"`
-	ParentID  *string       `json:"parentId"`
-	Timestamp string        `json:"timestamp"`
-	Message   agent.Message `json:"message"`
-}
-
-type UsageEntry struct {
-	Type      string      `json:"type"`
-	ID        string      `json:"id"`
-	ParentID  *string     `json:"parentId"`
-	Timestamp string      `json:"timestamp"`
-	Usage     agent.Usage `json:"usage"`
-}
-
-type ModelEntry struct {
-	Type      string  `json:"type"`
-	ID        string  `json:"id"`
-	ParentID  *string `json:"parentId"`
-	Timestamp string  `json:"timestamp"`
-	Provider  string  `json:"provider"`
-	Model     string  `json:"model"`
-	Selection string  `json:"selection"`
-}
-
-type SummaryEntry struct {
-	Type                string  `json:"type"`
-	ID                  string  `json:"id"`
-	ParentID            *string `json:"parentId"`
-	Timestamp           string  `json:"timestamp"`
-	Summary             string  `json:"summary"`
-	ThroughMessageCount int     `json:"throughMessageCount"`
-}
-
-type SessionInfoEntry struct {
-	Type      string  `json:"type"`
-	ID        string  `json:"id"`
-	ParentID  *string `json:"parentId"`
-	Timestamp string  `json:"timestamp"`
-	Name      string  `json:"name"`
-}
-
-// HeadEntry persists an explicit checkout without changing conversation
-// content. Its parent is the entry that future records should branch from.
-type HeadEntry struct {
-	Type      string  `json:"type"`
-	ID        string  `json:"id"`
-	ParentID  *string `json:"parentId"`
-	Timestamp string  `json:"timestamp"`
 }
 
 type TreeEntry struct {
@@ -119,110 +64,6 @@ type Store struct {
 	records  []entryRecord
 	lastID   *string
 	diskInfo os.FileInfo
-}
-
-type entryRecord struct {
-	typ     string
-	message *MessageEntry
-	usage   *UsageEntry
-	model   *ModelEntry
-	summary *SummaryEntry
-	info    *SessionInfoEntry
-	head    *HeadEntry
-}
-
-func (r entryRecord) id() string {
-	switch r.typ {
-	case "message":
-		return r.message.ID
-	case "usage":
-		return r.usage.ID
-	case "model":
-		return r.model.ID
-	case "summary":
-		return r.summary.ID
-	case "session_info":
-		return r.info.ID
-	case "head":
-		return r.head.ID
-	default:
-		return ""
-	}
-}
-
-func (r entryRecord) parentID() *string {
-	switch r.typ {
-	case "message":
-		return cloneStringPtr(r.message.ParentID)
-	case "usage":
-		return cloneStringPtr(r.usage.ParentID)
-	case "model":
-		return cloneStringPtr(r.model.ParentID)
-	case "summary":
-		return cloneStringPtr(r.summary.ParentID)
-	case "session_info":
-		return cloneStringPtr(r.info.ParentID)
-	case "head":
-		return cloneStringPtr(r.head.ParentID)
-	default:
-		return nil
-	}
-}
-
-func (r entryRecord) timestamp() string {
-	switch r.typ {
-	case "message":
-		return r.message.Timestamp
-	case "usage":
-		return r.usage.Timestamp
-	case "model":
-		return r.model.Timestamp
-	case "summary":
-		return r.summary.Timestamp
-	case "session_info":
-		return r.info.Timestamp
-	case "head":
-		return r.head.Timestamp
-	default:
-		return ""
-	}
-}
-
-func (r *entryRecord) setParentID(parent *string) {
-	parent = cloneStringPtr(parent)
-	switch r.typ {
-	case "message":
-		r.message.ParentID = parent
-	case "usage":
-		r.usage.ParentID = parent
-	case "model":
-		r.model.ParentID = parent
-	case "summary":
-		r.summary.ParentID = parent
-	case "session_info":
-		r.info.ParentID = parent
-	case "head":
-		r.head.ParentID = parent
-	}
-}
-
-func (r entryRecord) value() any {
-	switch r.typ {
-	case "message":
-		return *r.message
-	case "usage":
-		return *r.usage
-	case "model":
-		return *r.model
-	case "summary":
-		return *r.summary
-	case "session_info":
-		return *r.info
-	case "head":
-		return *r.head
-	default:
-		return nil
-	}
 }
 
 func NewStore(path, cwd string) (*Store, error) {
@@ -358,8 +199,8 @@ func (s *Store) Branch(id *string) error {
 			return fmt.Errorf("session entry %q not found", *id)
 		}
 	}
-	entry := HeadEntry{Type: "head", ID: newID(), ParentID: cloneStringPtr(id), Timestamp: now()}
-	return s.appendRecord(entryRecord{typ: "head", head: &entry})
+	entry := HeadEntry{EntryMetadata: EntryMetadata{Type: "head", ID: newID(), ParentID: cloneStringPtr(id), Timestamp: now()}}
+	return s.appendRecord(entryRecord{entry: &entry})
 }
 
 func (s *Store) State() Loaded {
@@ -371,61 +212,6 @@ func (s *Store) State() Loaded {
 	loaded := Loaded{Header: s.header, records: cloneRecords(s.records)}
 	_ = populateLoaded(&loaded, s.lastID)
 	return loaded
-}
-
-func (s *Store) TreeEntries() []TreeEntry {
-	if s == nil {
-		return nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	active := make(map[string]bool)
-	for _, record := range pathRecords(s.records, s.lastID) {
-		active[record.id()] = true
-	}
-	recordByID := make(map[string]entryRecord, len(s.records))
-	for _, record := range s.records {
-		recordByID[record.id()] = record
-	}
-
-	visible := make(map[string]entryRecord)
-	var order []string
-	for _, record := range s.records {
-		if record.typ != "message" {
-			continue
-		}
-		visible[record.id()] = record
-		order = append(order, record.id())
-	}
-	parents := make(map[string]*string, len(order))
-	children := make(map[string][]string)
-	var roots []string
-	for _, id := range order {
-		parent := nearestVisibleParent(recordByID, visible, visible[id].parentID())
-		parents[id] = parent
-		if parent == nil {
-			roots = append(roots, id)
-		} else {
-			children[*parent] = append(children[*parent], id)
-		}
-	}
-	result := make([]TreeEntry, 0, len(order))
-	var walk func(string, int)
-	walk = func(id string, depth int) {
-		record := visible[id]
-		result = append(result, TreeEntry{ID: id, ParentID: cloneStringPtr(parents[id]), Depth: depth, Message: record.message.Message, Active: active[id]})
-		childDepth := depth
-		if len(children[id]) > 1 {
-			childDepth++
-		}
-		for _, child := range children[id] {
-			walk(child, childDepth)
-		}
-	}
-	for _, root := range roots {
-		walk(root, 0)
-	}
-	return result
 }
 
 // Fork creates a new session containing the path through id. Passing nil forks
@@ -515,32 +301,32 @@ func (s *Store) AppendMessage(message agent.Message) error {
 	if message.Timestamp == 0 {
 		message.Timestamp = time.Now().UnixMilli()
 	}
-	entry := MessageEntry{Type: "message", ID: newID(), Timestamp: now(), Message: message}
-	return s.appendRecord(entryRecord{typ: "message", message: &entry})
+	entry := MessageEntry{EntryMetadata: EntryMetadata{Type: "message", ID: newID(), Timestamp: now()}, Message: message}
+	return s.appendRecord(entryRecord{entry: &entry})
 }
 
 func (s *Store) AppendUsage(usage agent.Usage) error {
 	if s == nil || usage.IsZero() {
 		return nil
 	}
-	entry := UsageEntry{Type: "usage", ID: newID(), Timestamp: now(), Usage: usage}
-	return s.appendRecord(entryRecord{typ: "usage", usage: &entry})
+	entry := UsageEntry{EntryMetadata: EntryMetadata{Type: "usage", ID: newID(), Timestamp: now()}, Usage: usage}
+	return s.appendRecord(entryRecord{entry: &entry})
 }
 
 func (s *Store) AppendModel(provider, model string) error {
 	if s == nil {
 		return nil
 	}
-	entry := ModelEntry{Type: "model", ID: newID(), Timestamp: now(), Provider: provider, Model: model, Selection: provider + ":" + model}
-	return s.appendRecord(entryRecord{typ: "model", model: &entry})
+	entry := ModelEntry{EntryMetadata: EntryMetadata{Type: "model", ID: newID(), Timestamp: now()}, Provider: provider, Model: model, Selection: provider + ":" + model}
+	return s.appendRecord(entryRecord{entry: &entry})
 }
 
 func (s *Store) AppendSummary(summary string, throughMessageCount int) error {
 	if s == nil {
 		return nil
 	}
-	entry := SummaryEntry{Type: "summary", ID: newID(), Timestamp: now(), Summary: summary, ThroughMessageCount: throughMessageCount}
-	return s.appendRecord(entryRecord{typ: "summary", summary: &entry})
+	entry := SummaryEntry{EntryMetadata: EntryMetadata{Type: "summary", ID: newID(), Timestamp: now()}, Summary: summary, ThroughMessageCount: throughMessageCount}
+	return s.appendRecord(entryRecord{entry: &entry})
 }
 
 func (s *Store) AppendName(name string) error {
@@ -548,8 +334,8 @@ func (s *Store) AppendName(name string) error {
 		return fmt.Errorf("session persistence is disabled")
 	}
 	name = strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ").Replace(name))
-	entry := SessionInfoEntry{Type: "session_info", ID: newID(), Timestamp: now(), Name: name}
-	return s.appendRecord(entryRecord{typ: "session_info", info: &entry})
+	entry := SessionInfoEntry{EntryMetadata: EntryMetadata{Type: "session_info", ID: newID(), Timestamp: now()}, Name: name}
+	return s.appendRecord(entryRecord{entry: &entry})
 }
 
 func (s *Store) appendRecord(record entryRecord) error {
@@ -567,10 +353,10 @@ func (s *Store) appendRecord(record entryRecord) error {
 	// rename/checkout cannot advance the head between choosing the parent
 	// and appending: the record always parents onto the head as of this
 	// append instead of failing with ErrConflict on a stale parent.
-	if record.typ != "head" {
+	if record.kind() != "head" {
 		record.setParentID(cloneStringPtr(s.lastID))
 	}
-	if record.typ != "head" && !sameID(record.parentID(), s.lastID) {
+	if record.kind() != "head" && !sameID(record.parentID(), s.lastID) {
 		return fmt.Errorf("%w: in-memory session head advanced before append", ErrConflict)
 	}
 	file, err := os.OpenFile(s.path, os.O_APPEND|os.O_WRONLY, 0o600)
@@ -631,395 +417,6 @@ func sameID(first, second *string) bool {
 		return first == nil && second == nil
 	}
 	return *first == *second
-}
-
-func Load(path string) (Loaded, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return Loaded{}, err
-	}
-	defer file.Close()
-
-	var loaded Loaded
-	reader := bufio.NewReader(file)
-	lineNo := 0
-	for {
-		raw, readErr := reader.ReadString('\n')
-		if readErr != nil && readErr != io.EOF {
-			return Loaded{}, readErr
-		}
-		if raw == "" && readErr == io.EOF {
-			break
-		}
-		line := strings.TrimSpace(raw)
-		if lineNo > 0 && readErr == io.EOF && line != "" && !json.Valid([]byte(line)) {
-			loaded.incompleteTail = true
-			break
-		}
-		loaded.validBytes += int64(len(raw))
-		loaded.needsNewline = !strings.HasSuffix(raw, "\n")
-		if line == "" {
-			if readErr == io.EOF {
-				break
-			}
-			continue
-		}
-		lineNo++
-		if lineNo == 1 {
-			if err := json.Unmarshal([]byte(line), &loaded.Header); err != nil {
-				return Loaded{}, err
-			}
-			continue
-		}
-		record, err := decodeRecord([]byte(line))
-		if err != nil {
-			return Loaded{}, err
-		}
-		loaded.records = append(loaded.records, record)
-		if readErr == io.EOF {
-			break
-		}
-	}
-	if loaded.Header.Type != "session" {
-		return Loaded{}, fmt.Errorf("missing session header")
-	}
-	if loaded.Header.Version > CurrentVersion {
-		return Loaded{}, fmt.Errorf("unsupported session version %d", loaded.Header.Version)
-	}
-	if loaded.Header.Version == 1 {
-		linearizeRecords(loaded.records)
-	}
-	if loaded.Header.Version < CurrentVersion {
-		loaded.Header.Version = CurrentVersion
-		loaded.migrated = true
-	}
-	var leaf *string
-	if len(loaded.records) > 0 {
-		id := loaded.records[len(loaded.records)-1].id()
-		leaf = &id
-	}
-	if err := populateLoaded(&loaded, leaf); err != nil {
-		return Loaded{}, err
-	}
-	return loaded, nil
-}
-
-func decodeRecord(data []byte) (entryRecord, error) {
-	var probe struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(data, &probe); err != nil {
-		return entryRecord{}, err
-	}
-	switch probe.Type {
-	case "message":
-		var entry MessageEntry
-		if err := json.Unmarshal(data, &entry); err != nil {
-			return entryRecord{}, err
-		}
-		return entryRecord{typ: probe.Type, message: &entry}, nil
-	case "usage":
-		var entry UsageEntry
-		if err := json.Unmarshal(data, &entry); err != nil {
-			return entryRecord{}, err
-		}
-		return entryRecord{typ: probe.Type, usage: &entry}, nil
-	case "model":
-		var entry ModelEntry
-		if err := json.Unmarshal(data, &entry); err != nil {
-			return entryRecord{}, err
-		}
-		return entryRecord{typ: probe.Type, model: &entry}, nil
-	case "summary":
-		var entry SummaryEntry
-		if err := json.Unmarshal(data, &entry); err != nil {
-			return entryRecord{}, err
-		}
-		return entryRecord{typ: probe.Type, summary: &entry}, nil
-	case "session_info":
-		var entry SessionInfoEntry
-		if err := json.Unmarshal(data, &entry); err != nil {
-			return entryRecord{}, err
-		}
-		return entryRecord{typ: probe.Type, info: &entry}, nil
-	case "head":
-		var entry HeadEntry
-		if err := json.Unmarshal(data, &entry); err != nil {
-			return entryRecord{}, err
-		}
-		return entryRecord{typ: probe.Type, head: &entry}, nil
-	default:
-		return entryRecord{}, fmt.Errorf("unknown session entry type %q", probe.Type)
-	}
-}
-
-func populateLoaded(loaded *Loaded, leaf *string) error {
-	if err := validateRecords(loaded.records); err != nil {
-		return err
-	}
-	loaded.Entries = nil
-	loaded.Usages = nil
-	loaded.Models = nil
-	loaded.Summaries = nil
-	loaded.Infos = nil
-	loaded.Heads = nil
-	loaded.Messages = nil
-	loaded.LastModel = nil
-	loaded.LastSummary = nil
-	loaded.LastInfo = nil
-	for _, record := range loaded.records {
-		switch record.typ {
-		case "message":
-			loaded.Entries = append(loaded.Entries, *record.message)
-		case "usage":
-			loaded.Usages = append(loaded.Usages, *record.usage)
-		case "model":
-			loaded.Models = append(loaded.Models, *record.model)
-		case "summary":
-			loaded.Summaries = append(loaded.Summaries, *record.summary)
-		case "session_info":
-			loaded.Infos = append(loaded.Infos, *record.info)
-		case "head":
-			loaded.Heads = append(loaded.Heads, *record.head)
-		}
-	}
-	path, err := validatedPathRecords(loaded.records, leaf)
-	if err != nil {
-		return err
-	}
-	for _, record := range path {
-		switch record.typ {
-		case "message":
-			loaded.Messages = append(loaded.Messages, record.message.Message)
-		case "model":
-			entry := *record.model
-			loaded.LastModel = &entry
-		case "summary":
-			entry := *record.summary
-			loaded.LastSummary = &entry
-		case "session_info":
-			entry := *record.info
-			loaded.LastInfo = &entry
-		}
-	}
-	return nil
-}
-
-func validateRecords(records []entryRecord) error {
-	seen := make(map[string]bool, len(records))
-	for _, record := range records {
-		id := record.id()
-		if id == "" {
-			return fmt.Errorf("session entry is missing an id")
-		}
-		if seen[id] {
-			return fmt.Errorf("duplicate session entry id %q", id)
-		}
-		if parent := record.parentID(); parent != nil && !seen[*parent] {
-			return fmt.Errorf("session entry %q has missing or non-append-only parent %q", id, *parent)
-		}
-		seen[id] = true
-	}
-	return nil
-}
-
-func validatedPathRecords(records []entryRecord, leaf *string) ([]entryRecord, error) {
-	if leaf == nil {
-		return nil, nil
-	}
-	byID := make(map[string]entryRecord, len(records))
-	for _, record := range records {
-		id := record.id()
-		if id == "" {
-			return nil, fmt.Errorf("session entry is missing an id")
-		}
-		if _, exists := byID[id]; exists {
-			return nil, fmt.Errorf("duplicate session entry id %q", id)
-		}
-		byID[id] = record
-	}
-	seen := make(map[string]bool)
-	current := cloneStringPtr(leaf)
-	var reversed []entryRecord
-	for current != nil {
-		if seen[*current] {
-			return nil, fmt.Errorf("session tree contains a cycle at %q", *current)
-		}
-		seen[*current] = true
-		record, ok := byID[*current]
-		if !ok {
-			return nil, fmt.Errorf("session entry %q has a missing parent", *current)
-		}
-		reversed = append(reversed, record)
-		current = record.parentID()
-	}
-	for left, right := 0, len(reversed)-1; left < right; left, right = left+1, right-1 {
-		reversed[left], reversed[right] = reversed[right], reversed[left]
-	}
-	return reversed, nil
-}
-
-func pathRecords(records []entryRecord, leaf *string) []entryRecord {
-	path, _ := validatedPathRecords(records, leaf)
-	return cloneRecords(path)
-}
-
-func nearestVisibleParent(all map[string]entryRecord, visible map[string]entryRecord, parent *string) *string {
-	seen := make(map[string]bool)
-	for parent != nil && !seen[*parent] {
-		seen[*parent] = true
-		if _, ok := visible[*parent]; ok {
-			return cloneStringPtr(parent)
-		}
-		record, ok := all[*parent]
-		if !ok {
-			return nil
-		}
-		parent = record.parentID()
-	}
-	return nil
-}
-
-func linearizeRecords(records []entryRecord) {
-	var parent *string
-	for i := range records {
-		records[i].setParentID(parent)
-		id := records[i].id()
-		parent = &id
-	}
-}
-
-func cloneRecords(records []entryRecord) []entryRecord {
-	cloned := make([]entryRecord, len(records))
-	for i, record := range records {
-		cloned[i] = cloneRecord(record)
-	}
-	return cloned
-}
-
-func cloneRecord(record entryRecord) entryRecord {
-	copy := entryRecord{typ: record.typ}
-	switch record.typ {
-	case "message":
-		entry := *record.message
-		entry.ParentID = cloneStringPtr(entry.ParentID)
-		copy.message = &entry
-	case "usage":
-		entry := *record.usage
-		entry.ParentID = cloneStringPtr(entry.ParentID)
-		copy.usage = &entry
-	case "model":
-		entry := *record.model
-		entry.ParentID = cloneStringPtr(entry.ParentID)
-		copy.model = &entry
-	case "summary":
-		entry := *record.summary
-		entry.ParentID = cloneStringPtr(entry.ParentID)
-		copy.summary = &entry
-	case "session_info":
-		entry := *record.info
-		entry.ParentID = cloneStringPtr(entry.ParentID)
-		copy.info = &entry
-	case "head":
-		entry := *record.head
-		entry.ParentID = cloneStringPtr(entry.ParentID)
-		copy.head = &entry
-	}
-	return copy
-}
-
-func cloneStringPtr(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	copy := *value
-	return &copy
-}
-
-func createForkFile(dir string, header Header, records []entryRecord) (string, error) {
-	for attempt := 0; attempt < 10; attempt++ {
-		name := fmt.Sprintf("%s-fork-%s.jsonl", time.Now().UTC().Format("20060102T150405.000000000Z"), newID())
-		path := filepath.Join(dir, name)
-		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if os.IsExist(err) {
-			continue
-		}
-		if err != nil {
-			return "", err
-		}
-		if err := writeSession(file, header, records); err != nil {
-			file.Close()
-			_ = os.Remove(path)
-			return "", err
-		}
-		if err := file.Close(); err != nil {
-			_ = os.Remove(path)
-			return "", err
-		}
-		return path, nil
-	}
-	return "", fmt.Errorf("could not allocate a fork session path")
-}
-
-func rewriteSession(path string, header Header, records []entryRecord) error {
-	file, err := os.CreateTemp(filepath.Dir(path), ".session-migrate-*.jsonl")
-	if err != nil {
-		return err
-	}
-	tempPath := file.Name()
-	keep := false
-	defer func() {
-		file.Close()
-		if !keep {
-			_ = os.Remove(tempPath)
-		}
-	}()
-	if err := file.Chmod(0o600); err != nil {
-		return err
-	}
-	if err := writeSession(file, header, records); err != nil {
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tempPath, path); err != nil {
-		return err
-	}
-	keep = true
-	return nil
-}
-
-func writeSession(file *os.File, header Header, records []entryRecord) error {
-	writer := bufio.NewWriter(file)
-	if err := writeJSON(writer, header); err != nil {
-		return err
-	}
-	for _, record := range records {
-		if err := writeJSON(writer, record.value()); err != nil {
-			return err
-		}
-	}
-	if err := writer.Flush(); err != nil {
-		return err
-	}
-	return file.Sync()
-}
-
-func writeJSON(writer io.Writer, value any) error {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
-	_, err = writer.Write(append(data, '\n'))
-	return err
-}
-
-func writeJSONLine(file *os.File, value any) error {
-	if err := writeJSON(file, value); err != nil {
-		return err
-	}
-	return file.Sync()
 }
 
 func now() string {

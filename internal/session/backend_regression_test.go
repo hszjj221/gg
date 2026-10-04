@@ -83,8 +83,8 @@ func BenchmarkSessionAppend(b *testing.B) {
 			var parent *string
 			for i := 0; i < count; i++ {
 				id := fmt.Sprintf("r%d", i)
-				entry := MessageEntry{Type: "message", ID: id, ParentID: parent, Timestamp: now(), Message: agent.Message{Role: agent.RoleUser, Content: strings.Repeat("x", 256)}}
-				records = append(records, entryRecord{typ: "message", message: &entry})
+				entry := MessageEntry{EntryMetadata: EntryMetadata{Type: "message", ID: id, ParentID: parent, Timestamp: now()}, Message: agent.Message{Role: agent.RoleUser, Content: strings.Repeat("x", 256)}}
+				records = append(records, entryRecord{entry: &entry})
 				parent = &id
 			}
 			f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0600)

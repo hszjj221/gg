@@ -98,19 +98,6 @@ func TestOffsetPersistence(t *testing.T) {
 	}
 }
 
-func TestReplayGuard(t *testing.T) {
-	b := testBot(t, []int64{1})
-	if b.isReplay(7) {
-		t.Fatal("first sighting should not be a replay")
-	}
-	if !b.isReplay(7) {
-		t.Fatal("second sighting should be a replay")
-	}
-	if b.isReplay(8) {
-		t.Fatal("different update_id should not be a replay")
-	}
-}
-
 func TestSplitMessage(t *testing.T) {
 	if got := splitMessage("abc", 4096); len(got) != 1 || got[0] != "abc" {
 		t.Fatalf("short message split wrong: %q", got)

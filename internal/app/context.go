@@ -5,58 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/contextmgr"
-	"github.com/hszjj221/gg/internal/session"
 )
 
-func (s *Service) persistMessage(message agent.Message) error {
-	if message.Timestamp == 0 {
-		message.Timestamp = time.Now().UnixMilli()
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.store != nil {
-		if err := s.store.AppendMessage(message); err != nil {
-			return err
-		}
-	}
-	s.history = append(s.history, message)
-	return nil
-}
-
-// A crash can leave a durable tool call without a result. Do not replay it:
-// its side effects may already have happened before the process exited.
-func (s *Service) recoverPendingTools() error {
-	s.mu.Lock()
-	var pending []agent.ToolCall
-	seen := map[string]bool{}
-	for i := len(s.history) - 1; i >= 0; i-- {
-		message := s.history[i]
-		if message.Role == agent.RoleTool {
-			seen[message.ToolCallID] = true
-			continue
-		}
-		pending = message.ToolCalls
-		break
-	}
-	s.mu.Unlock()
-	for _, call := range pending {
-		if seen[call.ID] {
-			continue
-		}
-		text := "Execution interrupted; result unavailable. This tool may already have run. Inspect the current state before retrying."
-		if err := s.persistMessage(agent.Message{Role: agent.RoleTool, ToolCallID: call.ID, ToolName: call.Name, Content: text, Error: text}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Service) prepareRequest(ctx context.Context, provider agent.Provider, system []agent.Message, req agent.Request) (agent.Request, agent.Usage, error) {
+func (s *turnExecutor) prepareRequest(ctx context.Context, provider agent.Provider, system []agent.Message, req agent.Request) (agent.Request, agent.Usage, error) {
 	build := s.buildContext(system, agent.Message{})
 	toolTokens := contextmgr.EstimateTools(req.Tools)
 	usage := agent.Usage{}
@@ -95,7 +50,7 @@ func (s *Service) prepareRequest(ctx context.Context, provider agent.Provider, s
 // autoCompactionThrough returns the history index to compact through when
 // the prompt exceeds budget with auto-compact enabled; ok=false means no
 // compaction is needed. It holds s.mu only for the state read.
-func (s *Service) autoCompactionThrough(promptTokens, toolTokens int, system []agent.Message) (through int, ok bool) {
+func (s *turnExecutor) autoCompactionThrough(promptTokens, toolTokens int, system []agent.Message) (through int, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	budget := s.cfg.Context.MaxPromptTokens
@@ -111,19 +66,7 @@ func (s *Service) autoCompactionThrough(promptTokens, toolTokens int, system []a
 	return through, through > s.summaryStateLocked().ThroughMessageCount
 }
 
-func (s *Service) contextBudget() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.cfg.Context.MaxPromptTokens
-}
-
-func (s *Service) maxOutputTokens() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.cfg.Context.MaxOutputTokens
-}
-
-func (s *Service) compactThrough(ctx context.Context, provider agent.Provider, through int) (compactResult, error) {
+func (s *turnExecutor) compactThrough(ctx context.Context, provider agent.Provider, through int) (compactResult, error) {
 	s.mu.Lock()
 	start := s.summaryStateLocked().ThroughMessageCount
 	maxOutput := s.cfg.Context.SummaryMaxTokens
@@ -169,7 +112,7 @@ func (s *Service) compactThrough(ctx context.Context, provider agent.Provider, t
 // compactionRequest builds one summarization request covering
 // history[start:end], shrinking end to fit the summary budget without
 // splitting a tool result off its call. Holds s.mu only for the read.
-func (s *Service) compactionRequest(start, through, maxOutput, budget int) (agent.Request, int, error) {
+func (s *turnExecutor) compactionRequest(start, through, maxOutput, budget int) (agent.Request, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	makeRequest := func(end int) agent.Request {
@@ -200,26 +143,6 @@ func (s *Service) compactionRequest(start, through, maxOutput, budget int) (agen
 	return makeRequest(end), end, nil
 }
 
-// recordSummary persists a summary chunk and advances the in-memory marker.
-func (s *Service) recordSummary(summary string, through int) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.store != nil {
-		if err := s.store.AppendSummary(summary, through); err != nil {
-			return err
-		}
-	}
-	s.summary = &session.SummaryEntry{Summary: summary, ThroughMessageCount: through}
-	return nil
-}
-
-func (s *Service) appendUsage(usage agent.Usage) error {
-	s.mu.Lock()
-	store := s.store
-	s.mu.Unlock()
-	return appendUsage(store, usage)
-}
-
 // truncationMarker is recorded as the summary when automatic compaction
 // fails and the history prefix is dropped without being summarized. It is
 // deliberately non-empty: contextmgr.Build only truncates history when the
@@ -227,10 +150,17 @@ func (s *Service) appendUsage(usage agent.Usage) error {
 // discarded rather than silently missing.
 const truncationMarker = "Earlier conversation context was discarded without summarization because automatic compaction failed."
 
-// truncateHistory marks history[:through] as discarded without a summary so
-// a failed auto-compaction degrades to hard truncation instead of failing
-// the turn. The dropped messages remain in the session store; only the
-// in-memory context window is truncated.
-func (s *Service) truncateHistory(through int) error {
-	return s.recordSummary(truncationMarker, through)
+type compactResult struct {
+	message string
+	usage   agent.Usage
+}
+
+func (s *turnExecutor) compactHistory(ctx context.Context, provider agent.Provider) (compactResult, error) {
+	s.mu.Lock()
+	history := s.history
+	state := s.summaryStateLocked()
+	tailTurns := s.cfg.Context.TailTurns
+	s.mu.Unlock()
+	_, through, _ := contextmgr.SummarizePrefix(history, state, tailTurns)
+	return s.compactThrough(ctx, provider, through)
 }

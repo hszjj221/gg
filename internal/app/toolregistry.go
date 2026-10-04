@@ -176,13 +176,13 @@ func ToolCapabilities() []string {
 // registry grows over time, so a fixed budget rots. A nil provider is fine;
 // only definitions are needed.
 func RegistryToolDefinitions(ctx context.Context, cfg config.Config) []agent.ToolDefinition {
-	svc := NewService(Options{Config: cfg})
-	built := svc.buildTools(ctx, nil)
-	defs := make([]agent.ToolDefinition, 0, len(built))
-	for _, tl := range built {
-		defs = append(defs, tl.Definition())
-	}
-	return defs
+	resources := newConversationTools(Options{Config: cfg})
+	defer func() {
+		if err := resources.Close(); err != nil {
+			resources.logger.Warn("close tool discovery resources", "error", err)
+		}
+	}()
+	return resources.Definitions(ctx, cfg)
 }
 
 func buildCoreTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {

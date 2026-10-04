@@ -369,14 +369,22 @@ func runJobRun(ctx context.Context, cfg config.Config, options Options, store *s
 	if providerFactory == nil {
 		providerFactory = provider.New
 	}
-	executor := app.NewService(app.Options{
+	executor, err := app.NewSessionService(app.Options{
 		Config:          cfg,
 		ProviderFactory: providerFactory,
-		Store:           sessionStore,
 		Skills:          skillSet,
 		Profile:         personal.Profile,
 		MemoryStore:     workspaceMemoryStore(cfg, personal.Store),
-	})
+	}, sessionStore, sessionStore.State(), cfg.Selection)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer func() {
+		if err := executor.Close(); err != nil {
+			fmt.Fprintln(stderr, "close conversation:", err)
+		}
+	}()
 	prompt := fmt.Sprintf("[Manual trigger of scheduled job %q. You are running unattended: no human will see approval prompts, so only tools permitted by policy will execute. Complete the task and finish with a concise summary.]\n\n%s",
 		job.Name, job.Prompt)
 	approver := scheduler.UnattendedApprover{AllowAll: job.AutoApprove}
