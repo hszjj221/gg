@@ -151,13 +151,17 @@ func linearizeRecords(records []entryRecord) {
 
 // projectTree projects visible branches without filesystem access or locks.
 func projectTree(records []entryRecord, leaf *string) []TreeEntry {
-	active := make(map[string]bool)
-	for _, record := range pathRecords(records, leaf) {
-		active[record.id()] = true
-	}
 	recordByID := make(map[string]entryRecord, len(records))
 	for _, record := range records {
 		recordByID[record.id()] = record
+	}
+	active := make(map[string]bool)
+	// Records were validated when loaded and parents only point backwards.
+	// Projection reads their metadata; it does not need a cloned ancestry path.
+	for current := leaf; current != nil; {
+		record := recordByID[*current]
+		active[*current] = true
+		current = record.entry.metadata().ParentID
 	}
 
 	visible := make(map[string]entryRecord)
@@ -173,7 +177,7 @@ func projectTree(records []entryRecord, leaf *string) []TreeEntry {
 	children := make(map[string][]string)
 	var roots []string
 	for _, id := range order {
-		parent := nearestVisibleParent(recordByID, visible, visible[id].parentID())
+		parent := nearestVisibleParent(recordByID, visible, visible[id].entry.metadata().ParentID)
 		parents[id] = parent
 		if parent == nil {
 			roots = append(roots, id)
@@ -185,7 +189,7 @@ func projectTree(records []entryRecord, leaf *string) []TreeEntry {
 	var walk func(string, int)
 	walk = func(id string, depth int) {
 		record := visible[id]
-		result = append(result, TreeEntry{ID: id, ParentID: cloneStringPtr(parents[id]), Depth: depth, Message: record.entry.(*MessageEntry).Message, Active: active[id]})
+		result = append(result, TreeEntry{ID: id, ParentID: parents[id], Depth: depth, Message: record.entry.(*MessageEntry).Message, Active: active[id]})
 		childDepth := depth
 		if len(children[id]) > 1 {
 			childDepth++

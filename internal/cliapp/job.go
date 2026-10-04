@@ -375,6 +375,7 @@ func runJobRun(ctx context.Context, cfg config.Config, options Options, store *s
 		Skills:          skillSet,
 		Profile:         personal.Profile,
 		MemoryStore:     workspaceMemoryStore(cfg, personal.Store),
+		Log:             options.Log,
 	}, sessionStore, sessionStore.State(), cfg.Selection)
 	if err != nil {
 		fmt.Fprintln(stderr, err)

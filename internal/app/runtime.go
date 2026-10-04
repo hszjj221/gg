@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
+	"github.com/hszjj221/gg/internal/runlog"
 	"github.com/hszjj221/gg/internal/session"
 )
 
@@ -47,9 +48,9 @@ type ManagerOptions struct {
 	MaxEventsPerRun int
 	// Clock is primarily useful for deterministic lifecycle tests.
 	Clock func() time.Time
-	// Log optionally receives panic reports from agent runs. Nil disables
-	// logging; the daemon sets it to its stderr logger. A panicking run is
-	// always recorded as a failed run even when Log is nil.
+	// Log receives run lifecycle diagnostics and panic reports. Nil disables
+	// manager logging; the daemon sets it to its stderr logger. A panicking
+	// run is always recorded as failed even when Log is nil.
 	Log *slog.Logger
 }
 
@@ -255,6 +256,10 @@ func (m *Manager) startTurn(parent context.Context, sessionID, prompt string, ap
 	m.touchSessionLocked(sessionID)
 	m.mu.Unlock()
 
+	ctx = context.WithValue(ctx, runIDKey{}, run.id)
+	if m.options.Log != nil {
+		m.options.Log.InfoContext(ctx, "run started", "sessionID", sessionID, "runID", run.id)
+	}
 	run.publish(Event{Type: EventRunStarted})
 	go func() {
 		defer m.workers.Done()
@@ -270,7 +275,7 @@ func (m *Manager) startTurn(parent context.Context, sessionID, prompt string, ap
 					stack := debug.Stack()
 					if m.options.Log != nil {
 						m.options.Log.Error("agent run panicked",
-							"session", sessionID, "run", run.id,
+							"sessionID", sessionID, "runID", run.id,
 							"panic", fmt.Sprintf("%v", r), "stack", string(stack))
 					}
 					err = fmt.Errorf("panic: %v (see daemon log for stack trace)", r)
@@ -284,6 +289,16 @@ func (m *Manager) startTurn(parent context.Context, sessionID, prompt string, ap
 		cancel()
 		completed := m.options.Clock()
 		releaseCapacity()
+		// Emit terminal diagnostics before exposing completion to waiters,
+		// outside the manager lock so log I/O cannot block other sessions.
+		if m.options.Log != nil {
+			level := slog.LevelInfo
+			if err != nil && !errors.Is(err, context.Canceled) {
+				level = slog.LevelWarn
+			}
+			code, retryable := runtimeErrorDetails(err)
+			m.options.Log.Log(ctx, level, "run finished", "sessionID", sessionID, "runID", run.id, "model", result.ModelName, "durationMs", float64(completed.Sub(run.started).Microseconds())/1000, "outcome", runlog.Outcome(err), "errorCode", code, "retryable", retryable, "promptTokens", result.Usage.PromptTokens, "completionTokens", result.Usage.CompletionTokens, "totalTokens", result.Usage.TotalTokens)
+		}
 		m.mu.Lock()
 		if m.active[sessionID] == run.id {
 			delete(m.active, sessionID)

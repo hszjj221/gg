@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand/v2"
 	"net/http"
 	"sort"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
+	"github.com/hszjj221/gg/internal/runlog"
 )
 
 const (
@@ -72,31 +74,60 @@ func NewClient(config Config) *Client {
 	}
 }
 
-func (c *Client) Complete(ctx context.Context, req agent.Request, onEvent func(agent.Event)) (agent.AssistantMessage, error) {
+func (c *Client) Complete(ctx context.Context, req agent.Request, onEvent func(agent.Event)) (result agent.AssistantMessage, finalErr error) {
+	logger := runlog.Logger(ctx, slog.Default())
+	attempts, retries, compatibilityRetries := 0, 0, 0
+	returned := false
+	defer func() {
+		outcome := "panic"
+		if returned {
+			outcome = runlog.Outcome(finalErr)
+		}
+		logger.DebugContext(ctx, "provider attempts finished", "attempts", attempts, "retries", retries, "compatibilityRetries", compatibilityRetries, "outcome", outcome, "errorType", fmt.Sprintf("%T", finalErr), "httpStatus", errorStatus(finalErr))
+	}()
 	includeUsage := !c.compat.NoStreamUsage
 	completionLimit := c.compat.CompletionTokens
 	for attempt := 0; ; {
+		attempts++
 		reply, err := c.complete(ctx, req, onEvent, includeUsage, completionLimit)
 		if isUnsupportedUsageError(err) && includeUsage {
 			includeUsage = false
+			compatibilityRetries++
+			logger.DebugContext(ctx, "provider compatibility fallback", "fallback", "stream_usage", "attempt", attempts)
 			continue
 		}
 		var apiErr apiError
 		if !completionLimit && req.MaxOutputTokens > 0 && errors.As(err, &apiErr) && apiErr.statusCode == http.StatusBadRequest && strings.Contains(apiErr.body, "max_tokens") && strings.Contains(apiErr.body, "max_completion_tokens") {
 			completionLimit = true
+			compatibilityRetries++
+			logger.DebugContext(ctx, "provider compatibility fallback", "fallback", "completion_tokens", "attempt", attempts)
 			continue
 		}
 		if err == nil {
+			returned = true
 			return reply, nil
 		}
 		if attempt >= maxRetries || !isRetryableError(err) {
+			returned = true
 			return reply, err
 		}
-		if err := sleepContext(ctx, retryDelay(attempt, err)); err != nil {
+		delay := retryDelay(attempt, err)
+		logger.DebugContext(ctx, "provider retry scheduled", "attempt", attempts, "retry", attempt+1, "delayMs", float64(delay.Microseconds())/1000, "httpStatus", errorStatus(err), "errorType", fmt.Sprintf("%T", err))
+		if err := sleepContext(ctx, delay); err != nil {
+			returned = true
 			return agent.AssistantMessage{}, err
 		}
 		attempt++
+		retries++
 	}
+}
+
+func errorStatus(err error) int {
+	var apiErr apiError
+	if errors.As(err, &apiErr) {
+		return apiErr.statusCode
+	}
+	return 0
 }
 
 func (c *Client) complete(ctx context.Context, req agent.Request, onEvent func(agent.Event), includeUsage, completionLimit bool) (agent.AssistantMessage, error) {

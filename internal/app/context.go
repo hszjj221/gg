@@ -87,7 +87,7 @@ func (s *turnExecutor) compactThrough(ctx context.Context, provider agent.Provid
 		if err != nil {
 			return result, err
 		}
-		reply, err := provider.Complete(ctx, req, nil)
+		reply, err := provider.Complete(context.WithValue(ctx, requestKindKey{}, "compaction"), req, nil)
 		result.usage = result.usage.Add(reply.Usage)
 		err = errors.Join(err, s.appendUsage(reply.Usage))
 		if err != nil {

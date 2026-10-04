@@ -7,6 +7,7 @@ import (
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/memory"
+	"github.com/hszjj221/gg/internal/runlog"
 	"github.com/hszjj221/gg/internal/skills"
 	"github.com/hszjj221/gg/internal/tools"
 	"github.com/hszjj221/gg/internal/userprofile"
@@ -64,6 +65,7 @@ func (s *conversationTools) Definitions(ctx context.Context, cfg config.Config) 
 // per Service; dynamic state (connector token, model selection, config)
 // is re-read every turn so mid-session changes take effect.
 func (s *conversationTools) Build(ctx context.Context, cfg config.Config, provider agent.Provider) []agent.Tool {
+	logger := runlog.Logger(ctx, s.logger)
 	loc, tzErr := userLocation(s.profile)
 	tc := ToolContext{
 		Config:      cfg,
@@ -74,7 +76,7 @@ func (s *conversationTools) Build(ctx context.Context, cfg config.Config, provid
 		LocationErr: tzErr,
 		BrowserPool: s.browserPool,
 		Memoized:    s.toolMemo,
-		Log:         s.logger,
+		Log:         logger,
 	}
 	var out []agent.Tool
 	for _, p := range s.providers {
@@ -92,7 +94,7 @@ func (s *conversationTools) Build(ctx context.Context, cfg config.Config, provid
 			// in full and recorded (sanitized) so a silently missing
 			// capability is always explainable (daemon log + system.info
 			// degradedProviders).
-			s.logger.Warn("tool provider build failed; capability degraded to absent",
+			logger.Warn("tool provider build failed; capability degraded to absent",
 				"provider", name, "error", err)
 			s.degraded.Report(name, sanitizeProviderReason(cfg.HomeDir, err.Error()), err)
 			continue

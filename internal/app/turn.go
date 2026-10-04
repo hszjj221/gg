@@ -41,7 +41,7 @@ func (s *turnExecutor) execute(ctx context.Context, prompt string, onEvent func(
 	if err := s.persistMessage(user); err != nil {
 		return Result{}, err
 	}
-	provider := s.providerFactory(s.cfg)
+	provider := &observedProvider{Provider: s.providerFactory(s.cfg), model: s.cfg.Selection}
 	summaryUsage := agent.Usage{}
 	runner := agent.NewRunnerWithOptions(provider, s.tools.Build(ctx, s.cfg, provider), agent.RunnerOptions{
 		Approver:      approver,

@@ -46,10 +46,10 @@ func (s *conversation) Snapshot() Snapshot {
 }
 
 func (s *conversation) snapshotLocked() Snapshot {
-	loaded := session.Loaded{}
+	id, name := "", ""
 	path := ""
 	if s.store != nil {
-		loaded = s.store.State()
+		id, name = s.store.Identity()
 		path = s.store.Path()
 	}
 	summary := ""
@@ -59,8 +59,8 @@ func (s *conversation) snapshotLocked() Snapshot {
 		through = s.summary.ThroughMessageCount
 	}
 	return Snapshot{
-		SessionID:      loaded.Header.ID,
-		SessionName:    sessionName(loaded),
+		SessionID:      id,
+		SessionName:    name,
 		SessionPath:    path,
 		ModelName:      s.cfg.Selection,
 		Summary:        summary,

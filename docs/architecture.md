@@ -45,6 +45,9 @@ Dependencies point inward: UI and transports depend on application use cases; th
 
 ## Application components
 
+See [run diagnostics and performance](diagnostics.md) for log fields, debug
+configuration and reproducible long-session benchmarks.
+
 `Service` is the adapter-facing facade. Its internal components have separate ownership:
 
 | Component | Responsibility |

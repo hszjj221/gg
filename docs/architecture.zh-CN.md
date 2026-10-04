@@ -45,6 +45,8 @@ flowchart LR
 
 ## 应用组件
 
+日志字段、debug 配置和可复现的长会话基准见[运行诊断与性能基线](diagnostics.zh-CN.md)。
+
 `Service` 是供适配器调用的用例入口，内部组件各自承担明确职责：
 
 | 组件 | 职责 |

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/memory"
 	"github.com/hszjj221/gg/internal/provider"
+	"github.com/hszjj221/gg/internal/runlog"
 	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/skills"
 	"github.com/hszjj221/gg/internal/userprofile"
@@ -34,6 +36,8 @@ type Options struct {
 	// NoSkills mirrors cli.Args.NoSkills for subcommands that load skills
 	// themselves (e.g. `gg job run`).
 	NoSkills bool
+	// Log defaults to JSON diagnostics on stderr at GG_LOG_LEVEL.
+	Log *slog.Logger
 }
 
 func Run(ctx context.Context, argv []string, options Options) int {
@@ -41,6 +45,9 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	stderr := writerOrDefault(options.Stderr, os.Stderr)
 	stdin := readerOrDefault(options.Stdin, os.Stdin)
 	isTerm := terminalChecker(options)
+	if options.Log == nil {
+		options.Log = runlog.NewLogger(stderr, os.Getenv("GG_LOG_LEVEL"))
+	}
 
 	parsed, err := cli.Parse(argv)
 	if err != nil {
@@ -174,6 +181,7 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		Skills:          skillSet,
 		Profile:         personal.Profile,
 		MemoryStore:     workspaceMemoryStore(cfg, personal.Store),
+		Log:             options.Log,
 	}, sessionStore, loaded, parsed.Model)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
