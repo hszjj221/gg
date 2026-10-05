@@ -157,12 +157,12 @@ func (s *Service) sessionUpdateLocked(draft, notice string) SessionUpdate {
 // sessionUpdateUnlocked is only used on a newly constructed child that is not
 // yet shared with another goroutine.
 func (s *Service) sessionUpdateUnlocked(draft, notice string) SessionUpdate {
-	loaded := s.store.State()
+	id, name := s.store.Identity()
 	return SessionUpdate{
 		Messages:    append([]agent.Message{}, s.history...),
 		TreeItems:   treeItems(s.store),
-		SessionID:   loaded.Header.ID,
-		SessionName: sessionName(loaded),
+		SessionID:   id,
+		SessionName: name,
 		ModelName:   s.cfg.Selection,
 		SessionPath: s.store.Path(),
 		Draft:       draft,

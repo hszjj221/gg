@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
+	"github.com/hszjj221/gg/internal/runlog"
 )
 
 // DegradedProviders returns the providers that failed their most recent
@@ -17,9 +19,36 @@ func (s *Service) Queue() *agent.MessageQueue {
 	return s.queue
 }
 
-func (s *Service) Run(ctx context.Context, prompt string, onEvent func(agent.Event), approver agent.Approver) (Result, error) {
-	result, err := s.run(ctx, prompt, onEvent, approver)
+func (s *Service) Run(ctx context.Context, prompt string, onEvent func(agent.Event), approver agent.Approver) (result Result, err error) {
+	id, _ := ctx.Value(runIDKey{}).(string)
+	if id == "" {
+		id = newRuntimeID()
+	}
+	s.mu.Lock()
+	sessionID, model := "", s.cfg.Selection
+	if s.store != nil {
+		sessionID, _ = s.store.Identity()
+	}
+	s.mu.Unlock()
+	logger := s.tools.logger.With("sessionID", sessionID, "runID", id)
+	ctx = runlog.WithLogger(ctx, logger)
+	started := time.Now()
+	returned := false
+	logger.DebugContext(ctx, "conversation turn started", "model", model)
+	defer func() {
+		outcome := "panic"
+		if returned {
+			outcome = runlog.Outcome(err)
+		}
+		code, retryable := runtimeErrorDetails(err)
+		if result.ModelName != "" {
+			model = result.ModelName
+		}
+		logger.DebugContext(ctx, "conversation turn finished", "model", model, "durationMs", float64(time.Since(started).Microseconds())/1000, "outcome", outcome, "errorCode", code, "retryable", retryable, "promptTokens", result.Usage.PromptTokens, "completionTokens", result.Usage.CompletionTokens, "totalTokens", result.Usage.TotalTokens)
+	}()
+	result, err = s.run(ctx, prompt, onEvent, approver)
 	result.TreeItems = s.treeItems()
+	returned = true
 	return result, err
 }
 

@@ -9,6 +9,9 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/hszjj221/gg/internal/runlog"
 )
 
 const defaultMaxTurns = 32
@@ -238,14 +241,25 @@ func (r *Runner) executeToolCalls(ctx context.Context, calls []ToolCall, onEvent
 // the call is already decided (unknown tool, describe error, denied,
 // cancelled) — in that case the finish event is emitted here and the
 // call skips the execution phase.
-func (r *Runner) prepareToolCall(ctx context.Context, call ToolCall, onEvent func(Event)) (Tool, string, *ToolResult) {
+func (r *Runner) prepareToolCall(ctx context.Context, call ToolCall, onEvent func(Event)) (prepared Tool, text string, decided *ToolResult) {
+	started := time.Now()
+	reason := ""
+	defer func() {
+		outcome := "ready"
+		if decided != nil {
+			outcome = "skipped"
+		}
+		runlog.Logger(ctx, slog.Default()).DebugContext(ctx, "tool preparation finished", "tool", call.Name, "toolCallID", call.ID, "durationMs", float64(time.Since(started).Microseconds())/1000, "outcome", outcome, "reason", reason)
+	}()
 	if err := ctx.Err(); err != nil {
+		reason = runlog.Outcome(err)
 		result := toolError(fmt.Errorf("tool not executed: %w", err))
 		emitToolFinish(onEvent, call, call.Name, result)
 		return nil, "", &result
 	}
 	tool, ok := r.tools[call.Name]
 	if !ok {
+		reason = "unknown_tool"
 		summary, details := fallbackToolSummary(call)
 		emitToolEvent(onEvent, Event{Type: EventToolCallStart, ToolCallID: call.ID, ToolName: call.Name, Summary: summary, Details: details})
 		result := toolError(fmt.Errorf("unknown tool %q", call.Name))
@@ -264,6 +278,7 @@ func (r *Runner) prepareToolCall(ctx context.Context, call ToolCall, onEvent fun
 	}
 	emitToolEvent(onEvent, Event{Type: EventToolCallStart, ToolCallID: call.ID, ToolName: call.Name, Summary: summary, Details: details})
 	if reqErr != nil {
+		reason = "invalid_approval"
 		result := toolError(fmt.Errorf("approval request for tool %q failed: %w", call.Name, reqErr))
 		emitToolFinish(onEvent, call, summary, result)
 		return nil, "", &result
@@ -281,13 +296,21 @@ func (r *Runner) prepareToolCall(ctx context.Context, call ToolCall, onEvent fun
 			// writes). The start/finish events above and below are still
 			// emitted, with the summary annotated for transparency.
 			if !req.PreApproved {
+				started := time.Now()
 				decision, err := r.approver.Approve(ctx, req)
+				outcome := runlog.Outcome(err)
+				if err == nil && !decision.Allow {
+					outcome = "denied"
+				}
+				runlog.Logger(ctx, slog.Default()).DebugContext(ctx, "tool approval finished", "tool", call.Name, "toolCallID", call.ID, "durationMs", float64(time.Since(started).Microseconds())/1000, "outcome", outcome)
 				if err != nil {
+					reason = "approval_failed"
 					result := toolError(fmt.Errorf("approval failed for tool %q: %w", call.Name, err))
 					emitToolFinish(onEvent, call, summary, result)
 					return nil, "", &result
 				}
 				if !decision.Allow {
+					reason = "approval_denied"
 					result := toolError(fmt.Errorf("tool call %q denied by user", call.Name))
 					emitToolFinish(onEvent, call, summary, result)
 					return nil, "", &result
@@ -296,8 +319,10 @@ func (r *Runner) prepareToolCall(ctx context.Context, call ToolCall, onEvent fun
 		}
 	}
 	if err := ctx.Err(); err != nil {
+		reason = runlog.Outcome(err)
 		result := toolError(fmt.Errorf("tool not executed: %w", err))
 		emitToolFinish(onEvent, call, summary, result)
+		runlog.Logger(ctx, slog.Default()).DebugContext(ctx, "tool execution skipped", "tool", call.Name, "toolCallID", call.ID, "outcome", runlog.Outcome(err))
 		return nil, "", &result
 	}
 	return tool, summary, nil
@@ -310,6 +335,7 @@ func (r *Runner) startPreparedCall(ctx context.Context, tool Tool, call ToolCall
 	if err := ctx.Err(); err != nil {
 		result := toolError(fmt.Errorf("tool not executed: %w", err))
 		emitToolFinish(onEvent, call, summary, result)
+		runlog.Logger(ctx, slog.Default()).DebugContext(ctx, "tool execution skipped", "tool", call.Name, "toolCallID", call.ID, "outcome", runlog.Outcome(err))
 		return result
 	}
 	return r.executePreparedCall(ctx, tool, call, summary, onEvent)
@@ -317,15 +343,24 @@ func (r *Runner) startPreparedCall(ctx context.Context, tool Tool, call ToolCall
 
 // executePreparedCall runs an approved tool call and emits its finish event.
 func (r *Runner) executePreparedCall(ctx context.Context, tool Tool, call ToolCall, summary string, onEvent func(Event)) ToolResult {
+	logger := runlog.Logger(ctx, slog.Default()).With("tool", call.Name, "toolCallID", call.ID)
+	ctx = runlog.WithLogger(ctx, logger)
+	started := time.Now()
+	logger.DebugContext(ctx, "tool execution started")
 	result := func() (result ToolResult) {
 		defer func() {
 			if value := recover(); value != nil {
-				slog.Error("tool panicked", "tool", call.Name, "panic", value, "stack", string(debug.Stack()))
+				logger.Error("tool panicked", "panic", value, "stack", string(debug.Stack()))
 				result = toolError(fmt.Errorf("tool %q panicked: %v", call.Name, value))
 			}
 		}()
 		return tool.Execute(ctx, call.Arguments)
 	}()
+	outcome := "success"
+	if result.IsError {
+		outcome = "failed"
+	}
+	logger.DebugContext(ctx, "tool execution finished", "durationMs", float64(time.Since(started).Microseconds())/1000, "outcome", outcome, "promptTokens", result.Usage.PromptTokens, "completionTokens", result.Usage.CompletionTokens, "totalTokens", result.Usage.TotalTokens)
 	emitToolFinish(onEvent, call, summary, result)
 	return result
 }

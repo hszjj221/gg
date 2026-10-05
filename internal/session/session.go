@@ -164,6 +164,29 @@ func (s *Store) Header() Header {
 	return s.header
 }
 
+// Identity returns the stable ID and name on the active branch without
+// copying message history. Append-only parents let us walk ancestry backwards
+// in a single scan, including checkouts and an explicitly cleared name.
+func (s *Store) Identity() (id, name string) {
+	if s == nil {
+		return "", ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current := s.lastID
+	for i := len(s.records) - 1; i >= 0 && current != nil; i-- {
+		record := s.records[i]
+		if record.id() != *current {
+			continue
+		}
+		if info, ok := record.entry.(*SessionInfoEntry); ok {
+			return s.header.ID, info.Name
+		}
+		current = record.entry.metadata().ParentID
+	}
+	return s.header.ID, ""
+}
+
 func (s *Store) LeafID() *string {
 	if s == nil {
 		return nil

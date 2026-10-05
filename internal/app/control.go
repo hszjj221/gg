@@ -26,7 +26,7 @@ func (s *Service) handleControlCommand(ctx context.Context, prompt string) (Resu
 		if s.providerFactory == nil {
 			return Result{}, true, fmt.Errorf("provider factory is not configured")
 		}
-		compact, err := s.compactHistory(ctx, s.providerFactory(s.cfg))
+		compact, err := s.compactHistory(ctx, &observedProvider{Provider: s.providerFactory(s.cfg), model: s.cfg.Selection})
 		if err != nil {
 			return Result{}, true, err
 		}

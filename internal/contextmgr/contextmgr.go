@@ -32,14 +32,15 @@ type BuildResult struct {
 }
 
 func Build(input BuildInput) BuildResult {
-	messages := make([]agent.Message, 0, len(input.System)+len(input.History)+2)
-	messages = append(messages, input.System...)
-	if strings.TrimSpace(input.Summary.Text) != "" {
-		messages = append(messages, SummarySystemMessage(input.Summary.Text))
-	}
+	hasSummary := strings.TrimSpace(input.Summary.Text) != ""
 	start := input.Summary.ThroughMessageCount
-	if start < 0 || start > len(input.History) || strings.TrimSpace(input.Summary.Text) == "" {
+	if start < 0 || start > len(input.History) || !hasSummary {
 		start = 0
+	}
+	messages := make([]agent.Message, 0, len(input.System)+len(input.History)-start+2)
+	messages = append(messages, input.System...)
+	if hasSummary {
+		messages = append(messages, SummarySystemMessage(input.Summary.Text))
 	}
 	messages = append(messages, cloneMessages(input.History[start:])...)
 	if input.Current.Role != "" {
@@ -49,7 +50,7 @@ func Build(input BuildInput) BuildResult {
 		Messages:        messages,
 		PromptTokens:    EstimateMessages(messages),
 		KeptTurns:       CountUserTurns(input.History[start:]),
-		SummaryIncluded: strings.TrimSpace(input.Summary.Text) != "",
+		SummaryIncluded: hasSummary,
 	}
 	return result
 }
