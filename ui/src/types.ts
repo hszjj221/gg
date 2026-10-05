@@ -126,6 +126,7 @@ export interface ArtifactPublishResult {
 
 export interface DesktopBridge {
   getConnection(): Promise<{ endpoint: string; token: string; workspace: string }>;
+  openExternal(url: string): Promise<void>;
 }
 
 declare global {
