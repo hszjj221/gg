@@ -234,6 +234,7 @@ kbd { font: 10px/1.5 inherit; color: #7a8375; }
 .markdown-body li p { margin-bottom: 6px; }
 .markdown-body a { color: #587b44; text-decoration-color: #c4d4b3; text-underline-offset: 3px; }
 .markdown-body a:hover { text-decoration-color: #587b44; }
+.markdown-link-error { color: #9c5146; font-size: 12px; line-height: 1.7; }
 .markdown-body pre { max-width: 100%; margin: 15px 0; padding: 16px; overflow-x: auto; color: #586a48; background: #f0f4e9; border: 1px solid #e1e8d7; border-radius: 9px; font: 12px/1.75 var(--mono); overflow-wrap: normal; }
 .markdown-body code { padding: 2px 4px; color: #5c7848; background: #edf2e5; border-radius: 4px; font: 11px/1.7 var(--mono); }
 .markdown-body pre code { padding: 0; color: inherit; background: none; font: inherit; white-space: pre; }

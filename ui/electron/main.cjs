@@ -1,11 +1,13 @@
-const { app, BrowserWindow, dialog, ipcMain } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const { spawn } = require('node:child_process');
 const { randomBytes } = require('node:crypto');
 const net = require('node:net');
 const path = require('node:path');
+const { createExternalLinkHandler } = require('./external-links.cjs');
 
 const READY_TIMEOUT_MS = 15000;
 const READY_POLL_MS = 250;
+const clientWebContents = new Set();
 
 function daemonPath() {
   if (process.env.GGD_PATH) return process.env.GGD_PATH;
@@ -74,6 +76,9 @@ function createWindow() {
       sandbox: true,
     },
   });
+  const contents = window.webContents;
+  clientWebContents.add(contents);
+  contents.once('destroyed', () => clientWebContents.delete(contents));
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event) => event.preventDefault());
   window.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
@@ -122,6 +127,10 @@ app.whenReady().then(async () => {
     return;
   }
   ipcMain.handle('gg:connection', () => connection);
+  ipcMain.handle('gg:open-external', createExternalLinkHandler({
+    isClient: (contents) => clientWebContents.has(contents),
+    openExternal: (url) => shell.openExternal(url),
+  }));
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

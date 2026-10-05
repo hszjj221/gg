@@ -49,6 +49,7 @@ export function App() {
   const stickToBottomRef = useRef(true);
   const actionLockRef = useRef(false);
   const cancelRenameRef = useRef(false);
+  const renameRequestsRef = useRef(new Map<string, symbol>());
   const draftSessionRef = useRef('new');
   const watchAbortRef = useRef<AbortController | null>(null);
   const watchGenerationRef = useRef(0);
@@ -266,6 +267,13 @@ export function App() {
     if (!api || busy || actionLockRef.current) return;
     await action(async () => {
       const snapshot = await api.createSession();
+      if (!current) {
+        sessionStorage.setItem(
+          `gg.draft.${snapshot.sessionId}`,
+          sessionStorage.getItem('gg.draft.new') ?? prompt,
+        );
+        sessionStorage.removeItem('gg.draft.new');
+      }
       setCurrent(snapshot);
       sessionStorage.setItem('gg.sessionId', snapshot.sessionId);
       setView('chat');
@@ -301,11 +309,32 @@ export function App() {
       cancelRenameRef.current = false;
       return;
     }
-    if (!api || !current || busy || name.trim() === current.sessionName || actionLockRef.current) return;
-    await action(async () => {
-      setCurrent(await api.renameSession(current.sessionId, name.trim()));
+    if (!api || !current || busy || name.trim() === current.sessionName) return;
+    const sessionId = current.sessionId;
+    const request = Symbol();
+    const connectionGeneration = connectGenerationRef.current;
+    renameRequestsRef.current.set(sessionId, request);
+    setError('');
+    try {
+      const renamed = await api.renameSession(sessionId, name.trim());
+      if (
+        renameRequestsRef.current.get(sessionId) !== request ||
+        connectGenerationRef.current !== connectionGeneration
+      ) return;
+      setCurrent((selected) =>
+        selected?.sessionId === sessionId ? { ...selected, sessionName: renamed.sessionName } : selected,
+      );
       await loadSessions(api);
-    });
+    } catch (cause) {
+      if (
+        renameRequestsRef.current.get(sessionId) === request &&
+        connectGenerationRef.current === connectionGeneration
+      ) {
+        setError(errorMessage(cause));
+      }
+    } finally {
+      if (renameRequestsRef.current.get(sessionId) === request) renameRequestsRef.current.delete(sessionId);
+    }
   }
 
   async function applySessionAction(actionName: 'tree' | 'fork' | 'clone', nodeId = '') {

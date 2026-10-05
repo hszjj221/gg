@@ -111,6 +111,7 @@ The shared client includes a responsive workspace with searchable sessions group
 - Drafts are kept separately for each session in the current tab. Reloading restores the connection and selected session; active runs reattach when the server supports it.
 - Reading older messages keeps your scroll position. Use the return-to-latest button to follow new output again.
 - Documents support Markdown and sandboxed HTML previews; save a completed version to the personal library from the reader.
+- In the desktop app, HTTP and HTTPS links in Markdown open in your default browser.
 
 See the [architecture guide](docs/architecture.md) for the dependency boundaries and protocol.
 

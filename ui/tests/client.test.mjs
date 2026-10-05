@@ -41,6 +41,7 @@ function response(result) {
 }
 
 beforeEach(() => {
+  delete window.ggDesktop;
   sessionStorage.clear();
   localStorage.clear();
   sessionStorage.setItem('gg.token', 'unit-test-token');
@@ -50,6 +51,7 @@ beforeEach(() => {
     calls: [],
     failStart: false,
     pendingSteer: null,
+    pendingRename: null,
     sessions: ['一', '二'].map((suffix, index) => ({
       sessionId: `s${index + 1}`,
       sessionName: `会话${suffix}`,
@@ -88,7 +90,19 @@ beforeEach(() => {
       case 'session.open':
       case 'session.get':
         return response(session);
+      case 'session.create': {
+        const created = {
+          sessionId: `s${fixture.sessions.length + 1}`,
+          sessionName: params.name || '新会话',
+          modelName: 'test:model',
+          messages: [],
+          treeItems: [],
+        };
+        fixture.sessions.push(created);
+        return response(created);
+      }
       case 'session.rename':
+        if (fixture.pendingRename) await fixture.pendingRename;
         session.sessionName = params.name;
         return response(session);
       case 'run.start':
@@ -113,6 +127,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   globalThis.fetch = originalFetch;
+  delete window.ggDesktop;
 });
 
 after(async () => {
@@ -168,6 +183,112 @@ test('Untrusted Markdown cannot retain executable markup or navigation payloads'
     ).length,
     0,
   );
+});
+
+test('Markdown cannot impersonate app controls through global CSS classes or IDs', async () => {
+  const content = '<div class="sidebar-backdrop" id="prompt">Backdrop</div><p class="toast app-error approval-card">Fake approval</p>';
+  await act(async () => root.render(createElement(Markdown, { content })));
+  const body = document.querySelector('.markdown-body');
+  assert.match(body.textContent, /Backdrop/);
+  assert.match(body.textContent, /Fake approval/);
+  assert.equal(body.querySelectorAll('[class], [id], [style]').length, 0);
+});
+
+test('Desktop Markdown links use the browser bridge for clicks and middle clicks', async () => {
+  const opened = [];
+  window.ggDesktop = { openExternal: async (url) => opened.push(url) };
+  await act(async () => root.render(createElement(Markdown, {
+    content: '[**Docs**](https://example.com/docs) [Local service](http://localhost:3000/help)',
+  })));
+  const click = new window.MouseEvent('click', { bubbles: true, cancelable: true });
+  await act(async () => document.querySelector('a strong').dispatchEvent(click));
+  assert.equal(click.defaultPrevented, true);
+  const middleClick = new window.MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 });
+  await act(async () => document.querySelectorAll('a')[1].dispatchEvent(middleClick));
+  assert.equal(middleClick.defaultPrevented, true);
+  assert.deepEqual(opened, ['https://example.com/docs', 'http://localhost:3000/help']);
+});
+
+test('Desktop Markdown rejects non-web links and reports browser failures', async () => {
+  const opened = [];
+  window.ggDesktop = { openExternal: async (url) => { opened.push(url); throw new Error('No browser'); } };
+  await act(async () => root.render(createElement(Markdown, {
+    content: '[Mail](mailto:team@example.com) [Credentials](https://user:secret@example.com/) [Docs](https://example.com/)',
+  })));
+  for (const link of document.querySelectorAll('a')) {
+    const event = new window.MouseEvent('click', { bubbles: true, cancelable: true });
+    await act(async () => link.dispatchEvent(event));
+    assert.equal(event.defaultPrevented, true);
+    assert.match(document.querySelector('[role="alert"]').textContent, /无法打开链接/);
+  }
+  assert.deepEqual(opened, ['https://example.com/']);
+});
+
+test('Web Markdown links retain normal browser navigation', async () => {
+  await act(async () => root.render(createElement(Markdown, { content: '[Docs](https://example.com/)' })));
+  let preventedByMarkdown;
+  const observe = (event) => {
+    preventedByMarkdown = event.defaultPrevented;
+    event.preventDefault(); // Do not navigate the jsdom test page.
+  };
+  document.addEventListener('click', observe, { once: true });
+  await act(async () => document.querySelector('a').dispatchEvent(
+    new window.MouseEvent('click', { bubbles: true, cancelable: true }),
+  ));
+  assert.equal(preventedByMarkdown, false);
+});
+
+test('A title blur saves without swallowing navigation or replacing the destination on completion', async () => {
+  await mountApp();
+  let finishRename;
+  fixture.pendingRename = new Promise((resolve) => { finishRename = resolve; });
+  sessionStorage.setItem('gg.draft.s2', 'Destination draft');
+  const title = document.querySelector('.title-editor input');
+  await act(async () => title.focus());
+  await input(title, 'Renamed session one');
+  const destination = sessionButton('会话二');
+  await act(async () => destination.focus()); // Browsers blur the title before the click.
+  assert.equal(fixture.calls.filter((call) => call.method === 'session.rename').length, 1);
+  assert.equal(destination.disabled, false);
+  await click(destination);
+  assert.equal(title.value, '会话二');
+  assert.equal(sessionStorage.getItem('gg.sessionId'), 's2');
+  assert.equal(document.querySelector('#prompt').value, 'Destination draft');
+  await act(async () => finishRename());
+  assert.equal(title.value, '会话二');
+  assert.equal(document.querySelector('#prompt').value, 'Destination draft');
+  assert.ok(sessionButton('Renamed session one'));
+});
+
+for (const trigger of ['button', 'shortcut']) {
+  test(`Creating the first session by ${trigger} carries over the draft and restores it after reload`, async () => {
+    fixture.sessions = [];
+    await act(async () => root.render(createElement(App)));
+    await input(document.querySelector('#prompt'), 'Draft before the first session');
+    if (trigger === 'button') {
+      await click(document.querySelector('.new-session-button'));
+    } else {
+      await act(async () => window.dispatchEvent(
+        new window.KeyboardEvent('keydown', { key: 'n', ctrlKey: true, bubbles: true, cancelable: true }),
+      ));
+    }
+    assert.equal(document.querySelector('#prompt').value, 'Draft before the first session');
+    assert.equal(sessionStorage.getItem('gg.draft.s1'), 'Draft before the first session');
+    assert.equal(sessionStorage.getItem('gg.draft.new'), null);
+    await act(async () => root.unmount());
+    root = createRoot(document.getElementById('root'));
+    await act(async () => root.render(createElement(App)));
+    assert.equal(document.querySelector('#prompt').value, 'Draft before the first session');
+  });
+}
+
+test('Creating another session keeps the previous session draft separate', async () => {
+  await mountApp();
+  await input(document.querySelector('#prompt'), 'Draft for session one');
+  await click(document.querySelector('.new-session-button'));
+  assert.equal(document.querySelector('#prompt').value, '');
+  await click(sessionButton('会话一'));
+  assert.equal(document.querySelector('#prompt').value, 'Draft for session one');
 });
 
 test('Switching sessions and remounting restore each session draft independently', async () => {
