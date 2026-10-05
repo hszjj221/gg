@@ -260,6 +260,25 @@ test('A title blur saves without swallowing navigation or replacing the destinat
   assert.ok(sessionButton('Renamed session one'));
 });
 
+test('A completed rename preserves a new title edit and Escape restores the saved name', async () => {
+  await mountApp();
+  let finishRename;
+  fixture.pendingRename = new Promise((resolve) => { finishRename = resolve; });
+  const title = document.querySelector('.title-editor input');
+  await act(async () => title.focus());
+  await input(title, 'First saved title');
+  await act(async () => title.blur());
+  await act(async () => title.focus());
+  await input(title, 'Second unfinished title');
+  await act(async () => finishRename());
+  assert.equal(title.value, 'Second unfinished title');
+  await act(async () => title.dispatchEvent(
+    new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+  ));
+  assert.equal(title.value, 'First saved title');
+  assert.equal(fixture.calls.filter((call) => call.method === 'session.rename').length, 1);
+});
+
 for (const trigger of ['button', 'shortcut']) {
   test(`Creating the first session by ${trigger} carries over the draft and restores it after reload`, async () => {
     fixture.sessions = [];

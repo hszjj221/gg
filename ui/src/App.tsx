@@ -50,6 +50,8 @@ export function App() {
   const actionLockRef = useRef(false);
   const cancelRenameRef = useRef(false);
   const renameRequestsRef = useRef(new Map<string, symbol>());
+  const titleEditingRef = useRef(false);
+  const titleSessionRef = useRef<string | undefined>(undefined);
   const draftSessionRef = useRef('new');
   const watchAbortRef = useRef<AbortController | null>(null);
   const watchGenerationRef = useRef(0);
@@ -152,7 +154,13 @@ export function App() {
     [],
   );
 
-  useEffect(() => setName(current?.sessionName || ''), [current?.sessionId, current?.sessionName]);
+  useEffect(() => {
+    if (titleSessionRef.current !== current?.sessionId || !titleEditingRef.current) {
+      setName(current?.sessionName || '');
+      titleEditingRef.current = false;
+    }
+    titleSessionRef.current = current?.sessionId;
+  }, [current?.sessionId, current?.sessionName]);
 
   useEffect(() => {
     const sessionId = current?.sessionId || 'new';
@@ -798,8 +806,12 @@ export function App() {
               ) : current ? (
                 <input
                   value={name}
+                  onFocus={() => { titleEditingRef.current = true; }}
                   onChange={(event) => setName(event.target.value)}
-                  onBlur={() => void renameSession()}
+                  onBlur={() => {
+                    titleEditingRef.current = false;
+                    void renameSession();
+                  }}
                   onKeyDown={(event) => {
                     if (event.nativeEvent.isComposing) return;
                     if (event.key === 'Enter') event.currentTarget.blur();
