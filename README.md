@@ -104,6 +104,14 @@ npm run desktop
 
 The desktop app asks for a workspace, then builds and launches the local `ggd` binary for the current platform. This stage provides the runnable desktop shell; signing, installers, and auto-update belong in a later release pipeline.
 
+The shared client includes a responsive workspace with searchable sessions grouped by date, editable task starters, Markdown replies, collapsible tool output, conversation branches, and a document reader. Tool approvals show the requested operation and expandable details; while a task runs, you can add instructions, queue the next task, or stop it.
+
+- `Cmd/Ctrl+N` creates a session; `Cmd/Ctrl+K` focuses session search.
+- `Enter` sends a message or adds instructions to a running task; `Shift+Enter` inserts a newline. `Escape` closes the navigation drawer or branch panel, and cancels an unfinished session rename.
+- Drafts are kept separately for each session in the current tab. Reloading restores the connection and selected session; active runs reattach when the server supports it.
+- Reading older messages keeps your scroll position. Use the return-to-latest button to follow new output again.
+- Documents support Markdown and sandboxed HTML previews; save a completed version to the personal library from the reader.
+
 See the [architecture guide](docs/architecture.md) for the dependency boundaries and protocol.
 
 ## Usage
