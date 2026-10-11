@@ -311,7 +311,11 @@ func (r *Runner) prepareToolCall(ctx context.Context, call ToolCall, onEvent fun
 				}
 				if !decision.Allow {
 					reason = "approval_denied"
-					result := toolError(fmt.Errorf("tool call %q denied by user", call.Name))
+					msg := fmt.Sprintf("tool call %q denied by user", call.Name)
+					if decision.Reason != "" {
+						msg = decision.Reason
+					}
+					result := toolError(fmt.Errorf("%s", msg))
 					emitToolFinish(onEvent, call, summary, result)
 					return nil, "", &result
 				}

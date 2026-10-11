@@ -128,6 +128,7 @@ gg --usage -p "Summarize this repository"
 gg --no-skills -p "Run without local skills"
 gg --no-memory -p "Run without long-term memory"
 gg --approval on-request -p "Run tests and fix failures"
+gg --yolo -p "Run tests and fix failures"
 gg -p "/skill:ca review and commit my changes"
 gg -p "/memory add Prefer concise answers with file references."
 gg sessions list
@@ -140,16 +141,18 @@ gg --name "Refactor auth" -p "Review this module"
 Interactive mode:
 
 - Running `gg` in a terminal starts the line-based interactive mode (Ctrl+D to exit).
-- Replies stream as they arrive; tool approvals prompt inline before `bash`, `edit`, or `write` run.
+- Replies stream as they arrive. In a terminal, `bash`, `edit`, and `write` prompt before they run. Outside a terminal, `--approval auto` denies those tools unless you pass `--yolo`.
 - Use `/name <name>` to rename the session interactively, `/name --clear` to remove the name.
 - For a richer visual experience (conversation tree, artifacts, approvals UI), use the Web or desktop client.
 
 Tool approval:
 
-- `--approval auto` is the default. Interactive sessions ask before running `bash`, `edit`, or `write`; one-shot prompts and non-terminal runs keep the previous non-interactive behavior.
-- `--approval on-request` always asks before those tools run and requires a real terminal.
-- `--approval never` disables approval prompts.
-- Denying a tool call returns a tool error to the model so it can explain or choose another path.
+- `--approval auto` is the default. In a terminal, gg asks before `bash`, `edit`, `write`, and other approval-gated tools run. One-shot (`-p`) and other non-terminal runs deny those tools and print how to allow them. Clearly read-only shell commands (`ls`, `cat`, `grep`, `git status`, `git diff`, `git log`, and a short allowlist) run without a prompt.
+- `--approval on-request` always asks before those tools run and requires a real terminal. Read-only shell commands still skip the prompt.
+- `--approval never` does not prompt, so approval-gated tools run. Dangerous shell commands are still denied, because this mode never asks.
+- `--approval yolo` and `--yolo` allow approval-gated tools without prompting. Dangerous shell commands still need an interactive approval when a terminal is available, and are denied when it is not.
+- `--sandbox` (off by default) runs `bash` inside bubblewrap on Linux or `sandbox-exec` on macOS. If the helper is missing or cannot start, the command still runs and the output says the sandbox was unavailable.
+- Denying a tool call returns a tool error to the model so it can explain or choose another path. The same rules are described in the [security model](docs/architecture.md#security-model).
 
 Provider/model configuration:
 
@@ -398,7 +401,7 @@ go fmt ./...
 
 ## Security
 
-`gg` can execute shell commands and edit files when the model uses the built-in tools. Run it only in workspaces where you are comfortable granting those capabilities.
+`gg` can execute shell commands and edit files when the model uses the built-in tools. Run it only in workspaces where you are comfortable granting those capabilities. Outside a terminal, `--approval auto` denies `bash`, `edit`, and `write` unless you pass `--yolo`. See the [security model](docs/architecture.md#security-model).
 
 `~/.gg/config.json` may contain cleartext API keys. Keep it out of repositories and backups you do not control.
 

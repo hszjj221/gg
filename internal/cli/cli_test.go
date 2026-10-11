@@ -123,6 +123,30 @@ func TestParseApprovalFlag(t *testing.T) {
 	}
 }
 
+func TestParseYoloAndSandbox(t *testing.T) {
+	args, err := Parse([]string{"--yolo", "--sandbox", "-p", "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !args.Yolo || args.Approval != "yolo" || !args.Sandbox || !args.Print || args.Prompt != "hello" {
+		t.Fatalf("unexpected args: %+v", args)
+	}
+	explicit, err := Parse([]string{"--approval", "yolo", "-p", "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explicit.Approval != "yolo" || explicit.Yolo {
+		t.Fatalf("approval yolo should not require the flag: %+v", explicit)
+	}
+}
+
+func TestParseYoloRejectsConflictingApproval(t *testing.T) {
+	_, err := Parse([]string{"--yolo", "--approval", "on-request", "-p", "hello"})
+	if err == nil || !strings.Contains(err.Error(), "--yolo cannot be combined") {
+		t.Fatalf("expected yolo conflict, got %v", err)
+	}
+}
+
 func TestParseRejectsInvalidApprovalFlag(t *testing.T) {
 	_, err := Parse([]string{"--approval", "sometimes", "-p", "hello"})
 	if err == nil || !strings.Contains(err.Error(), "approval must be one of") {

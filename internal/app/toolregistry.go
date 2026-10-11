@@ -190,7 +190,7 @@ func buildCoreTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
 		tools.NewReadToolWithOptions(tc.Config.CWD, tools.ReadOptions{ExtraRoots: tc.ReadRoots}),
 		tools.NewListTool(tc.Config.CWD),
 		tools.NewGrepTool(tc.Config.CWD),
-		tools.NewBashTool(tc.Config.CWD, tools.BashOptions{}),
+		tools.NewBashTool(tc.Config.CWD, tools.BashOptions{Sandbox: tc.Config.BashSandbox}),
 		tools.NewEditTool(tc.Config.CWD),
 		tools.NewWriteTool(tc.Config.CWD),
 		tools.NewSubagentTool(tc.Config.CWD, tc.Provider, tools.SubagentOptions{}),

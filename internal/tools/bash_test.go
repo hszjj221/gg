@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf16"
+
+	"github.com/hszjj221/gg/internal/agent"
 )
 
 func TestBashToolReportsExitCodeAndOutput(t *testing.T) {
@@ -92,5 +94,41 @@ func TestBashToolApprovalRequestDescribesCommand(t *testing.T) {
 		if !strings.Contains(req.Details, want) {
 			t.Fatalf("bash approval details missing %q:\n%s", want, req.Details)
 		}
+	}
+	if req.Risk != "" {
+		t.Fatalf("go test should keep the normal approval policy, risk=%q", req.Risk)
+	}
+}
+
+func TestBashApprovalRequestClassifiesDangerousCommand(t *testing.T) {
+	tool := NewBashTool(t.TempDir(), BashOptions{})
+	req, err := tool.ApprovalRequest(json.RawMessage(`{"command":"rm -rf /"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Risk != agent.ApprovalRiskDangerous || !strings.Contains(req.RiskReason, "rm -rf") || !strings.Contains(req.Details, req.RiskReason) {
+		t.Fatalf("dangerous command not described on the approval request: %+v", req)
+	}
+}
+
+func TestBashSandboxDegradesOrRuns(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sandbox helpers are Linux and macOS")
+	}
+	dir := t.TempDir()
+	tool := NewBashTool(dir, BashOptions{Sandbox: true, DefaultTimeout: 5 * time.Second})
+	result := executeBashCommand(t, tool, "printf sandbox-ok", 5)
+	if len(result.Content) == 0 {
+		t.Fatal("missing bash output")
+	}
+	text := result.Content[0].Text
+	if strings.Contains(text, "sandbox unavailable") {
+		if !strings.Contains(text, "sandbox-ok") {
+			t.Fatalf("degraded sandbox should still run the command:\n%s", text)
+		}
+		return
+	}
+	if result.IsError || !strings.Contains(text, "sandbox-ok") {
+		t.Fatalf("sandboxed command failed:\n%s", text)
 	}
 }

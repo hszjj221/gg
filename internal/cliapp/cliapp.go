@@ -81,6 +81,7 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	cfg.BashSandbox = parsed.Sandbox
 	// P1 workspace: the process working directory is auto-registered as the
 	// "default" workspace on first run after upgrade. Today the runtime
 	// still serves this single root exactly like before; later phases bind
@@ -194,7 +195,8 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	}()
 
 	if parsed.Prompt != "" {
-		return runPrompt(ctx, executor, parsed.Prompt, stdout, stderr, false, parsed.Usage, promptApprover(parsed, stdin, stderr), isTerm)
+		term := lineApprovalTerminals(stdin, stderr, isTerm)
+		return runPrompt(ctx, executor, parsed.Prompt, stdout, stderr, false, parsed.Usage, newPolicyApprover(parsed, bufio.NewReader(stdin), stderr, term), isTerm)
 	}
 	if parsed.Print {
 		fmt.Fprintln(stderr, "prompt is required in print mode")
@@ -203,7 +205,8 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	reader := bufio.NewReader(stdin)
 	// Line-based approval always runs through the stderr prompt, which needs
 	// stdin + stderr as terminals (see lineApprovalTerminals).
-	return runInteractive(ctx, executor, reader, stdout, stderr, sessionName(loaded), parsed.Usage, interactiveApprover(parsed, reader, stderr, lineApprovalTerminals(stdin, stderr, isTerm)), isTerm)
+	term := lineApprovalTerminals(stdin, stderr, isTerm)
+	return runInteractive(ctx, executor, reader, stdout, stderr, sessionName(loaded), parsed.Usage, newPolicyApprover(parsed, reader, stderr, term), isTerm)
 }
 
 func runPrompt(
@@ -526,53 +529,6 @@ func loadSkills(args cli.Args, cwd, homeDir string) (skills.Set, error) {
 
 func printUsage(stderr io.Writer, usage agent.Usage) {
 	fmt.Fprintf(stderr, "tokens: prompt=%d completion=%d total=%d\n", usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
-}
-
-type lineApprover struct {
-	reader *bufio.Reader
-	stderr io.Writer
-}
-
-func newLineApprover(reader *bufio.Reader, stderr io.Writer) agent.Approver {
-	return lineApprover{reader: reader, stderr: stderr}
-}
-
-func (a lineApprover) Approve(ctx context.Context, req agent.ApprovalRequest) (agent.ApprovalDecision, error) {
-	fmt.Fprintf(a.stderr, "\nApprove tool call: %s\n", req.ToolName)
-	if req.Summary != "" {
-		fmt.Fprintf(a.stderr, "%s\n", req.Summary)
-	}
-	if req.Details != "" {
-		fmt.Fprintf(a.stderr, "%s\n", req.Details)
-	}
-	fmt.Fprint(a.stderr, "Approve? [y/N] ")
-	answer, err := a.reader.ReadString('\n')
-	if err != nil && err != io.EOF {
-		return agent.ApprovalDecision{}, err
-	}
-	answer = strings.ToLower(strings.TrimSpace(answer))
-	return agent.ApprovalDecision{Allow: answer == "y" || answer == "yes"}, nil
-}
-
-func promptApprover(args cli.Args, stdin io.Reader, stderr io.Writer) agent.Approver {
-	if args.Approval != "on-request" {
-		return nil
-	}
-	return newLineApprover(bufio.NewReader(stdin), stderr)
-}
-
-func interactiveApprover(args cli.Args, reader *bufio.Reader, stderr io.Writer, terminal bool) agent.Approver {
-	switch args.Approval {
-	case "never":
-		return nil
-	case "on-request":
-		return newLineApprover(reader, stderr)
-	case "auto":
-		if terminal {
-			return newLineApprover(reader, stderr)
-		}
-	}
-	return nil
 }
 
 func bothTerminals(stdin io.Reader, stdout io.Writer, isTerm func(any) bool) bool {
