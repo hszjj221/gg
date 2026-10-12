@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -293,7 +294,9 @@ func commandReadOnly(name string, args []string) bool {
 		return findReadOnly(args)
 	case "rg":
 		return rgReadOnly(args)
-	case "ls", "cat", "head", "tail", "wc", "pwd", "whoami", "id", "date",
+	case "date":
+		return dateReadOnly(args)
+	case "ls", "cat", "head", "tail", "wc", "pwd", "whoami", "id",
 		"uname", "file", "stat", "du", "df", "echo", "printf", "true", "false",
 		"which", "basename", "dirname", "realpath", "readlink", "hostname",
 		"printenv", "grep", "egrep", "fgrep":
@@ -303,21 +306,89 @@ func commandReadOnly(name string, args []string) bool {
 	}
 }
 
+// dateReadOnly allows formatting and parsing. Setting the clock
+// (date -s, date --set, or a positional timestamp) stays approval-gated.
+func dateReadOnly(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			for _, rest := range args[i+1:] {
+				if !strings.HasPrefix(rest, "+") {
+					return false
+				}
+			}
+			return true
+		}
+		if a == "-s" || a == "--set" || strings.HasPrefix(a, "--set=") {
+			return false
+		}
+		if a == "--date" {
+			if i+1 >= len(args) {
+				return false
+			}
+			i++
+			continue
+		}
+		if strings.HasPrefix(a, "--date=") || strings.HasPrefix(a, "--") {
+			continue
+		}
+		if strings.HasPrefix(a, "-") && len(a) > 1 {
+			flags := a[1:]
+			if strings.Contains(flags, "s") {
+				return false
+			}
+			if !consumeDateArg(flags, args, &i, "d") || !consumeDateArg(flags, args, &i, "r") || !consumeDateArg(flags, args, &i, "f") {
+				return false
+			}
+			continue
+		}
+		if strings.HasPrefix(a, "+") {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// consumeDateArg skips the argument of a short flag when that flag is present.
+// An attached argument (-dSTRING) needs nothing further. A missing argument fails closed.
+func consumeDateArg(flags string, args []string, i *int, flag string) bool {
+	idx := strings.Index(flags, flag)
+	if idx < 0 {
+		return true
+	}
+	if idx < len(flags)-1 {
+		return true
+	}
+	if *i+1 >= len(args) {
+		return false
+	}
+	*i++
+	return true
+}
+
 func gitReadOnly(args []string) bool {
 	i := 0
 	for i < len(args) {
 		a := args[i]
 		switch a {
-		case "-C", "--git-dir", "--work-tree", "-c":
+		case "-C", "--git-dir", "--work-tree":
 			if i+1 >= len(args) {
 				return false
 			}
 			i += 2
 			continue
+		case "-c", "--config-env":
+			// core.fsmonitor and other config values can be hook commands.
+			// -c after the subcommand is a diff option and is handled below.
+			return false
 		case "--no-pager", "--paginate", "--bare", "-P":
 			i++
 			continue
 		default:
+			if strings.HasPrefix(a, "--config-env=") {
+				return false
+			}
 			if strings.HasPrefix(a, "-") {
 				return false
 			}
@@ -331,6 +402,10 @@ func gitReadOnly(args []string) bool {
 	case "status", "diff", "log", "show":
 		for _, a := range args[i+1:] {
 			if a == "--output" || a == "-o" || strings.HasPrefix(a, "--output=") {
+				return false
+			}
+			// These diff options run an external program.
+			if a == "--ext-diff" || a == "--textconv" {
 				return false
 			}
 		}
@@ -348,7 +423,7 @@ func goReadOnly(args []string) bool {
 	case "version":
 		return true
 	case "list":
-		return true
+		return goListReadOnly(args[1:])
 	case "env":
 		for _, a := range args[1:] {
 			if a == "-w" || a == "-u" || strings.Contains(a, "=") {
@@ -359,6 +434,34 @@ func goReadOnly(args []string) bool {
 	default:
 		return false
 	}
+}
+
+// goListReadOnly is true only for an explicit non-mutating module mode.
+// go list -mod=mod may download modules and rewrite go.mod and go.sum.
+// The last -mod value wins, matching the go command.
+func goListReadOnly(args []string) bool {
+	mod := ""
+	saw := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			break
+		}
+		if a == "-mod" {
+			if i+1 >= len(args) {
+				return false
+			}
+			i++
+			mod = args[i]
+			saw = true
+			continue
+		}
+		if strings.HasPrefix(a, "-mod=") {
+			mod = strings.TrimPrefix(a, "-mod=")
+			saw = true
+		}
+	}
+	return saw && (mod == "readonly" || mod == "vendor")
 }
 
 func findReadOnly(args []string) bool {
@@ -503,26 +606,99 @@ func outsideCWD(target, cwd string) bool {
 	if strings.HasPrefix(target, "~") || strings.HasPrefix(target, "$HOME") || strings.HasPrefix(target, "${HOME}") {
 		return true
 	}
-	cwdClean := filepath.Clean(cwd)
-	var abs string
-	if strings.HasPrefix(target, "/") {
-		abs = filepath.Clean(target)
-	} else {
-		abs = filepath.Clean(filepath.Join(cwdClean, target))
-	}
-	if abs == cwdClean {
-		return false
-	}
-	sep := string(filepath.Separator)
-	// Absolute POSIX targets keep slash even when the host separator differs.
-	if strings.HasPrefix(abs, cwdClean+"/") || strings.HasPrefix(abs, cwdClean+sep) {
-		return false
-	}
-	rel, err := filepath.Rel(cwdClean, abs)
-	if err != nil {
+	resolvedTarget, ok := resolveCommandPath(cwd, target)
+	if !ok {
 		return true
 	}
-	return rel == ".." || strings.HasPrefix(rel, ".."+sep) || strings.HasPrefix(rel, "../")
+	resolvedCWD, ok := resolveCommandPath("/", cwd)
+	if !ok {
+		return true
+	}
+	return !pathInside(resolvedCWD, resolvedTarget)
+}
+
+// resolveCommandPath joins target onto base and walks each component.
+// ".." is applied only after earlier symlinks are resolved, and a missing
+// suffix stays on that resolved parent. A path that cannot be resolved
+// fails closed.
+func resolveCommandPath(base, target string) (string, bool) {
+	if !strings.HasPrefix(target, "/") {
+		if strings.HasPrefix(base, "/") {
+			base = strings.TrimRight(base, "/")
+			if base == "" {
+				base = "/"
+			}
+			target = base + "/" + target
+		} else {
+			target = filepath.Join(base, target)
+		}
+	}
+	return walkCommandPath(target)
+}
+
+func walkCommandPath(p string) (string, bool) {
+	parts := strings.Split(p, "/")
+	resolved := "/"
+	for i := 0; i < len(parts); i++ {
+		part := parts[i]
+		if part == "" || part == "." {
+			continue
+		}
+		if part == ".." {
+			if resolved != "/" {
+				resolved = filepath.Dir(resolved)
+			}
+			continue
+		}
+		next := "/" + part
+		if resolved != "/" {
+			next = resolved + "/" + part
+		}
+		info, err := os.Lstat(next)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return "", false
+			}
+			for _, r := range parts[i:] {
+				if r == "" || r == "." {
+					continue
+				}
+				if r == ".." {
+					if resolved != "/" {
+						resolved = filepath.Dir(resolved)
+					}
+					continue
+				}
+				if resolved == "/" {
+					resolved = "/" + r
+				} else {
+					resolved = resolved + "/" + r
+				}
+			}
+			return resolved, true
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			dest, err := filepath.EvalSymlinks(next)
+			if err != nil || !strings.HasPrefix(dest, "/") {
+				return "", false
+			}
+			resolved = filepath.Clean(dest)
+			continue
+		}
+		resolved = next
+	}
+	return resolved, true
+}
+
+func pathInside(parent, child string) bool {
+	if parent == "/" {
+		return strings.HasPrefix(child, "/")
+	}
+	if child == parent {
+		return true
+	}
+	sep := string(filepath.Separator)
+	return strings.HasPrefix(child, parent+"/") || strings.HasPrefix(child, parent+sep)
 }
 
 func isHarmlessDevice(p string) bool {
@@ -575,12 +751,18 @@ func commandBase(segment string) string {
 	if !ok {
 		return ""
 	}
-	words = stripAssignments(words)
+	return commandName(stripAssignments(words))
+}
+
+// commandName is the program a segment runs. sudo, doas, command, and env
+// are unwrapped so `curl … | env sh` is still a pipe into a shell.
+func commandName(words []string) string {
 	if len(words) == 0 {
 		return ""
 	}
 	name := filepath.Base(words[0])
-	if name == "sudo" || name == "doas" || name == "command" {
+	switch name {
+	case "sudo", "doas", "command":
 		rest := words[1:]
 		for len(rest) > 0 && strings.HasPrefix(rest[0], "-") {
 			rest = rest[1:]
@@ -588,9 +770,16 @@ func commandBase(segment string) string {
 		if len(rest) == 0 {
 			return name
 		}
-		return filepath.Base(rest[0])
+		return commandName(rest)
+	case "env":
+		rest, ok := stripEnvFlags(words[1:])
+		if !ok || len(rest) == 0 {
+			return name
+		}
+		return commandName(rest)
+	default:
+		return name
 	}
-	return name
 }
 
 func stripAssignments(words []string) []string {
@@ -656,35 +845,126 @@ func stripEnvFlags(args []string) ([]string, bool) {
 
 func extractSubstitutions(s string) []string {
 	var out []string
+	quote := byte(0)
+	escaped := false
 	for i := 0; i < len(s); i++ {
-		if s[i] == '`' {
-			j := strings.IndexByte(s[i+1:], '`')
-			if j < 0 {
+		c := s[i]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if quote == '"' && c == '\\' {
+				escaped = true
+				continue
+			}
+			if c == quote {
+				quote = 0
+				continue
+			}
+			// Single quotes suppress expansion. Double quotes do not.
+			if quote != '"' {
+				continue
+			}
+		} else {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if c == '\\' {
+				escaped = true
+				continue
+			}
+			if c == '\'' || c == '"' {
+				quote = c
+				continue
+			}
+		}
+		if c == '`' {
+			body, end, ok := scanBacktick(s, i)
+			if !ok {
 				return out
 			}
-			out = append(out, s[i+1:i+1+j])
-			i += 1 + j
+			out = append(out, body)
+			i = end
 			continue
 		}
-		if s[i] == '$' && i+1 < len(s) && s[i+1] == '(' {
-			depth := 1
-			j := i + 2
-			for j < len(s) && depth > 0 {
-				if s[j] == '(' {
-					depth++
-				} else if s[j] == ')' {
-					depth--
-				}
-				j++
-			}
-			if depth != 0 {
+		if c == '$' && i+1 < len(s) && s[i+1] == '(' {
+			body, end, ok := scanDollarParen(s, i)
+			if !ok {
 				return out
 			}
-			out = append(out, s[i+2:j-1])
-			i = j - 1
+			out = append(out, body)
+			i = end
 		}
 	}
 	return out
+}
+
+func scanBacktick(s string, start int) (body string, end int, ok bool) {
+	escaped := false
+	for j := start + 1; j < len(s); j++ {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if s[j] == '\\' {
+			escaped = true
+			continue
+		}
+		if s[j] == '`' {
+			return s[start+1 : j], j, true
+		}
+	}
+	return "", 0, false
+}
+
+// scanDollarParen reads a $(...) body. Quotes and escapes inside the
+// substitution are tracked so a quoted ")" does not close it early.
+func scanDollarParen(s string, dollar int) (body string, end int, ok bool) {
+	quote := byte(0)
+	escaped := false
+	depth := 1
+	for j := dollar + 2; j < len(s); j++ {
+		c := s[j]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if quote == '"' && c == '\\' {
+				escaped = true
+				continue
+			}
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		if c == '\'' || c == '"' {
+			quote = c
+			continue
+		}
+		if c == '(' {
+			depth++
+			continue
+		}
+		if c == ')' {
+			depth--
+			if depth == 0 {
+				return s[dollar+2 : j], j, true
+			}
+		}
+	}
+	return "", 0, false
 }
 
 // parseSimpleCommand tokenizes one pipeline segment. redirects are output

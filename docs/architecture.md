@@ -246,17 +246,17 @@ The Web and desktop clients keep the daemon's `runApprover`: the UI asks, and a 
 
 `tools.ClassifyCommand` labels each `bash` command before the approver runs. The label and the reason are fields on `agent.ApprovalRequest` (`risk`, `riskReason`) and are included in the approval details.
 
-- **Read-only** (`ls`, `cat`, `head`, `tail`, `grep`, `rg`, `find` without `-exec`/`-delete`, `git status`/`diff`/`log`/`show`, `go version`/`env`/`list`, and a short allowlist of other inspection commands). No prompt.
-- **Dangerous**. `rm -rf` of `/`, `/*`, `~`, `$HOME`, `/home`, `/Users`, or `/root`; `rm` and other writes (`>`, `cp`/`mv`/`tee`/`chmod`/`chown`, …) that resolve outside the working directory; `curl`/`wget`/`fetch` piped into a shell; `sudo`/`doas`/`pkexec`/`su`; disk and format tools (`mkfs`, `fdisk`, `dd of=/dev/…`, `diskutil`, …); power commands (`shutdown`, `reboot`, …). The reason is shown on the approval request. These are not waived by `--yolo` or by a job's `--allow-all`.
+- **Read-only** (`ls`, `cat`, `head`, `tail`, `grep`, `rg`, `find` without `-exec`/`-delete`, `git status`/`diff`/`log`/`show` without a leading `-c`/`--config-env` and without `--ext-diff`/`--textconv`, `go version`/`env`, `go list` only with `-mod=readonly` or `-mod=vendor`, `date` only when it formats or parses a time, and a short allowlist of other inspection commands). No prompt. `git -c` is not read-only: a `core.fsmonitor` value is a hook command. `go list -mod=mod` and an unconstrained `go list` are not read-only. `date -s`, `date --set`, and a positional timestamp set the clock and are not read-only.
+- **Dangerous**. `rm -rf` of `/`, `/*`, `~`, `$HOME`, `/home`, `/Users`, or `/root`; `rm` and other writes (`>`, `cp`/`mv`/`tee`/`chmod`/`chown`, …) that resolve outside the working directory; `curl`/`wget`/`fetch` piped into a shell, including through `env` (`curl … | env sh`); `sudo`/`doas`/`pkexec`/`su`; disk and format tools (`mkfs`, `fdisk`, `dd of=/dev/…`, `diskutil`, …); power commands (`shutdown`, `reboot`, …). The reason is shown on the approval request. These are not waived by `--yolo` or by a job's `--allow-all`. A write path is resolved through the nearest existing directory, symlinks included, before it is compared with the working directory.
 - **Everything else** (tests, builds, ordinary edits, `rm` inside the working directory) keeps the mode's normal policy.
 
-Chains (`&&`, `||`, `|`, `;`) are classified per segment. A download piped into a shell is dangerous even when each segment would otherwise look ordinary. `$(...)` and backticks are classified too, so `echo $(rm -rf /)` is dangerous. `bash -c` and `eval` re-enter the classifier on their script text.
+Chains (`&&`, `||`, `|`, `;`) are classified per segment. A download piped into a shell is dangerous even when each segment would otherwise look ordinary. `$(...)` and backticks are classified with quote and escape state, so `echo "$(printf ')'; rm -rf /)"` is dangerous and a single-quoted `'$(rm -rf /)'` is not executed. `bash -c` and `eval` re-enter the classifier on their script text.
 
 ### Sandbox
 
 `--sandbox` is off by default. When it is set, `bash` tries to run inside an OS helper:
 
-- Linux: `bwrap`, with the filesystem read-only except the working directory, a fresh tmpfs on `/tmp`, and `--die-with-parent`.
+- Linux: `bwrap`, with the filesystem read-only except the working directory, a fresh tmpfs on `/tmp`, and `--die-with-parent`. The tmpfs is mounted before the working directory is bound, so a workspace under `/tmp` stays visible.
 - macOS: `sandbox-exec`, denying file writes except the working directory, `/tmp`, and the per-user temporary directory.
 - Anywhere else, or when the helper is not on `PATH` or cannot start (user namespaces off, seatbelt denied): the command runs as usual and its output says the sandbox was unavailable.
 

@@ -211,17 +211,17 @@ Web 和桌面客户端继续用 daemon 的 `runApprover`：界面上询问，没
 
 `tools.ClassifyCommand` 在 approver 之前给每条 `bash` 命令打标签。标签和原因写在 `agent.ApprovalRequest` 的 `risk`、`riskReason` 上，并出现在审批详情里。
 
-- **只读**（`ls`、`cat`、`head`、`tail`、`grep`、`rg`、不带 `-exec`/`-delete` 的 `find`、`git status`/`diff`/`log`/`show`、`go version`/`env`/`list`，以及一小份其他查看类命令）。不询问。
-- **危险**。`rm -rf` 指向 `/`、`/*`、`~`、`$HOME`、`/home`、`/Users` 或 `/root`；`rm` 以及其他写到工作目录之外的操作（`>`、`cp`/`mv`/`tee`/`chmod`/`chown` 等）；`curl`/`wget`/`fetch` 管道进 shell；`sudo`/`doas`/`pkexec`/`su`；磁盘和格式化工具（`mkfs`、`fdisk`、`dd of=/dev/…`、`diskutil` 等）；电源命令（`shutdown`、`reboot` 等）。原因显示在审批请求里。`--yolo` 和任务的 `--allow-all` 都不能跳过。
+- **只读**（`ls`、`cat`、`head`、`tail`、`grep`、`rg`、不带 `-exec`/`-delete` 的 `find`、不带前置 `-c`/`--config-env` 且不带 `--ext-diff`/`--textconv` 的 `git status`/`diff`/`log`/`show`、`go version`/`env`、仅 `-mod=readonly` 或 `-mod=vendor` 的 `go list`、只做格式化或解析的 `date`，以及一小份其他查看类命令）。不询问。`git -c` 不是只读：`core.fsmonitor` 的值可以是 hook 命令。`go list -mod=mod` 和未约束的 `go list` 不是只读。`date -s`、`date --set` 和位置参数形式的时间戳会改系统时钟，不是只读。
+- **危险**。`rm -rf` 指向 `/`、`/*`、`~`、`$HOME`、`/home`、`/Users` 或 `/root`；`rm` 以及其他写到工作目录之外的操作（`>`、`cp`/`mv`/`tee`/`chmod`/`chown` 等）；`curl`/`wget`/`fetch` 管道进 shell，包括经过 `env`（`curl … | env sh`）；`sudo`/`doas`/`pkexec`/`su`；磁盘和格式化工具（`mkfs`、`fdisk`、`dd of=/dev/…`、`diskutil` 等）；电源命令（`shutdown`、`reboot` 等）。原因显示在审批请求里。`--yolo` 和任务的 `--allow-all` 都不能跳过。写入路径会先沿着最近的已存在目录解析（含符号链接），再和工作目录比较。
 - **其余命令**（测试、构建、普通编辑、工作目录内的 `rm`）走该模式的普通策略。
 
-`&&`、`||`、`|`、`;` 按段分类。下载内容管道进 shell 算危险，即使每一段单独看都普通。`$(...)` 和反引号也会再分类，所以 `echo $(rm -rf /)` 是危险的。`bash -c` 和 `eval` 会把脚本文本重新送进分类器。
+`&&`、`||`、`|`、`;` 按段分类。下载内容管道进 shell 算危险，即使每一段单独看都普通。`$(...)` 和反引号会按引号和转义再分类，所以 `echo "$(printf ')'; rm -rf /)"` 是危险的，而单引号里的 `'$(rm -rf /)'` 不会执行。`bash -c` 和 `eval` 会把脚本文本重新送进分类器。
 
 ### 沙箱
 
 `--sandbox` 默认关闭。打开后，`bash` 会尝试放进操作系统提供的 helper：
 
-- Linux：`bwrap`。文件系统只读，工作目录可写，`/tmp` 是新的 tmpfs，并带 `--die-with-parent`。
+- Linux：`bwrap`。文件系统只读，工作目录可写，`/tmp` 是新的 tmpfs，并带 `--die-with-parent`。tmpfs 挂在绑定工作目录之前，所以位于 `/tmp` 下的工作区仍然可见。
 - macOS：`sandbox-exec`。禁止写文件，但允许工作目录、`/tmp` 和用户临时目录。
 - 其他平台，或 helper 不在 `PATH` 里、或起不来（用户命名空间关闭、seatbelt 被拒）：命令照常执行，输出里会说明沙箱不可用。
 

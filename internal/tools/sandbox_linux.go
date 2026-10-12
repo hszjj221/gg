@@ -47,16 +47,18 @@ func wrapOSSandbox(ctx context.Context, cmd *exec.Cmd, cwd string) (*exec.Cmd, e
 }
 
 // linuxBwrapArgs builds a bubblewrap invocation that can read the system
-// and write only inside cwd. /tmp is a fresh tmpfs, so host /tmp is hidden.
+// and write only inside cwd. /tmp is a fresh tmpfs. The tmpfs is mounted
+// before cwd is bound: bubblewrap applies mounts in argument order, and a
+// later --tmpfs /tmp would hide a workspace that lives under /tmp.
 // Network is left shared: this is a filesystem-write sandbox, not a net jail.
 func linuxBwrapArgs(cwd, shell, script string) []string {
 	args := []string{
 		"--die-with-parent",
 		"--ro-bind", "/", "/",
+		"--tmpfs", "/tmp",
 		"--bind", cwd, cwd,
 		"--dev", "/dev",
 		"--proc", "/proc",
-		"--tmpfs", "/tmp",
 		"--chdir", cwd,
 		"--",
 		shell, "-c", script,
