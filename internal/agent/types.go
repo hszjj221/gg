@@ -145,10 +145,30 @@ type ApprovalRequest struct {
 	// PreApprovedReason is a short human-readable reason for the
 	// pre-approval, e.g. "agent area". Kept visible for transparency.
 	PreApprovedReason string `json:"preApprovedReason,omitempty"`
+	// Risk is an optional classification from the tool.
+	// ApprovalRiskReadOnly may run without a prompt.
+	// ApprovalRiskDangerous always needs a human when one can be asked,
+	// and is denied when nobody can answer — including under --yolo.
+	// Empty means the ordinary approval policy for that tool.
+	Risk string `json:"risk,omitempty"`
+	// RiskReason explains Risk. Approvers show it with the request.
+	RiskReason string `json:"riskReason,omitempty"`
 }
+
+const (
+	// ApprovalRiskReadOnly marks a call the policy may run without a prompt,
+	// such as a clearly read-only shell command.
+	ApprovalRiskReadOnly = "readonly"
+	// ApprovalRiskDangerous marks a call that must not be auto-approved.
+	// Interactive sessions still ask; --yolo and unattended allow-all deny it.
+	ApprovalRiskDangerous = "dangerous"
+)
 
 type ApprovalDecision struct {
 	Allow bool `json:"allow"`
+	// Reason, when set on a denial, is the tool error shown to the model
+	// and the user. Empty keeps the generic "denied by user" message.
+	Reason string `json:"reason,omitempty"`
 }
 
 type Approver interface {

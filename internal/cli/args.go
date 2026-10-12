@@ -20,6 +20,8 @@ type Args struct {
 	NoMemory       bool
 	NoContextFiles bool
 	Approval       string
+	Yolo           bool
+	Sandbox        bool
 	APIKey         string
 	BaseURL        string
 	Model          string
@@ -92,7 +94,9 @@ func Parse(argv []string) (Args, error) {
 	fs.BoolVar(&args.NoSkills, "no-skills", false, "disable .agents/skills discovery")
 	fs.BoolVar(&args.NoMemory, "no-memory", false, "disable memory (~/.gg/memory/)")
 	fs.BoolVar(&args.NoContextFiles, "no-context-files", false, "disable AGENTS.md discovery")
-	fs.StringVar(&args.Approval, "approval", "auto", "tool approval mode: auto, never, or on-request")
+	fs.StringVar(&args.Approval, "approval", "auto", "tool approval mode: auto, never, on-request, or yolo")
+	fs.BoolVar(&args.Yolo, "yolo", false, "allow approval-gated tools without prompting (dangerous shell commands still need a terminal)")
+	fs.BoolVar(&args.Sandbox, "sandbox", false, "run bash inside an OS sandbox when a helper is available")
 	fs.StringVar(&args.APIKey, "api-key", "", "API key")
 	fs.StringVar(&args.BaseURL, "base-url", "", "OpenAI-compatible base URL")
 	fs.StringVar(&args.Model, "model", "", "model selection as provider:model")
@@ -113,15 +117,35 @@ func Parse(argv []string) (Args, error) {
 	if err := validateApproval(args.Approval); err != nil {
 		return Args{}, err
 	}
+	if err := applyYolo(&args); err != nil {
+		return Args{}, err
+	}
 	return args, nil
 }
 
 func validateApproval(mode string) error {
 	switch mode {
-	case "auto", "never", "on-request":
+	case "auto", "never", "on-request", "yolo":
 		return nil
 	default:
-		return fmt.Errorf("approval must be one of: auto, never, on-request")
+		return fmt.Errorf("approval must be one of: auto, never, on-request, yolo")
+	}
+}
+
+// applyYolo turns --yolo into the yolo approval mode. It is the explicit
+// opt-in for running approval-gated tools without a prompt. Combining it
+// with a mode that means something else is rejected so the flag cannot
+// silently change on-request or never.
+func applyYolo(args *Args) error {
+	if !args.Yolo {
+		return nil
+	}
+	switch args.Approval {
+	case "auto", "yolo":
+		args.Approval = "yolo"
+		return nil
+	default:
+		return fmt.Errorf("--yolo cannot be combined with --approval %s", args.Approval)
 	}
 }
 
@@ -401,7 +425,9 @@ Options:
   --no-skills              disable .agents/skills discovery
   --no-memory              disable memory (~/.gg/memory/)
   --no-context-files       disable AGENTS.md discovery
-  --approval <mode>        tool approval mode: auto, never, on-request (default: auto)
+  --approval <mode>        tool approval mode: auto, never, on-request, or yolo (default: auto)
+  --yolo                   allow approval-gated tools without prompting (same as --approval yolo)
+  --sandbox                run bash in an OS sandbox when bubblewrap or sandbox-exec is available
   -h, --help               show help
   -v, --version            show version
 

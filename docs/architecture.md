@@ -79,7 +79,7 @@ System prompt assembly order (after the coding instructions): user profile, cura
 1. **Store**: `~/.gg/scheduler/jobs.json` (definitions, written atomically via rename) and `runs.jsonl` (append-only run log, one JSON object per line). All `jobs.json` read-modify-write cycles are serialized with an `flock` on `jobs.lock` (Linux/macOS only), so the CLI and the daemon can edit jobs concurrently. Pure reads use `View` and never rewrite the file. State files are owner-only (`0600`, directory `0700`), matching session and memory persistence.
 2. **Loop**: the daemon runs `Scheduler.Run(ctx)` in the background (`ggd --no-scheduler` disables it). The wait for the next firing is capped at 30s so jobs added or resumed by the CLI while the loop sleeps are picked up promptly. Each tick advances a due job's persisted `NextRun` before dispatching its goroutine, so a long run can never make the loop spin on the same firing; a firing that arrives while the previous run is still in flight is recorded once as "skipped" and its `NextRun` advanced as well. A per-job in-memory guard still prevents overlapping executions. Transient store errors — including a failed startup reconciliation — are reported to the daemon's stderr and retried instead of killing the loop.
 3. **Execution**: every firing runs one agent turn in a fresh session (`scheduler/<name>-<timestamp>`) via `app.Runtime.StartTurnWithApprover`, so runs are auditable and resumable. The job's `Timeout` (default 10m) bounds the turn. A job records the workspace directory it was created from; the daemon only fires jobs whose workspace matches its own (jobs created before workspace tracking, with an empty value, fire anywhere).
-4. **Approval policy**: `scheduler.UnattendedApprover` denies every approval-gated tool by default; a job created with `--allow-all` opts in. This is injected explicitly — the scheduler never relies on a nil approver, which the runner would treat as "allow everything".
+4. **Approval policy**: `scheduler.UnattendedApprover` denies every approval-gated tool by default; a job created with `--allow-all` opts in. Dangerous shell commands are denied even with `--allow-all`. This is injected explicitly — the scheduler never relies on a nil approver, which the runner would treat as "allow everything".
 5. **Restart semantics**: cron jobs are rescheduled from the current time (missed firings are not caught up); a past-due once job that never ran fires once on daemon startup. The daemon writes `~/.gg/ggd.pid` so `gg job add` can warn when no daemon is alive to fire jobs.
 
 ## Daemon channels and supervision
@@ -222,6 +222,55 @@ The three layers, from most to least trusted:
 **Deliberate decision — browser navigation is approval-gated.** `browser_navigate` requires user approval: the URL shown in the approval prompt is checked against the SSRF guard (which rejects cloud metadata, localhost, intranet targets) before Chromium ever connects, and the user confirms the exact destination. This was tightened because the SSRF guard only inspects the *initial* URL — Chromium follows redirects and page subresources on its own, so an initial-URL check alone cannot keep navigation off internal targets. `browser_read` and `browser_screenshot` stay exempt: they operate on the page the user already approved and cannot trigger new navigation. Residual risks: (1) post-approval redirects can still reach internal hosts (Chromium follows them without re-check); (2) in-context data can be exfiltrated by embedding it in a fetched URL — accepted, since secrets should not sit in the agent's context unprotected. Approval-gating only the navigation (not every read) keeps autonomous research usable: one approval opens the page, subsequent reads are free.
 
 `app.ToolCapabilities()` derives the advertised set from the registry, so clients never see a capability whose tools cannot be built.
+
+## Security model
+
+Tool use runs as the user. Approval is the gate for writes and other side effects; a nil approver in the agent runner still means "allow", so every caller that can run tools passes an approver on purpose. The CLI no longer uses a nil approver for `--approval auto`.
+
+### Approval modes
+
+The CLI policy lives in `internal/cliapp`. It applies to one-shot prompts (`gg -p` and `gg <prompt>`) and to the line-based interactive mode.
+
+| Mode | Terminal | Other approval-gated tools | Dangerous `bash` |
+| --- | --- | --- | --- |
+| `auto` (default) | prompt | deny, with a message that explains `--yolo` and `--approval on-request` | deny |
+| `on-request` | prompt; the process exits if there is no terminal | same | prompt |
+| `yolo` (`--yolo` or `--approval yolo`) | allow without a prompt | allow without a prompt | prompt when a terminal can ask, otherwise deny |
+| `never` | allow without a prompt | allow without a prompt | deny (this mode never asks) |
+
+"Terminal" means stdin and stderr are both terminals, which is what the line prompt can actually use. Clearly read-only `bash` commands skip the prompt in every mode. `edit`, `write`, and the other approval-gated tools are not read-only. Writes into the workspace agent area (`.gg/agent/`) stay pre-approved, as before.
+
+The Web and desktop clients keep the daemon's `runApprover`: the UI asks, and a missing answer does not become an allow. Scheduled jobs use `scheduler.UnattendedApprover` (deny by default, `--allow-all` opts in, dangerous `bash` still denied).
+
+### Command classifier
+
+`tools.ClassifyCommand` labels each `bash` command before the approver runs. The label and the reason are fields on `agent.ApprovalRequest` (`risk`, `riskReason`) and are included in the approval details.
+
+- **Read-only** (`ls`, `cat`, `head`, `tail`, `grep`, `rg`, `find` without `-exec`/`-delete`, `git status`/`diff`/`log`/`show` without a leading `-c`/`--config-env` and without `--ext-diff`/`--textconv`, `go version`/`env`, `go list` only with `-mod=readonly` or `-mod=vendor`, `date` only when it formats or parses a time, and a short allowlist of other inspection commands). No prompt. `git -c` is not read-only: a `core.fsmonitor` value is a hook command. `go list -mod=mod` and an unconstrained `go list` are not read-only. `date -s`, `date --set`, and a positional timestamp set the clock and are not read-only.
+- **Dangerous**. `rm -rf` of `/`, `/*`, `~`, `$HOME`, `/home`, `/Users`, or `/root`; `rm` and other writes (`>`, `cp`/`mv`/`tee`/`chmod`/`chown`, …) that resolve outside the working directory; `curl`/`wget`/`fetch` piped into a shell, including through `env` (`curl … | env sh`); `sudo`/`doas`/`pkexec`/`su`; disk and format tools (`mkfs`, `fdisk`, `dd of=/dev/…`, `diskutil`, …); power commands (`shutdown`, `reboot`, …). The reason is shown on the approval request. These are not waived by `--yolo` or by a job's `--allow-all`. A write path is resolved through the nearest existing directory, symlinks included, before it is compared with the working directory.
+- **Everything else** (tests, builds, ordinary edits, `rm` inside the working directory) keeps the mode's normal policy.
+
+Chains (`&&`, `||`, `|`, `;`) are classified per segment. A download piped into a shell is dangerous even when each segment would otherwise look ordinary. `$(...)` and backticks are classified with quote and escape state, so `echo "$(printf ')'; rm -rf /)"` is dangerous and a single-quoted `'$(rm -rf /)'` is not executed. `bash -c` and `eval` re-enter the classifier on their script text.
+
+### Sandbox
+
+`--sandbox` is off by default. When it is set, `bash` tries to run inside an OS helper:
+
+- Linux: `bwrap`, with the filesystem read-only except the working directory, a fresh tmpfs on `/tmp`, and `--die-with-parent`. The tmpfs is mounted before the working directory is bound, so a workspace under `/tmp` stays visible.
+- macOS: `sandbox-exec`, denying file writes except the working directory, `/tmp`, and the per-user temporary directory.
+- Anywhere else, or when the helper is not on `PATH` or cannot start (user namespaces off, seatbelt denied): the command runs as usual and its output says the sandbox was unavailable.
+
+The probe runs once per process. Sandboxed commands use `shell -c` so a login profile that writes outside the working directory does not fail the sandbox. The network is not confined.
+
+### Known limitations
+
+- The classifier is not a shell. Aliases, encoded payloads, and interpreters (`python -c`, `perl -e`, `busybox`) can express the same effect without matching a pattern. Obfuscation is out of scope; the goal is to catch the obvious cases and to fail closed (ask, or deny) when a line cannot be treated as read-only.
+- Only `~` and `$HOME` / `${HOME}` are treated as the home directory. `rm -rf $DIR` is not known to be catastrophic.
+- The read-only allowlist is by program name. A different binary earlier on `PATH` would be trusted. The sandbox is the control that does not depend on that name.
+- `--yolo` and `--approval never` run ordinary writes and any shell command the classifier does not flag, as the user.
+- The sandbox does not block network access. On macOS, `/tmp` and the user temp dir stay writable. A helper that fails its probe degrades to no sandbox rather than refusing the command.
+- Windows has no sandbox helper.
+- Approving a prompt, passing `--yolo`, or creating a job with `--allow-all` runs the tool with the user's own privileges. Approval is a checkpoint, not a confinement boundary, except for the optional sandbox's filesystem-write limits.
 
 ## Quality gates
 

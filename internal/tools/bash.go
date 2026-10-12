@@ -17,6 +17,10 @@ import (
 
 type BashOptions struct {
 	DefaultTimeout time.Duration
+	// Sandbox, when set, runs the command inside an OS sandbox
+	// (bubblewrap on Linux, sandbox-exec on macOS). Missing or unusable
+	// helpers degrade: the command still runs, and the output says so.
+	Sandbox bool
 }
 
 type BashTool struct {
@@ -38,7 +42,7 @@ func (t BashTool) Name() string { return "bash" }
 func (t BashTool) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "bash",
-		Description: "Execute a shell command in the current working directory. Returns combined stdout and stderr.",
+		Description: "Execute a shell command in the current working directory. Returns combined stdout and stderr. Clearly read-only commands may run without a prompt. Dangerous commands (rm -rf of / or home, a download piped into a shell, sudo, disk format, writes outside the working directory) always require interactive approval.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -65,11 +69,18 @@ func (t BashTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, e
 	if input.Timeout > 0 {
 		timeout = time.Duration(input.Timeout) * time.Second
 	}
+	class := ClassifyCommand(input.Command, t.cwd)
+	details := fmt.Sprintf("command: %s\ncwd: %s\ntimeout: %s", input.Command, t.cwd, timeout)
+	if class.Reason != "" {
+		details = "risk: " + class.Reason + "\n" + details
+	}
 	return agent.ApprovalRequest{
-		ToolName:  "bash",
-		Summary:   "bash: " + input.Command,
-		Details:   fmt.Sprintf("command: %s\ncwd: %s\ntimeout: %s", input.Command, t.cwd, timeout),
-		Arguments: raw,
+		ToolName:   "bash",
+		Summary:    "bash: " + input.Command,
+		Details:    details,
+		Arguments:  raw,
+		Risk:       class.Risk,
+		RiskReason: class.Reason,
 	}, nil
 }
 
@@ -93,6 +104,12 @@ func (t BashTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {
 
 	cmd := newShellCommand(runCtx, input.Command)
 	cmd.Dir = t.cwd
+	sandboxNote := ""
+	if t.options.Sandbox {
+		var note string
+		cmd, note = maybeSandbox(runCtx, cmd, t.cwd)
+		sandboxNote = note
+	}
 	configureProcess(cmd)
 	outputDir := filepath.Join(t.cwd, ".gg", "outputs")
 	if err := os.MkdirAll(outputDir, 0o700); err != nil {
@@ -118,6 +135,7 @@ func (t BashTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {
 	} else {
 		_ = os.Remove(log.Name())
 	}
+	text = appendSandboxNote(text, sandboxNote)
 	if closeErr != nil {
 		return errorResult(closeErr)
 	}

@@ -180,7 +180,7 @@ func TestPreserveExecutedWorkAfterProviderFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
 	p := &failAfterWriteProvider{}
-	code := Run(context.Background(), []string{"--api-key", "test", "--no-skills", "--no-memory", "--session", path, "-p", "write a file"}, Options{CWD: dir, HomeDir: filepath.Join(dir, "home"), Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard, ProviderFactory: func(config.Config) agent.Provider { return p }})
+	code := Run(context.Background(), []string{"--api-key", "test", "--no-skills", "--no-memory", "--yolo", "--session", path, "-p", "write a file"}, Options{CWD: dir, HomeDir: filepath.Join(dir, "home"), Stdin: strings.NewReader(""), Stdout: io.Discard, Stderr: io.Discard, ProviderFactory: func(config.Config) agent.Provider { return p }})
 	if code != 1 {
 		t.Fatalf("expected simulated failure, exit=%d", code)
 	}

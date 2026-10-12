@@ -29,8 +29,20 @@ type UnattendedApprover struct {
 	AllowAll bool
 }
 
-// Approve implements agent.Approver.
+// Approve implements agent.Approver. Dangerous commands (see the bash
+// classifier) are denied even when the job opted into --allow-all, because
+// nothing is present to approve them.
 func (a UnattendedApprover) Approve(ctx context.Context, req agent.ApprovalRequest) (agent.ApprovalDecision, error) {
+	if req.Risk == agent.ApprovalRiskDangerous {
+		why := req.RiskReason
+		if why == "" {
+			why = "dangerous command"
+		}
+		return agent.ApprovalDecision{
+			Allow:  false,
+			Reason: fmt.Sprintf("tool call %q denied: %s. Dangerous commands are not run unattended, including with --allow-all.", req.ToolName, why),
+		}, nil
+	}
 	return agent.ApprovalDecision{Allow: a.AllowAll}, nil
 }
 

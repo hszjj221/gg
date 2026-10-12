@@ -175,6 +175,11 @@ type Config struct {
 	KBDir          string
 	CWD            string
 	NoContextFiles bool
+	// BashSandbox opts the bash tool into an OS sandbox (bubblewrap on
+	// Linux, sandbox-exec on macOS). Off by default. When the helper is
+	// missing or cannot start, the command still runs and the tool output
+	// says the sandbox was unavailable.
+	BashSandbox bool
 
 	apiKeyOverride  string
 	baseURLOverride string

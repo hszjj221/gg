@@ -78,7 +78,7 @@ CLI 与 Runtime 通过 `app.PublishArtifact` 共用版本校验和失败补偿�
 1. **存储**：`~/.gg/scheduler/jobs.json`（任务定义，rename 原子写）和 `runs.jsonl`（append-only 运行日志，每行一个 JSON）。所有 `jobs.json` 的读-改-写都用 `jobs.lock` 上的 `flock` 串行化（仅 Linux/macOS），CLI 和 daemon 可以并发改任务。纯读走 `View`，绝不重写文件。状态文件 owner-only（`0600`，目录 `0700`），和会话、记忆持久化一致。
 2. **循环**：daemon 在后台跑 `Scheduler.Run(ctx)`（`ggd --no-scheduler` 关掉）。等下一次触发的等待上限 30s，循环睡觉时 CLI 新增/恢复的任务能及时被捡起。每次 tick 先把到期任务的持久化 `NextRun` 往前推，再派发 goroutine，所以长任务不会让循环在同一次触发上打转；上一轮还没跑完又到触发时间的，记一次 "skipped" 并同样推进 `NextRun`。每个任务还有内存级 guard 防止重叠执行。瞬时的存储错误（包括启动时 reconcile 失败）报到 daemon 的 stderr 并重试，不杀循环。
 3. **执行**：每次触发在一个新会话（`scheduler/<name>-<timestamp>`）里跑一轮 agent，经 `app.Runtime.StartTurnWithApprover`，可审计、可恢复。任务的 `Timeout`（默认 10m）约束这一轮。任务记录创建时的工作区目录；daemon 只触发工作区和自己一致的任务（工作区跟踪之前建的任务，值为空，哪里都触发）。
-4. **审批策略**：`scheduler.UnattendedApprover` 默认拒绝所有走 approval 的工具；建任务时加 `--allow-all` 才放行。这里是显式注入——scheduler 绝不依赖 nil approver（runner 会把 nil 当"全放行"）。
+4. **审批策略**：`scheduler.UnattendedApprover` 默认拒绝所有走 approval 的工具；建任务时加 `--allow-all` 才放行。危险 shell 命令即使加了 `--allow-all` 也会被拒绝。这里是显式注入——scheduler 绝不依赖 nil approver（runner 会把 nil 当"全放行"）。
 5. **重启语义**：cron 任务从当前时间重新排（错过的触发不补）；从没跑过、已过期的单次任务在 daemon 启动时补跑一次。daemon 写 `~/.gg/ggd.pid`，没 daemon 活着时 `gg job add` 会警告。
 
 ## Daemon 通道与监管
@@ -187,6 +187,55 @@ Skills（`internal/skills`）是第三层扩展：markdown playbook，从项目 
 **有意的决策——browser 导航需要审批。**`browser_navigate` 需要用户审批：审批提示里展示的 URL 会先过 SSRF 防护（拒绝云元数据、localhost、内网等非公开目标），Chromium 建连前用户再确认一次确切目的地。收紧的原因是 SSRF 防护只检查*初始* URL——Chromium 会自己跟随重定向和页面子资源，光靠初始 URL 检查挡不住内网目标。`browser_read` 和 `browser_screenshot` 仍豁免：它们只操作用户已批准的页面，不会触发新的导航。残留风险：(1) 批准后的重定向仍可能打到内网（Chromium 跟随重定向时不再复查）；(2) 上下文里的数据可以拼进 URL 带出去——已接受，机密本来就不该不设防地躺在 agent 上下文里。只对导航（而不是每次读取）加审批，自主调研依然可用：一次审批打开页面，后续读取不再打扰。
 
 `app.ToolCapabilities()` 从注册表推导广告集合，客户端永远看不到建不出来的能力的工具。
+
+## 安全模型
+
+工具以当前用户的权限运行。写操作和其他副作用要过审批；agent runner 里 nil approver 仍然表示"放行"，所以每个会跑工具的调用方都显式传入 approver。CLI 的 `--approval auto` 不再使用 nil approver。
+
+### 审批模式
+
+CLI 策略在 `internal/cliapp`，覆盖一次性 prompt（`gg -p` 和 `gg <prompt>`）以及按行交互模式。
+
+| 模式 | 有终端 | 其他需要审批的工具 | 危险 `bash` |
+| --- | --- | --- | --- |
+| `auto`（默认） | 询问 | 拒绝，并说明可以用 `--yolo` 或 `--approval on-request` | 拒绝 |
+| `on-request` | 询问；没有终端时进程直接退出 | 同上 | 询问 |
+| `yolo`（`--yolo` 或 `--approval yolo`） | 不询问直接放行 | 不询问直接放行 | 有终端就询问，否则拒绝 |
+| `never` | 不询问直接放行 | 不询问直接放行 | 拒绝（这个模式从不询问） |
+
+"有终端"指 stdin 和 stderr 都是终端，行内提问实际用得到它们。明显只读的 `bash` 命令在所有模式下都不询问。`edit`、`write` 和其他需要审批的工具都不是只读。写到工作区 agent 目录（`.gg/agent/`）仍像以前一样预先放行。
+
+Web 和桌面客户端继续用 daemon 的 `runApprover`：界面上询问，没人回答不会变成放行。定时任务用 `scheduler.UnattendedApprover`（默认拒绝，`--allow-all` 才放行，危险 `bash` 仍然拒绝）。
+
+### 命令分类
+
+`tools.ClassifyCommand` 在 approver 之前给每条 `bash` 命令打标签。标签和原因写在 `agent.ApprovalRequest` 的 `risk`、`riskReason` 上，并出现在审批详情里。
+
+- **只读**（`ls`、`cat`、`head`、`tail`、`grep`、`rg`、不带 `-exec`/`-delete` 的 `find`、不带前置 `-c`/`--config-env` 且不带 `--ext-diff`/`--textconv` 的 `git status`/`diff`/`log`/`show`、`go version`/`env`、仅 `-mod=readonly` 或 `-mod=vendor` 的 `go list`、只做格式化或解析的 `date`，以及一小份其他查看类命令）。不询问。`git -c` 不是只读：`core.fsmonitor` 的值可以是 hook 命令。`go list -mod=mod` 和未约束的 `go list` 不是只读。`date -s`、`date --set` 和位置参数形式的时间戳会改系统时钟，不是只读。
+- **危险**。`rm -rf` 指向 `/`、`/*`、`~`、`$HOME`、`/home`、`/Users` 或 `/root`；`rm` 以及其他写到工作目录之外的操作（`>`、`cp`/`mv`/`tee`/`chmod`/`chown` 等）；`curl`/`wget`/`fetch` 管道进 shell，包括经过 `env`（`curl … | env sh`）；`sudo`/`doas`/`pkexec`/`su`；磁盘和格式化工具（`mkfs`、`fdisk`、`dd of=/dev/…`、`diskutil` 等）；电源命令（`shutdown`、`reboot` 等）。原因显示在审批请求里。`--yolo` 和任务的 `--allow-all` 都不能跳过。写入路径会先沿着最近的已存在目录解析（含符号链接），再和工作目录比较。
+- **其余命令**（测试、构建、普通编辑、工作目录内的 `rm`）走该模式的普通策略。
+
+`&&`、`||`、`|`、`;` 按段分类。下载内容管道进 shell 算危险，即使每一段单独看都普通。`$(...)` 和反引号会按引号和转义再分类，所以 `echo "$(printf ')'; rm -rf /)"` 是危险的，而单引号里的 `'$(rm -rf /)'` 不会执行。`bash -c` 和 `eval` 会把脚本文本重新送进分类器。
+
+### 沙箱
+
+`--sandbox` 默认关闭。打开后，`bash` 会尝试放进操作系统提供的 helper：
+
+- Linux：`bwrap`。文件系统只读，工作目录可写，`/tmp` 是新的 tmpfs，并带 `--die-with-parent`。tmpfs 挂在绑定工作目录之前，所以位于 `/tmp` 下的工作区仍然可见。
+- macOS：`sandbox-exec`。禁止写文件，但允许工作目录、`/tmp` 和用户临时目录。
+- 其他平台，或 helper 不在 `PATH` 里、或起不来（用户命名空间关闭、seatbelt 被拒）：命令照常执行，输出里会说明沙箱不可用。
+
+探测每个进程只做一次。沙箱里的命令用 `shell -c`，避免登录 profile 往工作目录外写文件而导致沙箱失败。网络不隔离。
+
+### 已知限制
+
+- 分类器不是 shell。别名、编码过的 payload，以及解释器（`python -c`、`perl -e`、`busybox`）可以做出同样的事而不命中模式。混淆不在范围内；目标是抓住明显的情况，并且在一行无法当成只读时失败关闭（询问或拒绝）。
+- 只有 `~` 和 `$HOME` / `${HOME}` 被当成家目录。`rm -rf $DIR` 不会被当成灾难性删除。
+- 只读名单按程序名匹配。`PATH` 里更靠前的同名二进制也会被信任。启用并且真正生效的沙箱不依赖这个名字。
+- `--yolo` 和 `--approval never` 会以用户身份运行普通写入，以及分类器没有标成危险的任何 shell 命令。
+- 沙箱不拦截网络。macOS 上 `/tmp` 和用户临时目录仍可写。helper 探测失败时降级为无沙箱，而不是拒绝命令。
+- Windows 没有沙箱 helper。
+- 在提示里批准、传入 `--yolo`，或给任务加 `--allow-all`，工具都以用户自己的权限运行。审批是检查点，不是隔离边界；可选沙箱只额外限制文件系统写入。
 
 ## 质量门禁
 

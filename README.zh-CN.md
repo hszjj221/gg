@@ -126,6 +126,7 @@ gg --usage -p "Summarize this repository"
 gg --no-skills -p "Run without local skills"
 gg --no-memory -p "Run without long-term memory"
 gg --approval on-request -p "Run tests and fix failures"
+gg --yolo -p "Run tests and fix failures"
 gg -p "/skill:ca review and commit my changes"
 gg -p "/memory add Prefer concise answers with file references."
 gg sessions list
@@ -138,16 +139,18 @@ gg --name "重构认证模块" -p "Review this module"
 交互模式：
 
 - 在终端中运行 `gg` 会启动按行交互模式（Ctrl+D 退出）。
-- 回复随生成随输出；`bash`、`edit`、`write` 运行前会行内提示确认。
+- 回复随生成随输出。在终端里，`bash`、`edit`、`write` 运行前会询问。不在终端里时，`--approval auto` 会拒绝这些工具，除非传入 `--yolo`。
 - 使用 `/name <名称>` 可交互修改会话名，`/name --clear` 清除。
 - 想要更丰富的可视化体验（会话树、文档、审批界面），请使用 Web 或桌面客户端。
 
 工具审批：
 
-- `--approval auto` 是默认值。交互模式会在运行 `bash`、`edit` 或 `write` 前询问；一次性 prompt 和非终端运行保持原来的非交互行为。
-- `--approval on-request` 会在这些工具运行前始终询问，并要求真实终端。
-- `--approval never` 会关闭审批提示。
-- 拒绝工具调用时，会把 tool error 返回给模型，模型可以解释原因或选择其他路径。
+- `--approval auto` 是默认值。在终端里，gg 会在 `bash`、`edit`、`write` 以及其他需要审批的工具运行前询问。一次性（`-p`）和其他非终端运行会拒绝这些工具，并说明如何放行。明显只读的 shell 命令（`ls`、`cat`、`grep`、`git status`、`git diff`、`git log`，以及一份短名单）不询问就运行。
+- `--approval on-request` 会在这些工具运行前始终询问，并要求真实终端。只读 shell 命令仍然不询问。
+- `--approval never` 不询问，需要审批的工具会直接运行。危险 shell 命令仍会被拒绝，因为这个模式从不询问。
+- `--approval yolo` 和 `--yolo` 允许需要审批的工具不询问就运行。有终端时，危险 shell 命令仍要交互确认；没有终端时会被拒绝。
+- `--sandbox`（默认关闭）在 Linux 上用 bubblewrap、在 macOS 上用 `sandbox-exec` 运行 `bash`。helper 缺失或无法启动时，命令仍会执行，输出里会说明沙箱不可用。
+- 拒绝工具调用时，会把 tool error 返回给模型，模型可以解释原因或选择其他路径。同一套规则见[安全模型](docs/architecture.zh-CN.md#安全模型)。
 
 Provider/model 配置：
 
@@ -396,7 +399,7 @@ go fmt ./...
 
 ## Security
 
-当模型使用内置工具时，`gg` 可以执行 shell 命令并编辑文件。请只在你愿意授予这些能力的工作区中运行它。
+当模型使用内置工具时，`gg` 可以执行 shell 命令并编辑文件。请只在你愿意授予这些能力的工作区中运行它。不在终端里时，`--approval auto` 会拒绝 `bash`、`edit` 和 `write`，除非传入 `--yolo`。详见[安全模型](docs/architecture.zh-CN.md#安全模型)。
 
 `~/.gg/config.json` 可能包含明文 API key。不要把它提交到仓库，也不要放进不受控的备份。
 
