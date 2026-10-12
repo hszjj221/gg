@@ -11,14 +11,34 @@ function fitMermaid() {
   }
 }
 
+function revealHash() {
+  const raw = window.location.hash.slice(1);
+  if (!raw) return;
+  let id = raw;
+  try {
+    id = decodeURIComponent(raw);
+  } catch {
+    return;
+  }
+  const target = document.getElementById(id);
+  if (target) target.scrollIntoView();
+}
+
 export default {
   extends: DefaultTheme,
   enhanceApp({ router }) {
     if (typeof window === "undefined") return;
     const run = () => {
       fitMermaid();
-      window.setTimeout(fitMermaid, 80);
-      window.setTimeout(fitMermaid, 500);
+      revealHash();
+      window.setTimeout(() => {
+        fitMermaid();
+        revealHash();
+      }, 80);
+      window.setTimeout(() => {
+        fitMermaid();
+        revealHash();
+      }, 500);
     };
     const previous = router.onAfterRouteChanged;
     router.onAfterRouteChanged = (to) => {
