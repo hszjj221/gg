@@ -4,411 +4,122 @@
 
 English | [简体中文](README.zh-CN.md)
 
-`gg` is an open-source personal AI agent written in Go — a Muse-like assistant that lives in your terminal, browser, and messenger. It talks to OpenAI-compatible chat completion APIs, persists JSONL sessions, remembers who you are, and gives the model tools for coding, memory, scheduled jobs, third-party services, web browsing, and media.
-
-## Features
-
-- OpenAI-compatible streaming provider with tool calling
-- Automatic retry for transient model call failures
-- Named JSONL sessions with list, search, and resume flows
-- Incremental session persistence and interruption recovery
-- Steering and follow-up messages while the agent works
-- Project instructions from `AGENTS.md`
-- Optional token usage reporting with `--usage`
-- Codex-style local skills from `.agents/skills`
-- Personal profile and memory from `~/.gg/` (`gg init` scaffolds it)
-- Built-in coding tools: `read`, `list`, `grep`, `bash`, `edit`, `write`
-- Synchronous read-only `subagent` tool for focused codebase research
-- Local RAG knowledge base: `gg kb index` + agent-callable `kb_search` tool
-- Scheduled background jobs (`gg job ...`) that fire while the `ggd` daemon is alive
-- Reusable Go conversation runtime shared by the CLI, Web, and desktop clients
-- Web and Electron clients built from one React UI, both talking to `ggd` over HTTP
-- Versioned artifacts and a personal library (`gg artifact ...`, `gg library ...`)
-- Third-party connectors: Google (Gmail + Calendar) over OAuth (`gg connect google`)
-- Media & voice: image generation, TTS, STT (`gg media ...`)
-- Headless-Chromium browsing over CDP: navigate, read, screenshot (`gg browser ...`)
-- Telegram channel: the `ggd` daemon answers text and voice messages per chat
-
-## Roadmap
-
-gg is being built toward an open-source, Muse-like personal agent. Work is tracked phase by phase:
-
-- [x] Phase 1 — Identity & memory: `~/.gg/USER.md` profile, curated + daily memory, `memory_add` / `memory_search`
-- [x] Phase 2 — Scheduler: cron and one-shot background jobs fired by the `ggd` daemon
-- [x] Phase 3 — Artifacts & library: versioned agent deliverables and a curated file library
-- [x] Phase 4 — Connectors: OAuth framework, Google (Gmail + Calendar) first
-- [x] Phase 5 — Multimodal & messaging: media/TTS/STT, headless browsing, Telegram channel
-- [ ] Phase 6 — Goals, Feed, Ideas
-
-## Install
-
-Install the latest public version with Go:
+**gg is a terminal AI coding agent written in Go.** Point it at a repository, and it streams an OpenAI-compatible model that can read, search, and edit the project from your shell.
 
 ```bash
 go install github.com/hszjj221/gg/cmd/gg@latest
 ```
 
-Or run from a local checkout:
+Requires Go 1.26 or newer (`go 1.26` in `go.mod`). No GitHub release or tag is published, so `@latest` installs the newest commit on the default branch. From a checkout: `go run ./cmd/gg --help`.
 
-```bash
-go run ./cmd/gg --help
+## Demo
+
+> **Placeholder — GIF not recorded.** Recording a typical session needs a live model API key, which is not available in this environment. The re-recordable script is [docs/demo.tape](docs/demo.tape) (Charmbracelet [VHS](https://github.com/charmbracelet/vhs)). From the repo root, with `gg` on `PATH` and `OPENAI_API_KEY` set:
+>
+> ```bash
+> vhs docs/demo.tape
+> ```
+>
+> That writes `docs/demo.gif`. The tape starts `gg`, asks it to explain `cmd/gg/main.go`, then asks it to run `go test` and approve the `bash` prompt.
+
+## Architecture
+
+The CLI runs the agent in-process. Web and Electron are separate clients of the same application runtime: they share one React UI and talk to the `ggd` daemon over HTTP. `ggd` speaks newline-delimited JSON-RPC on stdio unless `--http` is set; Electron starts it with `--http`.
+
+```mermaid
+flowchart TB
+  CLI["CLI cmd/gg"] --> CLIAPP["internal/cliapp"]
+  CLIAPP --> APP["app runtime internal/app"]
+
+  WEB["Web ui/src"] --> HTTP["transport httpapi"]
+  ELECTRON["Electron ui/electron"] -->|"spawns with --http"| GGD["daemon cmd/ggd"]
+  ELECTRON --> HTTP
+  GGD -->|"--http"| HTTP
+  GGD -->|"no --http"| STDIO["transport stdio"]
+  HTTP --> RPC["transport jsonrpc"]
+  STDIO --> RPC
+  RPC --> APP
+
+  APP --> AGENT["agent"]
+  AGENT --> PROVIDER["provider OpenAI-compatible"]
+  AGENT --> TOOLS["tools"]
+  APP --> SESSION["session JSONL"]
 ```
 
-## Quick Start
+`internal/agent` is the tool loop. `internal/provider/openai` is the only provider in v1. `internal/tools` is the built-in tool set (`read`, `list`, `grep`, `bash`, `edit`, `write`, plus optional capabilities). `internal/app` owns sessions, turns, approvals, and run lifecycle. `internal/session` stores an append-only JSONL tree. Dependency direction is clients and transports to `internal/app`, and `internal/app` to the agent and the session store.
 
-Set an API key for an OpenAI-compatible provider:
+## What was hard
+
+### Security model
+
+Tools run as the user. A nil approver inside the agent runner means allow, so every caller that can run tools passes an approver on purpose. The CLI policy lives in `internal/cliapp`.
+
+| Mode | In a terminal | No terminal | Dangerous `bash` |
+| --- | --- | --- | --- |
+| `auto` (default) | prompt | deny, and say how to pass `--yolo` or `--approval on-request` | prompt in a terminal, otherwise deny |
+| `on-request` | prompt | the process exits: this mode requires a terminal | prompt |
+| `yolo` (`--yolo` or `--approval yolo`) | allow with no prompt | allow with no prompt | prompt in a terminal, otherwise deny |
+| `never` | allow with no prompt | allow with no prompt | deny, because this mode never asks |
+
+"In a terminal" means stdin and stderr are both terminals. `tools.ClassifyCommand` labels each `bash` command before that policy runs. Clearly read-only commands (`ls`, `cat`, `grep`, `git status` / `diff` / `log`, and a short allowlist) skip the prompt in every mode. Dangerous commands — `rm -rf` of `/` or a home directory, a download piped into a shell, `sudo`, disk and format tools, writes that resolve outside the working directory — still need an interactive approval. `--yolo` does not waive them, and a scheduled job's `--allow-all` does not either: nothing is there to answer, so those commands are denied.
+
+`--sandbox` is off by default. When it is set, `bash` tries bubblewrap on Linux or `sandbox-exec` on macOS, with the working directory writable and the rest of the filesystem read-only. If the helper is missing or cannot start, the command still runs and the output says the sandbox was unavailable. The sandbox does not confine the network.
+
+Full rules, the classifier's gaps, and the sandbox limits: [security model](docs/architecture.md#security-model).
+
+### Streaming tool calls
+
+`internal/provider/openai` always requests `stream: true`. Tool calls arrive as indexed fragments (id, name, argument bytes) and are assembled when the stream ends. A call with an empty id, an empty name, or arguments that are not a JSON object is an error. The runner then drops `ToolCalls` on that message so a partial call is never stored as something to execute. Network errors, HTTP 429, and 5xx responses retry before a stream is accepted (two retries, exponential backoff with jitter). An interrupted stream, a length limit, or incomplete tool arguments is returned as an error. Text that already streamed is kept.
+
+### Interruption and resume
+
+`cmd/gg` cancels on Ctrl+C. The runner records the partial assistant text, clears unfinished tool calls, and will not start a tool whose context is already canceled. Sessions are append-only JSONL. Opening a file whose last line is torn truncates back to the last valid bytes. A saved tool call with no result is left unreplayed, because the side effect may already have happened. Resume writes a tool result that the execution was interrupted and the result is unavailable, and the coding instructions tell the model to inspect the workspace before retrying. A second process that advanced the same file makes the stale writer fail with a conflict instead of interleaving two branches.
+
+### Steering
+
+The runner and the UI share `agent.MessageQueue`. Steering text is drained into the same run at model boundaries: before each provider request, and again when a reply finished with no further tool calls. Messages marked as follow-ups stay on that queue and are not injected into the current run. Web and Electron send both through JSON-RPC `run.steer`. Resolve and approval still happen in call order before any tool in that batch executes, so approval prompts stay in call order.
+
+### Concurrency and lifecycle
+
+One session has one active run. Different sessions may run at the same time. `ggd` admits 16 turns across workspaces by default and bounds a turn at 30 minutes (`--max-active-runs`, `--run-timeout`). Inside a turn, only tools that opt in may overlap — today `read` and `grep` — and at most four at once. Every other tool is a barrier before and after. A panicking tool becomes an error result. A panicking turn is recorded as failed so the daemon keeps serving. Shutdown cancels active turns, waits for workers, and closes browser and MCP subprocesses before it releases the daemon instance lock.
+
+## Run
 
 ```bash
 export OPENAI_API_KEY=sk-your-key
-```
-
-Run a one-shot prompt:
-
-```bash
 gg -p "List the files in this project"
 ```
 
-Start the interactive mode (line-based, Ctrl+D to exit):
-
-```bash
-gg
-```
-
-### Web and Electron
-
-The new `ggd` process exposes sessions and agent runs through a stable JSON-RPC interface. The Web client reaches it over Bearer-protected HTTP; Electron starts it as a local sidecar the same way — over HTTP on a loopback port with a per-launch random Bearer <redacted> handed to the renderer through a minimal isolated bridge. Both clients share one React UI and one HTTP transport.
-
-Start the local Web development environment:
-
-```bash
-# terminal 1
-go run ./cmd/ggd --http 127.0.0.1:8765 --token development-token
-
-# terminal 2
-cd ui
-npm install
-npm run dev:web
-```
-
-`ggd` defaults to at most 16 concurrent turns across all workspaces and a 30-minute deadline per turn (including approvals). Use `--max-active-runs N` and `--run-timeout 45m` to tune these budgets; negative values disable the corresponding limit. The default provider HTTP client has a 5-minute request timeout. Capacity errors are retryable. Shutdown cancels active work, waits for background workers, and closes Chromium and MCP subprocesses before releasing the instance lock.
-
-Open `http://127.0.0.1:5173`, leave the endpoint blank, and enter the same token. Vite proxies `/rpc` and `/events` to the local daemon. In production, serve `ui/dist` and proxy those paths to `ggd` from the same origin.
-
-Run Electron from source:
-
-```bash
-cd ui
-npm install
-npm run desktop
-```
-
-The desktop app asks for a workspace, then builds and launches the local `ggd` binary for the current platform. This stage provides the runnable desktop shell; signing, installers, and auto-update belong in a later release pipeline.
-
-The shared client includes a responsive workspace with searchable sessions grouped by date, editable task starters, Markdown replies, collapsible tool output, conversation branches, and a document reader. Tool approvals show the requested operation and expandable details; while a task runs, you can add instructions, queue the next task, or stop it.
-
-- `Cmd/Ctrl+N` creates a session; `Cmd/Ctrl+K` focuses session search.
-- `Enter` sends a message or adds instructions to a running task; `Shift+Enter` inserts a newline. `Escape` closes the navigation drawer or branch panel, and cancels an unfinished session rename.
-- Drafts are kept separately for each session in the current tab. Reloading restores the connection and selected session; active runs reattach when the server supports it.
-- Reading older messages keeps your scroll position. Use the return-to-latest button to follow new output again.
-- Documents support Markdown and sandboxed HTML previews; save a completed version to the personal library from the reader.
-- In the desktop app, HTTP and HTTPS links in Markdown open in your default browser.
-
-See the [architecture guide](docs/architecture.md) for the dependency boundaries and protocol.
-
-## Usage
-
-Common examples:
-
-```bash
-gg -p "Say hi"
-gg --model openai:gpt-4.1 --base-url https://api.openai.com/v1 -p "Read README.md"
-gg --no-session -p "Explain this directory"
-gg --session .gg/session.jsonl -p "Continue from this file"
-gg --usage -p "Summarize this repository"
-gg --no-skills -p "Run without local skills"
-gg --no-memory -p "Run without long-term memory"
-gg --approval on-request -p "Run tests and fix failures"
-gg --yolo -p "Run tests and fix failures"
-gg -p "/skill:ca review and commit my changes"
-gg -p "/memory add Prefer concise answers with file references."
-gg sessions list
-gg resume <id-or-path> "Continue from this session"
-gg --resume
-gg --continue "Resume the latest session"
-gg --name "Refactor auth" -p "Review this module"
-```
-
-Interactive mode:
-
-- Running `gg` in a terminal starts the line-based interactive mode (Ctrl+D to exit).
-- Replies stream as they arrive. In a terminal, `bash`, `edit`, and `write` prompt before they run. Outside a terminal, `--approval auto` denies those tools unless you pass `--yolo`.
-- Use `/name <name>` to rename the session interactively, `/name --clear` to remove the name.
-- For a richer visual experience (conversation tree, artifacts, approvals UI), use the Web or desktop client.
-
-Tool approval:
-
-- `--approval auto` is the default. In a terminal, gg asks before `bash`, `edit`, `write`, and other approval-gated tools run. One-shot (`-p`) and other non-terminal runs deny those tools and print how to allow them. Clearly read-only shell commands (`ls`, `cat`, `grep`, `git status`, `git diff`, `git log`, and a short allowlist) run without a prompt.
-- `--approval on-request` always asks before those tools run and requires a real terminal. Read-only shell commands still skip the prompt.
-- `--approval never` does not prompt, so approval-gated tools run. Dangerous shell commands are still denied, because this mode never asks.
-- `--approval yolo` and `--yolo` allow approval-gated tools without prompting. Dangerous shell commands still need an interactive approval when a terminal is available, and are denied when it is not.
-- `--sandbox` (off by default) runs `bash` inside bubblewrap on Linux or `sandbox-exec` on macOS. If the helper is missing or cannot start, the command still runs and the output says the sandbox was unavailable.
-- Denying a tool call returns a tool error to the model so it can explain or choose another path. The same rules are described in the [security model](docs/architecture.md#security-model).
-
-Provider/model configuration:
-
-`gg` reads `~/.gg/config.json` when present:
-
-```json
-{
-  "default": "openai:gpt-4.1",
-  "context": {
-    "maxPromptTokens": 24000,
-    "maxOutputTokens": 4096,
-    "tailTurns": 6,
-    "summaryMaxTokens": 1200,
-    "autoCompact": true
-  },
-  "memory": {
-    "enabled": true,
-    "maxPromptTokens": 1200,
-    "dailyLogTailTokens": 500,
-    "dailyLogRetentionDays": 90
-  },
-  "providers": {
-    "openai": {
-      "type": "openai-compatible",
-      "baseURL": "https://api.openai.com/v1",
-      "apiKey": "sk-your-key",
-      "models": ["gpt-4.1", "gpt-4.1-mini"]
-    },
-    "local": {
-      "type": "openai-compatible",
-      "baseURL": "http://localhost:11434/v1",
-      "apiKey": "ollama",
-      "models": ["qwen2.5-coder"]
-    },
-    "deepseek": {
-      "type": "openai-compatible",
-      "apiKeyEnv": "DEEPSEEK_API_KEY",
-      "models": ["deepseek-chat", "deepseek-reasoner"]
-    }
-  }
-}
-```
-
-`deepseek` omits `baseURL`: gg infers it from a small table of well-known OpenAI-compatible endpoints (`openai`, `deepseek`, `openrouter`, `ollama`, `lmstudio`, `moonshot`). An explicit `baseURL` always wins; unknown names fall back to `https://api.openai.com/v1`.
-
-Selection uses `provider:model`:
-
-- Provider/model: `--model provider:model`, then the resumed session model, then config `default`, then `openai:gpt-4.1`
-- API key, resolved in priority order: `--api-key` flag, the selected provider's `apiKey`, `~/.gg/credentials.json` (a 0600 JSON object like `{"deepseek": "sk-..."}`), then the `apiKeyEnv` environment variable. `apiKeyEnv` and the credentials file keep secrets out of the config file. If no config file exists, legacy `OPENAI_API_KEY` is used.
-- Base URL: `--base-url` flag first, then the selected provider's `baseURL`, then the well-known endpoint for the provider name, then `https://api.openai.com/v1`. If no config file exists, legacy `OPENAI_BASE_URL` then `https://api.openai.com/v1` are used.
-- Thinking: reasoning models (e.g. `deepseek-reasoner`) stream their internal reasoning as `reasoning_content`; gg normalizes it into a provider-neutral `thinking_delta` event. The CLI shows it dimmed on stderr, in both interactive and one-shot modes, so scripted stdout stays clean. gg retains the reasoning on the assistant message and echoes it as `reasoning_content` when continuing a tool call, as DeepSeek's thinking-mode tool protocol requires. Thinking never lands in the answer or in persisted session transcripts.
-
-Provider quirks go in `compat`. When set, gg sends the right request shape on the first attempt; when unset, it probes and retries once after a failed request, as before:
-
-```json
-"o-series": {
-  "type": "openai-compatible",
-  "baseURL": "https://api.openai.com/v1",
-  "apiKeyEnv": "OPENAI_API_KEY",
-  "compat": {"completionTokens": true},
-  "models": ["o1"]
-}
-```
-
-- `noStreamUsage`: omit `stream_options.include_usage` (some endpoints reject it with a 400).
-- `completionTokens`: send `max_completion_tokens` instead of `max_tokens`.
-- Session directory: `--session-dir`, then `GG_SESSION_DIR`, then `~/.gg/sessions`
-- Memory: `memory.enabled` in config; `--no-memory` disables it for one run.
-
-Only `openai-compatible` providers are supported in v1. Remote model discovery is not implemented; list allowed model names in `models`.
-
-Model calls are retried on temporary failures before streaming, such as network errors, rate limits, and 5xx responses. Interrupted streams, incomplete tool arguments, and output-length limits are reported as errors; partially streamed content is retained and is not blindly retried. Output limits use `max_tokens`, with a compatibility retry for providers explicitly requiring `max_completion_tokens`. `gg` does not fall back to another provider or model; if all retry attempts fail, the normal CLI error path is used.
-
-Project instructions:
-
-- Every turn includes basic coding instructions and the working directory.
-- `gg` reads `~/.gg/AGENTS.md`, then `AGENTS.md` files from ancestor directories to the current directory. Files are re-read for each user turn, limited to 32 KiB each.
-- `--no-context-files` disables `AGENTS.md` discovery while retaining the basic instructions.
-
-Tool output and files:
-
-- `read` returns up to 2,000 lines or 50 KiB from the requested offset, including offsets deep inside large files.
-- `edit` matches LF and CRLF text consistently, preserves unaffected content and file permissions, and writes atomically.
-- `bash` retains the last 50 KiB of output. When truncated, the full output is saved under `.gg/outputs/` and its path is returned for subsequent reads. These logs persist until you remove them.
-- On Unix systems, cancellation and timeouts terminate the shell process group; other platforms bound waiting for inherited output pipes.
-
-Session management:
-
-- `gg sessions list` lists sessions for the current working directory.
-- `gg resume <id-or-path>` resumes a session by displayed ID, JSONL filename stem, filename, or path.
-- `gg resume` and `gg --resume` open a numbered session picker in the terminal.
-- `gg --continue` and `gg --last` resume the latest session for the current working directory.
-- `--name`/`-n` sets a session display name; `/name <name>` changes it interactively and `/name --clear` removes it.
-- Session v3 stores messages and metadata in an append-only tree and persists the active branch with a separate head record. Older sessions upgrade without discarding history.
-- The Web and desktop clients expose the conversation tree with rewind, branch (fork), and clone actions.
-- User messages, completed model messages, and individual tool results are saved as they complete. Provider errors and partial responses remain available after a failed run.
-- If another CLI or `ggd` process advances the same session, stale writes fail with a retryable conflict instead of silently interleaving two parent chains in the JSONL file.
-- Resume recovers complete JSONL entries after an interrupted final append. Missing tool results are marked as unknown, so the model can inspect the workspace before retrying.
-
-Context management:
-
-- Before every model request, including requests between tool batches, `gg` checks the estimated message and tool-schema size against `context.maxPromptTokens`.
-- With `context.autoCompact` enabled, old content is summarized before removal. Recent history is retained within the available token budget without splitting tool-call/result batches.
-- Summary requests are also budgeted and may run in multiple batches. Requests that still exceed the budget stop with an actionable error rather than silently discarding unsummarized content.
-- `context.maxOutputTokens` limits ordinary responses (default 4096); `context.summaryMaxTokens` limits summary responses. Configure the input and output budgets to fit your model’s context window.
-- Compaction stores a JSONL `summary` entry and keeps recent turns verbatim; original session messages are not deleted or rewritten.
-- Resumed sessions use the latest summary plus recent unsummarized turns.
-- `/compact` manually writes a new summary, and `/context` shows the current estimated prompt size and budget.
-- Token estimation is approximate; v1 does not use a model-specific tokenizer.
-
-Profile and memory:
-
-- `gg init` scaffolds the personal layer: `~/.gg/USER.md` (who you are: name, timezone, language, notes) and `~/.gg/memory/` (what gg remembers).
-- On startup gg injects, in order: user profile, curated memory (`memory/MEMORY.md`), and today's daily-log tail (`memory/YYYY-MM-DD.md`).
-- A legacy `~/.gg/memory.md` is migrated to `memory/MEMORY.md` automatically on first run; the legacy file is kept as `memory.md.bak`. If `MEMORY.md` already has content, gg does not merge automatically: the legacy file is still kept as `.bak` and a manual-merge notice is printed.
-- `memory.dir` accepts a `~/` prefix (expanded against your home directory). A broken `~/.gg/USER.md` or an undeletable daily log only prints a warning and never blocks startup.
-- When memory is enabled, the model can call `memory_add` with `--scope general|daily|person:<name>|group:<name>` and `memory_search` for keyword search across all scopes. `memory_add` writes immediately and does not use the tool approval prompt.
-- `/memory` shows status, `/memory add [--scope=<scope>] <text>` appends a bullet, `/memory show [daily]` prints, `/memory search <query>` searches.
-- `gg memory search <query>` and `gg memory show [daily]` work without starting a session.
-- `memory.maxPromptTokens` limits curated memory injection (the file itself is never truncated); `memory.dailyLogTailTokens` limits the daily-log tail; `memory.dailyLogRetentionDays` prunes old daily logs (`0` keeps them forever).
-- Use `/memory show` or a text editor to review memory. Use `memory.enabled=false` or `--no-memory` to disable memory and hide the memory tools.
-
-Token usage:
-
-- `gg --usage ...` prints token usage to stderr after each run.
-- Usage is recorded in the session when the provider returns it.
-- Providers that do not return usage remain supported and report zero tokens.
-
-Knowledge base (RAG):
-
-- `gg kb index <dir>` chunks and embeds text files into a local index at `~/.gg/kb/<name>/index.json` (pure Go, no vector database).
-- `gg kb search <query>` runs semantic search over the index from the CLI.
-- Once the default knowledge base exists, the agent gains a `kb_search` tool for answering questions about the ingested corpus.
-- `gg kb eval --cases docs/kb-eval-sample.jsonl` measures retrieval recall@k. See `docs/rag.md` for the architecture.
-
-Scheduled jobs:
-
-- `gg job add --cron "0 9 * * *" --name "morning brief" "Summarize today's calendar"` creates a recurring job; `--at "2026-09-28 15:04"` or `--in 20m` creates a one-shot job.
-- Jobs only fire while the `ggd` daemon is alive (Linux/macOS; `ggd --no-scheduler` disables the loop). The CLI never runs the scheduling loop itself.
-- Each firing runs one agent turn in a fresh session named `scheduler/<job>-<time>`, auditable with `gg resume` and recorded in `gg job log`.
-- Unattended runs deny tools that need approval by default; pass `--allow-all` at `job add` time to let the job use them. Only enable it for jobs you trust.
-- Cron uses the 5-field minute-level format; `--timezone` sets the IANA timezone (default: your profile timezone, then local). Restarting the daemon does not catch up missed cron firings; a past-due one-shot job that never ran fires once on startup.
-- Each job is bound to the workspace it was created from (`gg job show` displays it); a daemon only fires jobs for its own workspace, so a job added in repo A never runs in repo B. Run a single `ggd` per scheduler directory.
-- `gg job list [--all]`, `gg job show|pause|resume|remove <id|name>`, `gg job log [--job <id|name>] [--limit N]`, and `gg job run <id|name>` (fire once now without changing the schedule). The run log stays readable by id even after `gg job remove`.
-- State lives in `~/.gg/scheduler/` (`jobs.json`, `runs.jsonl`), guarded by a file lock so the CLI and daemon can update it concurrently. State files are owner-only (0600) and the directory is 0700, like sessions and memory.
-
-Artifacts and library:
-
-- The agent can create versioned deliverables with the `artifact_create` / `artifact_edit` tools (markdown documents and standalone HTML pages). They live in `~/.gg/artifacts/<id>/` (`artifact.json` plus immutable `v1.md`, `v2.md`, …), directory 0700 / files 0600.
-- `gg artifact list`, `gg artifact show <id>`, `gg artifact publish <id>`, `gg artifact remove <id>`.
-- Publishing marks the latest version published and saves a copy into your library at `~/.gg/library/` (`gg library add <path> [--name NAME]`, `gg library list|remove|path <id|name>`). The library is your curated file collection: agent-generated files plus files you upload.
-- The Web UI has an Artifacts tab: markdown renders as a document, HTML renders inside a sandboxed iframe (no scripts execute).
-- Creating or editing an artifact needs your approval in interactive mode, like file writes; unattended runs deny it unless `--allow-all` is set.
-
-Connectors (third-party services):
-
-- `gg connect google --client-id ID` runs an OAuth flow (localhost callback + PKCE) for Gmail and Google Calendar; tokens live in `~/.gg/connectors/google.json` (0600). See `docs/connectors.md` for the client setup.
-- Once connected, the agent gets `gmail_search` / `gmail_read` / `gmail_send` and `calendar_agenda` / `calendar_create`. Sending mail and creating events need your approval; unattended runs deny them unless `--allow-all` is set.
-- `gg connect list`, `gg connect status [google]`, `gg connect remove google`.
-
-Media & voice (OpenAI-compatible `/v1/images/generations`, `/v1/audio/speech`, `/v1/audio/transcriptions`):
-
-- `gg media image "prompt"`, `gg media tts "text"`, `gg media stt <audio-file>`. Defaults to the chat provider's base URL / API key; override with `GG_MEDIA_BASE_URL` / `GG_MEDIA_API_KEY` / `GG_MEDIA_{IMAGE,TTS,STT}_MODEL`. See `docs/media.md`.
-- The agent gets `image_generate` (needs approval), `tts`, and `stt` tools; generated files land in `~/.gg/media/`.
-
-Browser (headless Chromium over CDP, read + screenshot in this phase):
-
-- `gg browser shot <url>`, `gg browser read <url>`. Needs a local Chromium binary (`chromium` / `google-chrome`, or `GG_CHROMIUM`); only `http(s)` URLs are allowed. See `docs/browser.md`.
-- The agent gets `browser_navigate`, `browser_read`, `browser_screenshot` (only registered when Chromium is installed); screenshots land in `~/.gg/media/screenshots/`.
-
-Telegram channel (daemon):
-
-- Set `GG_TELEGRAM_BOT_TOKEN` and `GG_TELEGRAM_ALLOW_CHATS` (comma-separated chat IDs), then run `ggd`. Text and voice messages are answered per-chat; voice goes through STT → agent → text + TTS reply. Approval-gated tools are denied over Telegram. See `docs/telegram.md`.
-
-MCP servers (external tools via the Model Context Protocol):
-
-- Declare servers in `~/.gg/mcp.json` (`command`/`args` for stdio, `url` for streamable HTTP). Each server's tools become agent tools named `mcp_<server>_<tool>`; stdio servers inherit only a minimal environment. See the MCP section in `docs/architecture.md`.
-- Every MCP tool needs your approval before it runs; unattended runs deny them unless `--allow-all` is set. A server that fails to connect is skipped for the rest of the conversation, never fatal.
-
-Computer tools (local machine operation, Linux/macOS):
-
-- The agent gets `computer_info` (OS/arch/CPU/memory/disk), `process_list` / `process_kill`, `open` (open files or URLs with the default application), `notify` (system notification), and `clipboard_read` / `clipboard_write`. The capability is not advertised on other platforms.
-- `process_kill`, `open`, `clipboard_read`, and `clipboard_write` need your approval; unattended runs deny them unless `--allow-all` is set.
-
-## Skills
-
-`gg` loads Codex-style skills from `.agents/skills` by default. Project skills in the current directory or its parents take precedence over global skills in `~/.agents/skills`.
-
-Each skill is a directory with a `SKILL.md` file:
-
-```markdown
----
-name: ca
-description: Review local changes and commit after checks pass.
----
-
-# ca
-```
-
-Skill behavior:
-
-- `gg` injects only the available skill name, description, and `SKILL.md` location into the system prompt.
-- The model can use the `read` tool to load `SKILL.md` and files under that skill directory.
-- Hidden directories such as `.agents/skills/.system` are skipped.
-- Skills with `disable-model-invocation: true` are hidden from the automatic skill list, but can still be loaded explicitly.
-- Use `--no-skills` to disable skill discovery for a run.
-
-Force a skill for one prompt:
-
-```bash
-gg -p "/skill:ca review and commit my changes"
-```
-
-## Subagents
-
-`gg` exposes a synchronous `subagent` tool to the model. The main agent can delegate focused read-only research tasks to a child agent running in the same process.
-
-The v1 subagent is intentionally limited:
-
-- It can use `read`, `list`, and `grep`.
-- It cannot use `bash`, `edit`, `write`, or another `subagent`.
-- It returns only its final summary to the main agent; its full transcript is not stored as a separate session.
-
-Example:
-
-```bash
-gg -p "Use a subagent to inspect how sessions are stored, then summarize the flow"
-```
-
-## Development
-
-The runner exposes `BeforeRequest`, `OnMessage`, and `DrainMessages` hooks for context preparation, durable messages, and steering without coupling the loop to any particular interface.
-
-Run the test suite:
-
-```bash
-go test -count=1 ./...
-go vet ./...
-```
-
-Format code:
-
-```bash
-go fmt ./...
-```
+`gg` with no prompt starts a line-oriented session (Ctrl+D to exit). Replies stream as they arrive. In a terminal, `bash`, `edit`, and `write` ask before they run.
+
+Sessions, provider config, `AGENTS.md`, skills, memory, and the context budget are in the [usage reference](docs/usage.md).
+
+## Extensions
+
+These sit behind the terminal agent. Each one is real code in this repo; the linked page is the reference.
+
+| | | |
+| --- | --- | --- |
+| Web and Electron | Shared React UI. Electron launches `ggd` as a loopback sidecar. | [Usage](docs/usage.md#web-and-electron) |
+| Scheduler | Cron and one-shot jobs while `ggd` is running. | [Usage](docs/usage.md#scheduler) |
+| Connectors | Google OAuth for Gmail and Calendar. | [Connectors](docs/connectors.md) |
+| Media | Image generation, TTS, and STT on OpenAI-compatible endpoints. | [Media](docs/media.md) |
+| Browser | Headless Chromium over CDP: navigate, read, screenshot. | [Browser](docs/browser.md) |
+| Telegram | `ggd` answers allowlisted chats, including voice. | [Telegram](docs/telegram.md) |
+| Knowledge base | Local RAG index and a `kb_search` tool. | [RAG](docs/rag.md) |
+| Artifacts and library | Versioned documents and a personal file library. | [Usage](docs/usage.md#artifacts-and-library) |
+| MCP | External tools declared in `~/.gg/mcp.json`. | [Architecture](docs/architecture.md#mcp-servers) |
+| Computer tools | OS info, processes, clipboard, and notifications on Linux and macOS. | [Usage](docs/usage.md#computer-tools) |
+| Diagnostics | JSON logs on stderr and how to follow a run. | [Diagnostics](docs/diagnostics.md) |
+
+Package boundaries and the JSON-RPC surface: [architecture](docs/architecture.md).
 
 ## Security
 
-`gg` can execute shell commands and edit files when the model uses the built-in tools. Run it only in workspaces where you are comfortable granting those capabilities. Outside a terminal, `--approval auto` denies `bash`, `edit`, and `write` unless you pass `--yolo`. See the [security model](docs/architecture.md#security-model).
+Run `gg` only in workspaces where you are willing to grant the model those tools. `~/.gg/config.json` may contain API keys. When memory is enabled, profile and memory files are sent to the selected provider, and `memory_add` writes without an approval prompt.
 
-`~/.gg/config.json` may contain cleartext API keys. Keep it out of repositories and backups you do not control.
-
-`~/.gg/memory.md` is sent to the selected provider when memory is enabled. The model can also append to this file through `memory_add` without approval. Do not ask the agent to remember secrets, tokens, passwords, or sensitive personal data.
-
-Please report vulnerabilities privately. See [SECURITY.md](SECURITY.md).
+Report vulnerabilities privately. See [SECURITY.md](SECURITY.md).
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). Development setup is in [CONTRIBUTING.md](CONTRIBUTING.md).

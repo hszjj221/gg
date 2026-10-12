@@ -159,6 +159,8 @@ CLI（`gg -p`、脚本模式、管理命令）有意不做成 thin client：它�
 
 传输层经 `app.ToolCapabilities()` 广告能力，它从注册表推导，广告的集合不可能和实际注册的工具脱节。
 
+<a id="mcp-servers"></a>
+
 ### MCP 服务器
 
 MCP 的外部工具来自 `~/.gg/mcp.json` 里声明的服务器：
@@ -198,7 +200,7 @@ CLI 策略在 `internal/cliapp`，覆盖一次性 prompt（`gg -p` 和 `gg <prom
 
 | 模式 | 有终端 | 其他需要审批的工具 | 危险 `bash` |
 | --- | --- | --- | --- |
-| `auto`（默认） | 询问 | 拒绝，并说明可以用 `--yolo` 或 `--approval on-request` | 拒绝 |
+| `auto`（默认） | 询问 | 拒绝，并说明可以用 `--yolo` 或 `--approval on-request` | 有终端就询问，否则拒绝 |
 | `on-request` | 询问；没有终端时进程直接退出 | 同上 | 询问 |
 | `yolo`（`--yolo` 或 `--approval yolo`） | 不询问直接放行 | 不询问直接放行 | 有终端就询问，否则拒绝 |
 | `never` | 不询问直接放行 | 不询问直接放行 | 拒绝（这个模式从不询问） |
