@@ -24,8 +24,13 @@ for (const page of pages) {
     throw new Error(`missing docs source: ${page.src}`);
   }
   const body = rewriteMarkdown(fs.readFileSync(source, "utf8"));
-  if (/\]\([^)]*\.zh-CN\.md/.test(body) || /\]\(docs\//.test(body)) {
-    throw new Error(`unrewritten relative link left in ${page.src}`);
+  if (
+    /\]\([^)]*\.zh-CN\.md/.test(body) ||
+    /\]\((?:\.\.\/)*docs\//.test(body) ||
+    /\]\(\.\.\//.test(body) ||
+    /<a id=/.test(body)
+  ) {
+    throw new Error(`unrewritten link or anchor left in ${page.src}`);
   }
   const dest = path.join(outDir, page.dest);
   fs.mkdirSync(path.dirname(dest), { recursive: true });

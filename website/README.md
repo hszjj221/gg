@@ -1,6 +1,8 @@
 # Websites
 
-Three static sites for Cloudflare Pages. Each one builds locally into a directory of files. Deploying is separate: run `wrangler pages deploy` yourself. Nothing here configures a custom domain, DNS, or a secret.
+Two static Cloudflare Pages projects: the gg docs site and a browser replay.
+
+Each one builds locally into a directory of files. Deploying the demo is separate. Nothing here configures DNS or adds a secret.
 
 From the repository root, install and build one project with:
 
@@ -11,27 +13,24 @@ npm run build --prefix website/<project>
 
 `npm run build` is the build. `npm ci` only installs dependencies.
 
-| Directory | Pages project | Build (inside the directory) | Output directory | Later hostname |
+| Directory | Pages project | Build (inside the directory) | Output directory | Hostname |
 | --- | --- | --- | --- | --- |
-| `website/home` | `zunolab-home` | `npm run build` | `website/home/dist` | `zunolab.dev` |
-| `website/docs` | `gg-docs` | `npm run build` | `website/docs/dist` | `gg.zunolab.dev` |
-| `website/demo` | `gg-demo` | `npm run build` | `website/demo/dist` | `demo.zunolab.dev` |
+| `website/docs` | `gg-docs` | `npm run build` | `website/docs/dist` | `https://gg.zunolab.dev` |
+| `website/demo` | `gg-demo` | `npm run build` | `website/demo/dist` | `demo.zunolab.dev` (not attached yet) |
 
-After a build, from that project directory:
+The `gg-docs` Pages project is served at https://gg.zunolab.dev (subdomain `gg-docs-ctl.pages.dev`).
+
+After a demo build, from `website/demo`:
 
 ```bash
-npx wrangler pages deploy dist --project-name <pages-project>
+npx wrangler pages deploy dist --project-name gg-demo
 ```
 
-Use `zunolab-home`, `gg-docs`, or `gg-demo` as `<pages-project>`. Do not pass a custom domain flag here. Attach `zunolab.dev`, `gg.zunolab.dev`, and `demo.zunolab.dev` later in the Pages project settings.
-
-## home
-
-Personal homepage. Chinese is the default; the header switches to English. The page is Juce, a Go backend engineer with 10 years of experience, formerly at ByteDance and JD.com, who built high-concurrency and commercialization systems and now works on AI agent engineering. [gg](https://github.com/hszjj221/gg) is the featured project. The tech blog section is reserved and empty.
+Do not pass a custom domain flag for the demo. `demo.zunolab.dev` is not attached in this repo.
 
 ## docs
 
-VitePress site. `npm run build` copies `README.md`, `README.zh-CN.md`, and `docs/*` into a generated tree (not committed) and rewrites relative links onto the site. Chinese is the default locale; English is under `/en/`. Mermaid fences, including the diagram in the architecture guide, render in the browser from the built assets. No model and no API key.
+VitePress site. `npm run build` copies `README.md`, `README.zh-CN.md`, and the bilingual guides in `docs/` (including `docs/usage.md`) into a generated tree that is not committed, and rewrites relative links onto the site. `docs/demo.tape`, `SECURITY.md`, `LICENSE`, and `CONTRIBUTING.md` stay on GitHub. Chinese is the default locale; English is under `/en/`. Explicit heading anchors from the usage guide are kept, so links such as `/usage#web-and-electron` and `/en/architecture#security-model` still resolve. Mermaid fences, including the diagrams in the README and the architecture guide, render in the browser from the built assets. No model and no API key.
 
 ## demo
 

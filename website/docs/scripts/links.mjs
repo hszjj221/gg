@@ -9,10 +9,15 @@ export function rewriteHref(raw) {
 
   const hashAt = original.indexOf("#");
   const hash = hashAt >= 0 ? original.slice(hashAt) : "";
-  let href = (hashAt >= 0 ? original.slice(0, hashAt) : original).replace(/^\.\//, "");
-  if (href === "") return `${hash}`;
+  let href = hashAt >= 0 ? original.slice(0, hashAt) : original;
+  while (href.startsWith("./") || href.startsWith("../")) {
+    href = href.startsWith("./") ? href.slice(2) : href.slice(3);
+  }
+  if (href === "") return hash || original;
 
-  if (href === "SECURITY.md" || href === "LICENSE") return GITHUB_BLOB + href;
+  if (href === "SECURITY.md" || href === "LICENSE" || href === "CONTRIBUTING.md" || href === "docs/demo.tape") {
+    return GITHUB_BLOB + href;
+  }
   if (href === "README.zh-CN.md") return `/${hash}`;
   if (href === "README.md") return `/en/${hash}`;
 
@@ -23,10 +28,44 @@ export function rewriteHref(raw) {
   return original;
 }
 
+// Explicit <a id> anchors are how the usage guide and the Chinese architecture
+// page keep stable hashes. VitePress rejects other raw tags, so fold each
+// anchor onto the heading it introduces.
+export function hoistHtmlAnchors(text) {
+  const lines = text.split("\n");
+  let fence = null;
+  const out = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const open = line.match(/^(\s*)(`{3,}|~{3,})/);
+    if (open) {
+      const marker = open[2][0];
+      fence = !fence ? marker : fence === marker ? null : fence;
+      out.push(line);
+      continue;
+    }
+    if (!fence) {
+      const anchor = line.match(/^<a id="([A-Za-z0-9_-]+)"><\/a>\s*$/);
+      if (anchor) {
+        let next = i + 1;
+        while (next < lines.length && lines[next].trim() === "") next += 1;
+        const heading = lines[next] && lines[next].match(/^(#{1,6} .+)$/);
+        if (heading && !heading[1].includes("{#")) {
+          out.push(`${heading[1]} {#${anchor[1]}}`);
+          i = next;
+          continue;
+        }
+      }
+    }
+    out.push(line);
+  }
+  return out.join("\n");
+}
+
 export function rewriteMarkdown(text) {
   const lines = text.split("\n");
   let fence = null;
-  return lines
+  const rewritten = lines
     .map((line) => {
       const open = line.match(/^(\s*)(`{3,}|~{3,})/);
       if (open) {
@@ -42,4 +81,5 @@ export function rewriteMarkdown(text) {
       });
     })
     .join("\n");
+  return hoistHtmlAnchors(rewritten);
 }

@@ -19,6 +19,27 @@ test("rewrites README and docs links onto the locale paths", () => {
   assert.equal(rewriteHref("LICENSE"), "https://github.com/hszjj221/gg/blob/main/LICENSE");
   assert.equal(rewriteHref("https://t.me/BotFather"), "https://t.me/BotFather");
   assert.equal(rewriteHref("#security-model"), "#security-model");
+  assert.equal(rewriteHref("../README.md"), "/en/");
+  assert.equal(rewriteHref("../README.zh-CN.md"), "/");
+  assert.equal(rewriteHref("docs/usage.md#web-and-electron"), "/en/usage#web-and-electron");
+  assert.equal(rewriteHref("docs/usage.zh-CN.md#scheduler"), "/usage#scheduler");
+  assert.equal(rewriteHref("usage.zh-CN.md#computer-tools"), "/usage#computer-tools");
+  assert.equal(rewriteHref("architecture.md#mcp-servers"), "/en/architecture#mcp-servers");
+  assert.equal(
+    rewriteHref("../CONTRIBUTING.md"),
+    "https://github.com/hszjj221/gg/blob/main/CONTRIBUTING.md",
+  );
+  assert.equal(
+    rewriteHref("docs/demo.tape"),
+    "https://github.com/hszjj221/gg/blob/main/docs/demo.tape",
+  );
+});
+
+test("folds explicit anchors onto the following heading", () => {
+  const input = ["<a id=\"web-and-electron\"></a>", "", "## Web 与 Electron", ""].join("\n");
+  assert.match(rewriteMarkdown(input), /^## Web 与 Electron \{#web-and-electron\}$/m);
+  const fenced = ["```html", "<a id=\"keep\"></a>", "## Stay", "```", ""].join("\n");
+  assert.match(rewriteMarkdown(fenced), /<a id="keep"><\/a>/);
 });
 
 test("does not rewrite links inside fenced code", () => {
