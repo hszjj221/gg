@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>gg 回放</title>
+    <meta
+      name="description"
+      content="gg 的静态回放。按真实的终端输出、审批提示和 bash 分类器逐步看一段会话。不调用模型，也不使用 API key。"
+    />
+    <meta name="theme-color" content="#e7e1d6" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <script>
+      try {
+        if (localStorage.getItem("zunolab-lang") === "en") {
+          document.documentElement.lang = "en";
+        }
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <a class="skip" href="#screen">
+      <span class="zh">跳到回放</span>
+      <span class="en">Skip to the replay</span>
+    </a>
+    <header class="mast wrap">
+      <div class="product">
+        <a class="mark" href="https://zunolab.dev">zunolab.dev</a>
+        <strong>gg</strong>
+        <span class="badge">replay</span>
+      </div>
+      <nav class="nav">
+        <a href="https://github.com/hszjj221/gg">GitHub</a>
+        <div class="lang" role="group" aria-label="language">
+          <button type="button" data-set-lang="zh" lang="zh-CN">中文</button>
+          <button type="button" data-set-lang="en" lang="en">English</button>
+        </div>
+      </nav>
+    </header>
+
+    <main class="wrap">
+      <p class="banner">
+        <span class="zh">这是回放，不是正在运行的 gg。没有模型调用，没有 API key，也不会执行 shell。</span>
+        <span class="en">This is a replay, not a live gg. No model is called, no API key is used, and no shell runs.</span>
+      </p>
+      <div class="layout">
+        <div id="scenarios" role="tablist" aria-label="scenarios"></div>
+        <section>
+          <p id="blurb" class="blurb"></p>
+          <div id="screen" class="screen" role="log" aria-live="polite" aria-relevant="additions"></div>
+          <div class="controls">
+            <button type="button" id="back"></button>
+            <button type="button" id="next"></button>
+            <button type="button" id="play"></button>
+            <button type="button" id="restart"></button>
+            <div id="choice" class="choice" role="group" aria-label="Approve?">
+              <button type="button" data-answer="y"></button>
+              <button type="button" data-answer="n"></button>
+            </div>
+          </div>
+          <p id="caption" class="caption"></p>
+          <p id="progress" class="progress"></p>
+          <p id="keys" class="keys"></p>
+        </section>
+      </div>
+
+      <section class="legend">
+        <p>
+          <span class="zh">终端里几种颜色对应不同来源：</span>
+          <span class="en">Colors in the terminal mark where each line comes from:</span>
+        </p>
+        <ul>
+          <li>
+            <span class="zh">浅色正文是 stdout，包括交互横幅、你的输入行和最终回答。</span>
+            <span class="en">Light text is stdout: the interactive banner, the typed line, and the final answer.</span>
+          </li>
+          <li>
+            <span class="zh">斜体暗色是思考过程，CLI 把它写到 stderr。</span>
+            <span class="en">Dim italics are thinking, which the CLI writes to stderr.</span>
+          </li>
+          <li>
+            <span class="zh">暖色是 stderr 上的审批或拒绝，文句与 cliapp 里打印的一致。</span>
+            <span class="en">Warm text is an approval or a denial on stderr, in the words cliapp prints.</span>
+          </li>
+          <li>
+            <span class="zh">金色是 tool_call_start / tool_call_finish。运行时会发出这些事件，逐行 CLI 不打印它们，这里是为了把工具调用展示出来。</span>
+            <span class="en">Gold lines are tool_call_start / tool_call_finish. The runtime emits them. The line CLI does not print them; they are shown here so the tool calls are visible.</span>
+          </li>
+          <li>
+            <span class="zh">绿色是回放自己的说明，不是 gg 的输出。</span>
+            <span class="en">Green lines are notes from this replay, not gg output.</span>
+          </li>
+        </ul>
+      </section>
+
+      <section class="sources">
+        <p>
+          <span class="zh">回放依据这些实现，而不是一套另写的界面文案：</span>
+          <span class="en">The replay follows these implementations, not a separate set of UI strings:</span>
+        </p>
+        <ul>
+          <li><a href="https://github.com/hszjj221/gg/blob/main/internal/cliapp/cliapp.go">internal/cliapp/cliapp.go</a></li>
+          <li><a href="https://github.com/hszjj221/gg/blob/main/internal/cliapp/approval.go">internal/cliapp/approval.go</a></li>
+          <li><a href="https://github.com/hszjj221/gg/blob/main/internal/tools/bash.go">internal/tools/bash.go</a></li>
+          <li><a href="https://github.com/hszjj221/gg/blob/main/internal/tools/command_policy.go">internal/tools/command_policy.go</a></li>
+          <li><a href="https://github.com/hszjj221/gg/blob/main/internal/tools/approval.go">internal/tools/approval.go</a></li>
+          <li><a href="https://github.com/hszjj221/gg/blob/main/internal/agent/runner.go">internal/agent/runner.go</a></li>
+          <li>
+            <a href="https://github.com/hszjj221/gg/blob/main/docs/architecture.md#security-model">docs/architecture.md#security-model</a>
+          </li>
+        </ul>
+      </section>
+    </main>
+    <noscript>
+      <p class="wrap">
+        <span class="zh">回放需要 JavaScript。它仍然是静态页面，不会请求模型。</span>
+        <span class="en">The replay needs JavaScript. It is still a static page and does not call a model.</span>
+      </noscript>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
