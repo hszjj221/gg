@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Juce</title>
+    <meta
+      name="description"
+      content="Juce，Go 后端工程师，十年经验。曾在字节跳动和京东工作，做过的系统包括高并发和商业化。现在做 AI agent 工程。开源项目 gg。"
+    />
+    <meta name="theme-color" content="#e7e1d6" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <script>
+      try {
+        if (localStorage.getItem("zunolab-lang") === "en") {
+          document.documentElement.lang = "en";
+        }
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <a class="skip" href="#content">
+      <span class="zh">跳到内容</span>
+      <span class="en">Skip to content</span>
+    </a>
+    <header class="mast">
+      <a class="mark" href="#top">zunolab.dev</a>
+      <nav class="nav" aria-label="sections">
+        <a href="#work">gg</a>
+        <a href="#background">
+          <span class="zh">经历</span>
+          <span class="en">Experience</span>
+        </a>
+        <a href="#blog">
+          <span class="zh">博客</span>
+          <span class="en">Blog</span>
+        </a>
+        <div class="lang" role="group" aria-label="language">
+          <button type="button" data-set-lang="zh" lang="zh-CN">中文</button>
+          <button type="button" data-set-lang="en" lang="en">English</button>
+        </div>
+      </nav>
+    </header>
+
+    <main id="content">
+      <section class="hero" id="top">
+        <div class="hero-name">
+          <p class="kicker">
+            <span class="zh">个人主页</span>
+            <span class="en">Homepage</span>
+          </p>
+          <h1>Juce</h1>
+        </div>
+        <div class="hero-copy">
+          <p class="lede">
+            <span class="zh">Go 后端工程师，十年经验。现在做 AI agent 工程。</span>
+            <span class="en">Go backend engineer with 10 years of experience, now working on AI agent engineering.</span>
+          </p>
+          <p class="sub">
+            <span class="zh">曾在字节跳动和京东工作，做过的系统包括高并发和商业化。</span>
+            <span class="en">Formerly at ByteDance and JD.com. Built high-concurrency and commercialization systems.</span>
+          </p>
+          <p class="links">
+            <a href="https://github.com/hszjj221">GitHub</a>
+            <a href="https://x.com/hszjj221_">X</a>
+          </p>
+        </div>
+      </section>
+
+      <section class="feature" id="work">
+        <div class="feature-copy">
+          <p class="index">01</p>
+          <h2>gg</h2>
+          <p>
+            <span class="zh">用 Go 写的开源个人 AI agent。它住在终端、浏览器和聊天软件里，连接 OpenAI-compatible 接口，把会话存成 JSONL，也能记住你是谁。</span>
+            <span class="en"><a href="https://github.com/hszjj221/gg">gg</a> is an open-source personal AI agent written in Go. It lives in the terminal, the browser, and messenger apps, talks to OpenAI-compatible APIs, stores sessions as JSONL, and remembers who you are.</span>
+          </p>
+          <ul>
+            <li>
+              <span class="zh">终端、Web 与 Electron 共用同一套 Go 会话运行时。</span>
+              <span class="en">The CLI, Web, and Electron clients share one Go conversation runtime.</span>
+            </li>
+            <li>
+              <span class="zh">内置 read、list、grep、bash、edit、write，以及记忆、定时任务和第三方连接器。</span>
+              <span class="en">Built-in read, list, grep, bash, edit, and write, plus memory, scheduled jobs, and third-party connectors.</span>
+            </li>
+            <li>
+              <span class="zh">在终端里，bash、edit、write 会先征求同意。明显只读的 shell 命令可以直接跑。</span>
+              <span class="en">In a terminal, bash, edit, and write ask before they run. Clearly read-only shell commands do not.</span>
+            </li>
+            <li>
+              <span class="zh">危险 shell 命令必须交互确认。没有终端时，即使加上 --yolo 也会被拒绝。</span>
+              <span class="en">Dangerous shell commands always need an interactive approval, and stay denied under --yolo when there is no terminal.</span>
+            </li>
+          </ul>
+          <p class="links">
+            <a href="https://github.com/hszjj221/gg">
+              <span class="zh">源码</span>
+              <span class="en">Source</span>
+            </a>
+            <a href="https://gg.zunolab.dev">
+              <span class="zh">文档</span>
+              <span class="en">Docs</span>
+            </a>
+            <a href="https://demo.zunolab.dev">
+              <span class="zh">演示</span>
+              <span class="en">Demo</span>
+            </a>
+          </p>
+        </div>
+        <figure class="term-wrap">
+          <figcaption>
+            <span class="zh">安装与交互模式。演示站是回放，不调用模型。</span>
+            <span class="en">Install, then the interactive prompt. The demo site is a replay and does not call a model.</span>
+          </figcaption>
+          <pre class="term"><code>$ go install github.com/hszjj221/gg/cmd/gg@latest
+$ gg
+<span class="dim">gg interactive mode. Press Ctrl+D to exit.</span>
+&gt; </code></pre>
+        </figure>
+      </section>
+
+      <section class="background" id="background">
+        <p class="index">02</p>
+        <h2>
+          <span class="zh">经历</span>
+          <span class="en">Experience</span>
+        </h2>
+        <dl>
+          <div>
+            <dt>
+              <span class="zh">经验</span>
+              <span class="en">Experience</span>
+            </dt>
+            <dd>
+              <span class="zh">十年 Go 后端</span>
+              <span class="en">10 years, Go backend</span>
+            </dd>
+          </div>
+          <div>
+            <dt>
+              <span class="zh">曾在</span>
+              <span class="en">Formerly</span>
+            </dt>
+            <dd>
+              <span class="zh">字节跳动、京东</span>
+              <span class="en">ByteDance, JD.com</span>
+            </dd>
+          </div>
+          <div>
+            <dt>
+              <span class="zh">系统</span>
+              <span class="en">Systems</span>
+            </dt>
+            <dd>
+              <span class="zh">高并发、商业化</span>
+              <span class="en">High-concurrency, commercialization</span>
+            </dd>
+          </div>
+          <div>
+            <dt>
+              <span class="zh">现在</span>
+              <span class="en">Now</span>
+            </dt>
+            <dd>
+              <span class="zh">AI agent 工程</span>
+              <span class="en">AI agent engineering</span>
+            </dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="blog" id="blog">
+        <p class="index">03</p>
+        <h2>
+          <span class="zh">技术博客</span>
+          <span class="en">Tech blog</span>
+        </h2>
+        <p class="empty">
+          <span class="zh">还没有文章。</span>
+          <span class="en">No posts yet.</span>
+        </p>
+      </section>
+    </main>
+
+    <footer class="colophon">
+      <p>Juce</p>
+      <p class="links">
+        <a href="https://github.com/hszjj221">GitHub</a>
+        <a href="https://x.com/hszjj221_">X</a>
+        <a href="https://github.com/hszjj221/gg">gg</a>
+      </p>
+    </footer>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

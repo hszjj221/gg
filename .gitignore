@@ -6,3 +6,7 @@ ui/bin/
 ui/out/
 ui/.vite/
 ui/*.tsbuildinfo
+website/**/node_modules/
+website/**/dist/
+website/docs/src/
+website/docs/.vitepress/cache/
