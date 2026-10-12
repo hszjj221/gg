@@ -233,7 +233,7 @@ The CLI policy lives in `internal/cliapp`. It applies to one-shot prompts (`gg -
 
 | Mode | Terminal | Other approval-gated tools | Dangerous `bash` |
 | --- | --- | --- | --- |
-| `auto` (default) | prompt | deny, with a message that explains `--yolo` and `--approval on-request` | deny |
+| `auto` (default) | prompt | deny, with a message that explains `--yolo` and `--approval on-request` | prompt when a terminal can ask, otherwise deny |
 | `on-request` | prompt; the process exits if there is no terminal | same | prompt |
 | `yolo` (`--yolo` or `--approval yolo`) | allow without a prompt | allow without a prompt | prompt when a terminal can ask, otherwise deny |
 | `never` | allow without a prompt | allow without a prompt | deny (this mode never asks) |
