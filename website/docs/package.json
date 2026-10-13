@@ -4,8 +4,8 @@
   "type": "module",
   "scripts": {
     "sync": "node scripts/sync-content.mjs",
-    "build": "node --test scripts/links.test.mjs && node scripts/sync-content.mjs && vitepress build",
-    "dev": "node scripts/sync-content.mjs && vitepress dev",
+    "build": "node --test scripts/links.test.mjs scripts/sync.test.mjs scripts/watch-sources.test.mjs && node scripts/sync-content.mjs && vitepress build",
+    "dev": "node scripts/dev.mjs",
     "preview": "vitepress preview"
   },
   "devDependencies": {

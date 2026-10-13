@@ -34,7 +34,6 @@ export default withMermaid(
         themeConfig: {
           nav: [
             { text: "文档", link: "/" },
-            { text: "演示", link: "https://demo.zunolab.dev" },
             { text: "GitHub", link: github },
           ],
           sidebar: zhSidebar,
@@ -59,7 +58,6 @@ export default withMermaid(
         themeConfig: {
           nav: [
             { text: "Docs", link: "/en/" },
-            { text: "Demo", link: "https://demo.zunolab.dev" },
             { text: "GitHub", link: github },
           ],
           sidebar: enSidebar,
@@ -72,7 +70,36 @@ export default withMermaid(
       },
     },
     themeConfig: {
-      search: { provider: "local" },
+      search: {
+        provider: "local",
+        options: {
+          locales: {
+            root: {
+              translations: {
+                button: {
+                  buttonText: "搜索",
+                  buttonAriaLabel: "搜索",
+                },
+                modal: {
+                  displayDetails: "显示详细列表",
+                  resetButtonTitle: "重置搜索",
+                  backButtonTitle: "关闭搜索",
+                  noResultsText: "没有找到",
+                  footer: {
+                    selectText: "选择",
+                    selectKeyAriaLabel: "回车",
+                    navigateText: "切换",
+                    navigateUpKeyAriaLabel: "上箭头",
+                    navigateDownKeyAriaLabel: "下箭头",
+                    closeText: "关闭",
+                    closeKeyAriaLabel: "esc",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
       socialLinks: [{ icon: "github", link: github }],
     },
     markdown: {
