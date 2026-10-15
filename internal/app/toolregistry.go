@@ -190,7 +190,16 @@ func buildCoreTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
 		tools.NewReadToolWithOptions(tc.Config.CWD, tools.ReadOptions{ExtraRoots: tc.ReadRoots}),
 		tools.NewListTool(tc.Config.CWD),
 		tools.NewGrepTool(tc.Config.CWD),
-		tools.NewBashTool(tc.Config.CWD, tools.BashOptions{Sandbox: tc.Config.BashSandbox}),
+		tools.NewBashTool(tc.Config.CWD, tools.BashOptions{
+			Sandbox: tc.Config.BashSandbox,
+			Risk: tools.NewCommandRiskJudge(tools.RiskOptions{
+				Enabled:  tc.Config.BashRisk.Enabled,
+				Endpoint: tc.Config.BashRisk.Endpoint,
+				RunBelow: tc.Config.BashRisk.RunBelow,
+				AskAbove: tc.Config.BashRisk.AskAbove,
+				Timeout:  tc.Config.BashRisk.Timeout,
+			}),
+		}),
 		tools.NewEditTool(tc.Config.CWD),
 		tools.NewWriteTool(tc.Config.CWD),
 		tools.NewSubagentTool(tc.Config.CWD, tc.Provider, tools.SubagentOptions{}),

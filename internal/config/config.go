@@ -3,11 +3,13 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hszjj221/gg/internal/memory"
 	"github.com/hszjj221/gg/internal/userprofile"
@@ -178,11 +180,32 @@ type Config struct {
 	// BashSandbox opts the bash tool into an OS sandbox (bubblewrap on
 	// Linux, sandbox-exec on macOS). Off by default. When the helper is
 	// missing or cannot start, the command still runs and the tool output
-	// says the sandbox was unavailable.
+	// says the sandbox was unavailable. The sandbox does not skip the bash
+	// risk check, and a model decision to run does not disable the sandbox.
 	BashSandbox bool
+	// BashRisk is the optional Jev risk check for bash commands. Enabled
+	// is true only when TYPESAFE_API_KEY is set in the environment. The
+	// key itself is never stored on Config.
+	BashRisk BashRiskConfig
 
 	apiKeyOverride  string
 	baseURLOverride string
+}
+
+// BashRiskConfig is the optional model risk check for bash commands.
+// Thresholds are probabilities from Jev's needs_confirm noul.
+// noul < RunBelow runs; noul > AskAbove asks; the closed interval in
+// between keeps gg's existing confirmation policy.
+type BashRiskConfig struct {
+	// Enabled is true when TYPESAFE_API_KEY was non-empty at resolution.
+	// The key is not retained.
+	Enabled bool
+	// Endpoint is the full systemone POST URL. TYPESAFE_API_URL overrides
+	// the config file. It is not a secret. Userinfo is rejected.
+	Endpoint string
+	RunBelow float64
+	AskAbove float64
+	Timeout  time.Duration
 }
 
 type fileConfig struct {
@@ -194,6 +217,17 @@ type fileConfig struct {
 	Artifacts  dirFileConfig             `json:"artifacts"`
 	Library    dirFileConfig             `json:"library"`
 	Connectors connectorsFileConfig      `json:"connectors"`
+	BashRisk   bashRiskFileConfig        `json:"bashRisk"`
+}
+
+// defaultBashRiskEndpoint matches tools.defaultJevEndpoint.
+const defaultBashRiskEndpoint = "https://api.typesafe.ai/v1/systemone"
+
+type bashRiskFileConfig struct {
+	RunBelow  *float64 `json:"runBelow"`
+	AskAbove  *float64 `json:"askAbove"`
+	TimeoutMs *int     `json:"timeoutMs"`
+	Endpoint  *string  `json:"endpoint"`
 }
 
 type contextFileConfig struct {
@@ -259,8 +293,14 @@ func Resolve(options Options) (Config, error) {
 		return Config{}, err
 	}
 
+	bashRisk, err := resolveBashRisk(cfgFile.BashRisk)
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
 		Providers:          cfgFile.Providers,
+		BashRisk:           bashRisk,
 		Context:            contextConfig,
 		Memory:             memoryConfig,
 		MemoryPath:         filepath.Join(home, ".gg", "memory.md"),
@@ -443,6 +483,45 @@ func resolveConnectorConfig(home string, file connectorsFileConfig) ConnectorCon
 			ClientSecret: first(os.Getenv("GG_GOOGLE_CLIENT_SECRET"), file.Google.ClientSecret),
 		},
 	}
+}
+
+func resolveBashRisk(file bashRiskFileConfig) (BashRiskConfig, error) {
+	cfg := BashRiskConfig{
+		Enabled:  strings.TrimSpace(os.Getenv("TYPESAFE_API_KEY")) != "",
+		Endpoint: defaultBashRiskEndpoint,
+		RunBelow: 0.3,
+		AskAbove: 0.7,
+		Timeout:  2 * time.Second,
+	}
+	if file.RunBelow != nil {
+		cfg.RunBelow = *file.RunBelow
+	}
+	if file.AskAbove != nil {
+		cfg.AskAbove = *file.AskAbove
+	}
+	if cfg.RunBelow < 0 || cfg.AskAbove > 1 || cfg.RunBelow > cfg.AskAbove || cfg.AskAbove < 0 || cfg.RunBelow > 1 {
+		return BashRiskConfig{}, fmt.Errorf("bashRisk thresholds must satisfy 0 <= runBelow <= askAbove <= 1")
+	}
+	if file.TimeoutMs != nil {
+		if *file.TimeoutMs <= 0 {
+			return BashRiskConfig{}, fmt.Errorf("bashRisk.timeoutMs must be greater than 0")
+		}
+		cfg.Timeout = time.Duration(*file.TimeoutMs) * time.Millisecond
+	}
+	if file.Endpoint != nil && strings.TrimSpace(*file.Endpoint) != "" {
+		cfg.Endpoint = strings.TrimSpace(*file.Endpoint)
+	}
+	if env := strings.TrimSpace(os.Getenv("TYPESAFE_API_URL")); env != "" {
+		cfg.Endpoint = env
+	}
+	u, err := url.Parse(cfg.Endpoint)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return BashRiskConfig{}, fmt.Errorf("bashRisk endpoint must be an http(s) URL")
+	}
+	if u.User != nil {
+		return BashRiskConfig{}, fmt.Errorf("bashRisk endpoint must not include userinfo")
+	}
+	return cfg, nil
 }
 
 func resolveMemoryConfig(home string, file memoryFileConfig, disabledByCLI bool) (MemoryConfig, error) {

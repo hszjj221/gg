@@ -30,6 +30,10 @@ func TestApprovalActionFor(t *testing.T) {
 		{name: "never allows", mode: "never", terminal: false, req: bash, want: approvalAllow},
 		{name: "never denies dangerous", mode: "never", terminal: true, req: dangerous, want: approvalDeny, reason: "rm -rf"},
 		{name: "on-request prompts", mode: "on-request", terminal: true, req: bash, want: approvalPrompt},
+		{name: "yolo prompts confirm in a terminal", mode: "yolo", terminal: true, req: agent.ApprovalRequest{ToolName: "bash", Risk: agent.ApprovalRiskConfirm, RiskReason: "jev noul 0.9 > 0.7; confirmation required"}, want: approvalPrompt},
+		{name: "yolo denies confirm without a terminal", mode: "yolo", terminal: false, req: agent.ApprovalRequest{ToolName: "bash", Risk: agent.ApprovalRiskConfirm, RiskReason: "jev noul 0.9 > 0.7; confirmation required"}, want: approvalDeny, reason: "confirmation required"},
+		{name: "never denies confirm", mode: "never", terminal: true, req: agent.ApprovalRequest{ToolName: "bash", Risk: agent.ApprovalRiskConfirm, RiskReason: "timed out"}, want: approvalDeny, reason: "timed out"},
+		{name: "auto denies confirm without a terminal", mode: "auto", terminal: false, req: agent.ApprovalRequest{ToolName: "bash", Risk: agent.ApprovalRiskConfirm, RiskReason: "timed out"}, want: approvalDeny, reason: "timed out"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

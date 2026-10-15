@@ -20,7 +20,12 @@ type BashOptions struct {
 	// Sandbox, when set, runs the command inside an OS sandbox
 	// (bubblewrap on Linux, sandbox-exec on macOS). Missing or unusable
 	// helpers degrade: the command still runs, and the output says so.
+	// The sandbox does not skip the risk check, and a model "run" does
+	// not disable the sandbox.
 	Sandbox bool
+	// Risk, when set, is the two-layer bash risk check. Nil uses the
+	// classifier lists only, which is the no-API-key behavior.
+	Risk RiskJudge
 }
 
 type BashTool struct {
@@ -42,7 +47,7 @@ func (t BashTool) Name() string { return "bash" }
 func (t BashTool) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "bash",
-		Description: "Execute a shell command in the current working directory. Returns combined stdout and stderr. Clearly read-only commands may run without a prompt. Dangerous commands (rm -rf of / or home, a download piped into a shell, sudo, disk format, writes outside the working directory) always require interactive approval.",
+		Description: "Execute a shell command in the current working directory. Returns combined stdout and stderr. Clearly read-only commands may run without a prompt. Dangerous commands (rm -rf of / or home, a pipe into a shell, sudo, disk format, writes outside the working directory) always require interactive approval. When TYPESAFE_API_KEY is set, other commands can be scored by a risk model: a low score runs, a high score or a failed check asks, and a middling score keeps the normal approval policy.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -69,19 +74,38 @@ func (t BashTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, e
 	if input.Timeout > 0 {
 		timeout = time.Duration(input.Timeout) * time.Second
 	}
-	class := ClassifyCommand(input.Command, t.cwd)
+	risk, reason := t.approvalRisk(input.Command)
 	details := fmt.Sprintf("command: %s\ncwd: %s\ntimeout: %s", input.Command, t.cwd, timeout)
-	if class.Reason != "" {
-		details = "risk: " + class.Reason + "\n" + details
+	if reason != "" {
+		details = "risk: " + reason + "\n" + details
 	}
 	return agent.ApprovalRequest{
 		ToolName:   "bash",
 		Summary:    "bash: " + input.Command,
 		Details:    details,
 		Arguments:  raw,
-		Risk:       class.Risk,
-		RiskReason: class.Reason,
+		Risk:       risk,
+		RiskReason: reason,
 	}, nil
+}
+
+func (t BashTool) approvalRisk(command string) (string, string) {
+	judge := t.options.Risk
+	if judge == nil {
+		judge = disabledCommandRisk
+	}
+	verdict := judge.Judge(context.Background(), command, t.cwd)
+	switch verdict.Action {
+	case RiskRun:
+		return agent.ApprovalRiskReadOnly, verdict.Reason
+	case RiskAsk:
+		if verdict.Dangerous {
+			return agent.ApprovalRiskDangerous, verdict.Reason
+		}
+		return agent.ApprovalRiskConfirm, verdict.Reason
+	default:
+		return "", verdict.Reason
+	}
 }
 
 func (t BashTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {

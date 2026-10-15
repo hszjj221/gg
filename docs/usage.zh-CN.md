@@ -55,6 +55,8 @@ Session v3 把消息存在只追加的树里，并用独立的 head 记录保存
 
 模式有 `auto`（默认）、`on-request`、`yolo` 和 `never`。`--yolo` 选择 `yolo`，不能和另一个不同的 `--approval` 值一起用。`--sandbox` 在 helper 能启动时，于 Linux 上用 bubblewrap、于 macOS 上用 `sandbox-exec` 运行 `bash`。
 
+设置 `TYPESAFE_API_KEY` 后，内置名单没有直接放行或拒绝的 `bash` 命令会交给 TypeSafe Jev 打分。密钥只放在环境变量里，不要写进 `~/.gg/config.json`。没有密钥时不会调用模型，名单没有决定的命令仍走你已经设置的审批模式。名单不论有没有密钥都生效，包括安全模型里写明的更严的危险情况。名单命中优先：只读仍直接跑，危险命令仍要询问（没人回答就拒绝），`--yolo` 也不能跳过。其余命令里，`noul` 低于 `bashRisk.runBelow`（默认 0.3）直接跑，高于 `bashRisk.askAbove`（默认 0.7）询问，两端边界和中间分数沿用当前审批模式。超时（`bashRisk.timeoutMs`，默认 2000）、HTTP 错误或坏响应都会改成询问，不会放行。`--sandbox` 只约束已经允许执行的命令，不代替这次检查。端点可用 `TYPESAFE_API_URL` 覆盖。细节见[安全模型](architecture.zh-CN.md#安全模型)。
+
 只读 shell 命令不询问。危险 shell 命令仍然需要终端前有人确认。模式表和分类器见[安全模型](architecture.zh-CN.md#安全模型)。
 
 <a id="providers"></a>
