@@ -198,7 +198,7 @@ Skills（`internal/skills`）是第三层扩展：markdown playbook，从项目 
 
 CLI 策略在 `internal/cliapp`，覆盖一次性 prompt（`gg -p` 和 `gg <prompt>`）以及按行交互模式。
 
-| 模式 | 有终端 | 其他需要审批的工具 | 危险 `bash` |
+| 模式 | 有终端 | 其他需要审批的工具 | 危险 `bash`，以及风险检查要求确认 |
 | --- | --- | --- | --- |
 | `auto`（默认） | 询问 | 拒绝，并说明可以用 `--yolo` 或 `--approval on-request` | 有终端就询问，否则拒绝 |
 | `on-request` | 询问；没有终端时进程直接退出 | 同上 | 询问 |
@@ -207,17 +207,25 @@ CLI 策略在 `internal/cliapp`，覆盖一次性 prompt（`gg -p` 和 `gg <prom
 
 "有终端"指 stdin 和 stderr 都是终端，行内提问实际用得到它们。明显只读的 `bash` 命令在所有模式下都不询问。`edit`、`write` 和其他需要审批的工具都不是只读。写到工作区 agent 目录（`.gg/agent/`）仍像以前一样预先放行。
 
-Web 和桌面客户端继续用 daemon 的 `runApprover`：界面上询问，没人回答不会变成放行。定时任务用 `scheduler.UnattendedApprover`（默认拒绝，`--allow-all` 才放行，危险 `bash` 仍然拒绝）。
+Web 和桌面客户端继续用 daemon 的 `runApprover`：界面上询问，没人回答不会变成放行。这包括只读 `bash` 和模型判定可运行的命令，界面上的 approver 不按 risk 特殊放行。定时任务用 `scheduler.UnattendedApprover`（默认拒绝，`--allow-all` 才放行，危险 `bash` 和风险检查要求确认的命令仍然拒绝）。
 
 ### 命令分类
 
 `tools.ClassifyCommand` 在 approver 之前给每条 `bash` 命令打标签。标签和原因写在 `agent.ApprovalRequest` 的 `risk`、`riskReason` 上，并出现在审批详情里。
 
 - **只读**（`ls`、`cat`、`head`、`tail`、`grep`、`rg`、不带 `-exec`/`-delete` 的 `find`、不带前置 `-c`/`--config-env` 且不带 `--ext-diff`/`--textconv` 的 `git status`/`diff`/`log`/`show`、`go version`/`env`、仅 `-mod=readonly` 或 `-mod=vendor` 的 `go list`、只做格式化或解析的 `date`，以及一小份其他查看类命令）。不询问。`git -c` 不是只读：`core.fsmonitor` 的值可以是 hook 命令。`go list -mod=mod` 和未约束的 `go list` 不是只读。`date -s`、`date --set` 和位置参数形式的时间戳会改系统时钟，不是只读。
-- **危险**。`rm -rf` 指向 `/`、`/*`、`~`、`$HOME`、`/home`、`/Users` 或 `/root`；`rm` 以及其他写到工作目录之外的操作（`>`、`cp`/`mv`/`tee`/`chmod`/`chown` 等）；`curl`/`wget`/`fetch` 管道进 shell，包括经过 `env`（`curl … | env sh`）；`sudo`/`doas`/`pkexec`/`su`；磁盘和格式化工具（`mkfs`、`fdisk`、`dd of=/dev/…`、`diskutil` 等）；电源命令（`shutdown`、`reboot` 等）。原因显示在审批请求里。`--yolo` 和任务的 `--allow-all` 都不能跳过。写入路径会先沿着最近的已存在目录解析（含符号链接），再和工作目录比较。
-- **其余命令**（测试、构建、普通编辑、工作目录内的 `rm`）走该模式的普通策略。
+- **危险**。`rm -rf` 指向 `/`、`/*`、`~`、`$HOME`、`/home`、`/Users` 或 `/root`；`rm` 以及其他写到工作目录之外的操作（`>`、`cp`/`mv`/`tee`/`chmod`/`chown` 等）；任何管道进 shell 的内容（`curl … | sh`、`echo … | base64 -d | sh`，包括经过 `env`、`command`、`exec`、`busybox`）；`sudo`/`doas`/`pkexec`/`su`；磁盘和格式化工具（`mkfs`、`fdisk`、`dd of=/dev/…`、`diskutil` 等）；电源命令（`shutdown`、`reboot` 等）；`eval`；解释器一行代码（`python -c`、`perl -e`、`node -e` 等）；命令位置上的命令替换（`$(echo rm -rf /)`）；编码过的 PowerShell。`nice`、`timeout`、`xargs` 这类启动器，只要某个后缀危险，整条就危险。原因显示在审批请求里。`--yolo` 和任务的 `--allow-all` 都不能跳过。写入路径会先沿着最近的已存在目录解析（含符号链接），再和工作目录比较。
+- **其余命令**（测试、构建、普通编辑、工作目录内的 `rm`）走该模式的普通策略。解析器不信任的行（引号不配对、看不清脚本的 `bash script.sh`、`find -exec`）标签仍是空的。模型检查开启时这些行会询问，不会被低分自动放行。
 
-`&&`、`||`、`|`、`;` 按段分类。下载内容管道进 shell 算危险，即使每一段单独看都普通。`$(...)` 和反引号会按引号和转义再分类，所以 `echo "$(printf ')'; rm -rf /)"` 是危险的，而单引号里的 `'$(rm -rf /)'` 不会执行。`bash -c` 和 `eval` 会把脚本文本重新送进分类器。
+`&&`、`||`、`|`、`;` 按段分类，括号里的子 shell 会整段保留，所以 `(echo | sh)` 仍是一条命令。管道进 shell 算危险，即使每一段单独看都普通。下载内容管道进 shell 仍用更具体的原因，中间夹了别的命令也一样（`curl … | cat | sh`）。`$(...)` 和反引号会按引号和转义再分类，所以 `echo "$(printf ')'; rm -rf /)"` 是危险的，而单引号里的 `'$(rm -rf /)'` 不会执行。`bash -c` 会把脚本文本重新送进分类器；脚本整体只读时仍算只读。`eval` 一律危险，除非重新分类已经给出更具体的危险原因。
+
+### 可选的 Jev 风险检查
+
+设置了 `TYPESAFE_API_KEY` 时，名单没有直接决定的 `bash` 命令会再过一层模型。密钥只从该环境变量读取，不进配置文件，也不进审批文案或日志。没有密钥时不会调用模型，名单没有决定的命令仍走上面的审批模式。名单本身不论有没有密钥都生效，而且比以前更严：任何管道进 shell、`eval`、解释器一行代码、命令位置上的命令替换，以及后缀危险的启动器，都会被标成危险。
+
+`noul < runBelow`（默认 0.3）直接运行；`noul > askAbove`（默认 0.7）询问；闭区间（含两个边界）走现有审批模式。超时（默认 2 秒，`bashRisk.timeoutMs`）、HTTP 错误、坏响应、重定向或调用时没有密钥，都改为询问，不会放行。`--yolo` 仍会跳过中间分数和普通命令的提示，但跳不过名单命中、高于 `askAbove` 的分数，以及失败的检查。`--sandbox` 只影响已经允许执行的进程如何被装进沙箱，既不跳过检查，也不会被“可以运行”关掉。
+
+阈值写在 `~/.gg/config.json` 的 `bashRisk` 里（`runBelow`、`askAbove`、`timeoutMs`）。端点默认 `https://api.typesafe.ai/v1/systemone`，可用 `TYPESAFE_API_URL` 或 `bashRisk.endpoint` 覆盖，URL 里不能带用户名或密码。
 
 ### 沙箱
 
@@ -231,7 +239,7 @@ Web 和桌面客户端继续用 daemon 的 `runApprover`：界面上询问，没
 
 ### 已知限制
 
-- 分类器不是 shell。别名、编码过的 payload，以及解释器（`python -c`、`perl -e`、`busybox`）可以做出同样的事而不命中模式。混淆不在范围内；目标是抓住明显的情况，并且在一行无法当成只读时失败关闭（询问或拒绝）。
+- 分类器不是 shell。别名、`PATH` 里更靠前的同名二进制，以及“这一条写出脚本、下一条再执行”仍然可能漏过名单。解释器一行代码、`eval`、管道进 shell、命令位置上的替换已经算危险。剩下的在模型检查开启时失败关闭：名单不信任的行会询问，而不是靠低分自动运行。模型不能代替名单。
 - 只有 `~` 和 `$HOME` / `${HOME}` 被当成家目录。`rm -rf $DIR` 不会被当成灾难性删除。
 - 只读名单按程序名匹配。`PATH` 里更靠前的同名二进制也会被信任。启用并且真正生效的沙箱不依赖这个名字。
 - `--yolo` 和 `--approval never` 会以用户身份运行普通写入，以及分类器没有标成危险的任何 shell 命令。

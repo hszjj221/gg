@@ -3,8 +3,10 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestResolveMissingConfigUsesLegacyOpenAIProvider(t *testing.T) {
@@ -477,4 +479,122 @@ func TestResolveExpandsMemoryDirTilde(t *testing.T) {
 	if cfg.Memory.Dir != filepath.Join(home, "mymem") {
 		t.Fatalf("memory.dir ~/ not expanded: %q", cfg.Memory.Dir)
 	}
+}
+
+func TestResolveBashRiskDefaultsStayOffWithoutKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TYPESAFE_API_KEY", "")
+	t.Setenv("TYPESAFE_API_URL", "")
+	writeConfig(t, home, `{
+  "default": "openai:gpt-4.1",
+  "providers": {"openai": {"type": "openai-compatible", "apiKey": "openai-key", "models": ["gpt-4.1"]}}
+}`)
+	cfg, err := Resolve(Options{HomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BashRisk.Enabled || cfg.BashRisk.RunBelow != 0.3 || cfg.BashRisk.AskAbove != 0.7 || cfg.BashRisk.Timeout != 2*time.Second || cfg.BashRisk.Endpoint != defaultBashRiskEndpoint {
+		t.Fatalf("default bash risk: %+v", cfg.BashRisk)
+	}
+	if stringsContainSecret(cfg, "sk-live") {
+		t.Fatal("config picked up an unexpected secret")
+	}
+}
+
+func TestResolveBashRiskIgnoresKeyInFile(t *testing.T) {
+	home := t.TempDir()
+	secret := "super-secret-typesafe"
+	t.Setenv("TYPESAFE_API_KEY", secret)
+	t.Setenv("TYPESAFE_API_URL", "http://127.0.0.1:9/v1/systemone")
+	writeConfig(t, home, `{
+  "default": "openai:gpt-4.1",
+  "bashRisk": {
+    "apiKey": "`+secret+`",
+    "runBelow": 0.2,
+    "askAbove": 0.8,
+    "timeoutMs": 1500,
+    "endpoint": "https://api.typesafe.ai/v1/systemone"
+  },
+  "providers": {"openai": {"type": "openai-compatible", "apiKey": "openai-key", "models": ["gpt-4.1"]}}
+}`)
+	cfg, err := Resolve(Options{HomeDir: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.BashRisk.Enabled || cfg.BashRisk.RunBelow != 0.2 || cfg.BashRisk.AskAbove != 0.8 || cfg.BashRisk.Timeout != 1500*time.Millisecond {
+		t.Fatalf("bash risk config: %+v", cfg.BashRisk)
+	}
+	if cfg.BashRisk.Endpoint != "http://127.0.0.1:9/v1/systemone" {
+		t.Fatalf("env endpoint should win: %q", cfg.BashRisk.Endpoint)
+	}
+	if stringsContainSecret(cfg, secret) {
+		t.Fatalf("TYPESAFE_API_KEY was stored on config: %+v", cfg.BashRisk)
+	}
+}
+
+func TestResolveBashRiskRejectsBadThresholds(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TYPESAFE_API_KEY", "")
+	writeConfig(t, home, `{
+  "default": "openai:gpt-4.1",
+  "bashRisk": {"runBelow": 0.9, "askAbove": 0.2},
+  "providers": {"openai": {"type": "openai-compatible", "apiKey": "openai-key", "models": ["gpt-4.1"]}}
+}`)
+	if _, err := Resolve(Options{HomeDir: home}); err == nil || !strings.Contains(err.Error(), "bashRisk") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestResolveBashRiskRejectsUserinfo(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("TYPESAFE_API_URL", "https://user:super-secret-typesafe@api.typesafe.ai/v1/systemone")
+	writeConfig(t, home, `{
+  "default": "openai:gpt-4.1",
+  "providers": {"openai": {"type": "openai-compatible", "apiKey": "openai-key", "models": ["gpt-4.1"]}}
+}`)
+	if _, err := Resolve(Options{HomeDir: home}); err == nil || !strings.Contains(err.Error(), "userinfo") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func stringsContainSecret(v any, secret string) bool {
+	if secret == "" {
+		return false
+	}
+	return walkStrings(reflect.ValueOf(v), secret)
+}
+
+func walkStrings(v reflect.Value, secret string) bool {
+	if !v.IsValid() {
+		return false
+	}
+	switch v.Kind() {
+	case reflect.String:
+		return strings.Contains(v.String(), secret)
+	case reflect.Pointer, reflect.Interface:
+		if v.IsNil() {
+			return false
+		}
+		return walkStrings(v.Elem(), secret)
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if walkStrings(v.Field(i), secret) {
+				return true
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < v.Len(); i++ {
+			if walkStrings(v.Index(i), secret) {
+				return true
+			}
+		}
+	case reflect.Map:
+		iter := v.MapRange()
+		for iter.Next() {
+			if walkStrings(iter.Key(), secret) || walkStrings(iter.Value(), secret) {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -57,6 +57,20 @@ Modes are `auto` (default), `on-request`, `yolo`, and `never`. `--yolo` selects 
 
 Read-only shell commands skip the prompt. Dangerous shell commands still need a person at a terminal. The table and the classifier are in the [security model](architecture.md#security-model).
 
+### Optional command risk check
+
+Set `TYPESAFE_API_KEY` to score `bash` commands that the built-in lists do not already allow or deny. The key is an environment variable only. Do not put it in `~/.gg/config.json`. Without the key, gg does not call the model, and commands outside the lists keep the approval mode you already set. The lists apply either way, including the stricter dangerous cases described in the security model.
+
+A list hit wins: read-only commands still run, and dangerous ones still ask (or are denied when nobody can answer), including under `--yolo`. For everything else, Jev's `needs_confirm` probability below `bashRisk.runBelow` (default 0.3) runs, above `bashRisk.askAbove` (default 0.7) asks, and the range in between — including both boundaries — uses the approval mode you already set. A timeout (`bashRisk.timeoutMs`, default 2000), an HTTP error, or a bad response asks. It does not run the command.
+
+`--yolo` still skips the prompt for ordinary commands and for a middle-band score. It does not skip a denylist hit, a score above `askAbove`, or a failed check. `--sandbox` still only changes how an allowed command is contained. It does not skip the check, and a decision to run does not disable the sandbox.
+
+`TYPESAFE_API_URL` overrides `bashRisk.endpoint` (default `https://api.typesafe.ai/v1/systemone`) when you need a proxy. The URL must not contain a username or password.
+
+```json
+"bashRisk": {"runBelow": 0.3, "askAbove": 0.7, "timeoutMs": 2000}
+```
+
 <a id="providers"></a>
 
 ## Providers

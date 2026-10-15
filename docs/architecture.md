@@ -231,7 +231,7 @@ Tool use runs as the user. Approval is the gate for writes and other side effect
 
 The CLI policy lives in `internal/cliapp`. It applies to one-shot prompts (`gg -p` and `gg <prompt>`) and to the line-based interactive mode.
 
-| Mode | Terminal | Other approval-gated tools | Dangerous `bash` |
+| Mode | Terminal | Other approval-gated tools | Dangerous `bash`, and a risk check that asks |
 | --- | --- | --- | --- |
 | `auto` (default) | prompt | deny, with a message that explains `--yolo` and `--approval on-request` | prompt when a terminal can ask, otherwise deny |
 | `on-request` | prompt; the process exits if there is no terminal | same | prompt |
@@ -240,17 +240,33 @@ The CLI policy lives in `internal/cliapp`. It applies to one-shot prompts (`gg -
 
 "Terminal" means stdin and stderr are both terminals, which is what the line prompt can actually use. Clearly read-only `bash` commands skip the prompt in every mode. `edit`, `write`, and the other approval-gated tools are not read-only. Writes into the workspace agent area (`.gg/agent/`) stay pre-approved, as before.
 
-The Web and desktop clients keep the daemon's `runApprover`: the UI asks, and a missing answer does not become an allow. Scheduled jobs use `scheduler.UnattendedApprover` (deny by default, `--allow-all` opts in, dangerous `bash` still denied).
+The Web and desktop clients keep the daemon's `runApprover`: the UI asks, and a missing answer does not become an allow. That includes read-only `bash` and a model decision to run; the UI approver does not special-case risk. Scheduled jobs use `scheduler.UnattendedApprover` (deny by default, `--allow-all` opts in, dangerous `bash` and risk-check confirmations still denied).
 
 ### Command classifier
 
 `tools.ClassifyCommand` labels each `bash` command before the approver runs. The label and the reason are fields on `agent.ApprovalRequest` (`risk`, `riskReason`) and are included in the approval details.
 
 - **Read-only** (`ls`, `cat`, `head`, `tail`, `grep`, `rg`, `find` without `-exec`/`-delete`, `git status`/`diff`/`log`/`show` without a leading `-c`/`--config-env` and without `--ext-diff`/`--textconv`, `go version`/`env`, `go list` only with `-mod=readonly` or `-mod=vendor`, `date` only when it formats or parses a time, and a short allowlist of other inspection commands). No prompt. `git -c` is not read-only: a `core.fsmonitor` value is a hook command. `go list -mod=mod` and an unconstrained `go list` are not read-only. `date -s`, `date --set`, and a positional timestamp set the clock and are not read-only.
-- **Dangerous**. `rm -rf` of `/`, `/*`, `~`, `$HOME`, `/home`, `/Users`, or `/root`; `rm` and other writes (`>`, `cp`/`mv`/`tee`/`chmod`/`chown`, …) that resolve outside the working directory; `curl`/`wget`/`fetch` piped into a shell, including through `env` (`curl … | env sh`); `sudo`/`doas`/`pkexec`/`su`; disk and format tools (`mkfs`, `fdisk`, `dd of=/dev/…`, `diskutil`, …); power commands (`shutdown`, `reboot`, …). The reason is shown on the approval request. These are not waived by `--yolo` or by a job's `--allow-all`. A write path is resolved through the nearest existing directory, symlinks included, before it is compared with the working directory.
-- **Everything else** (tests, builds, ordinary edits, `rm` inside the working directory) keeps the mode's normal policy.
+- **Dangerous**. `rm -rf` of `/`, `/*`, `~`, `$HOME`, `/home`, `/Users`, or `/root`; `rm` and other writes (`>`, `cp`/`mv`/`tee`/`chmod`/`chown`, …) that resolve outside the working directory; anything piped into a shell (`curl … | sh`, `echo … | base64 -d | sh`, including through `env`, `command`, `exec`, or `busybox`); `sudo`/`doas`/`pkexec`/`su`; disk and format tools (`mkfs`, `fdisk`, `dd of=/dev/…`, `diskutil`, …); power commands (`shutdown`, `reboot`, …); `eval`; an interpreter one-liner (`python -c`, `perl -e`, `node -e`, `ruby -e`, `php -r`); command substitution in command position (`$(echo rm -rf /)`); encoded PowerShell (`-EncodedCommand`). A launcher (`nice`, `nohup`, `time`, `timeout`, `xargs`, …) is dangerous when any suffix is. The reason is shown on the approval request. These are not waived by `--yolo` or by a job's `--allow-all`. A write path is resolved through the nearest existing directory, symlinks included, before it is compared with the working directory.
+- **Everything else** (tests, builds, ordinary edits, `rm` inside the working directory) keeps the mode's normal policy. Lines the parser will not trust (unbalanced quotes, an opaque `bash script.sh`, `find -exec`, a launcher with no dangerous suffix) keep that same empty label. They are not auto-run by the model check below.
 
-Chains (`&&`, `||`, `|`, `;`) are classified per segment. A download piped into a shell is dangerous even when each segment would otherwise look ordinary. `$(...)` and backticks are classified with quote and escape state, so `echo "$(printf ')'; rm -rf /)"` is dangerous and a single-quoted `'$(rm -rf /)'` is not executed. `bash -c` and `eval` re-enter the classifier on their script text.
+Chains (`&&`, `||`, `|`, `;`) are classified per segment, and a parenthesized subshell is kept intact so `(echo | sh)` is still one command. A pipe into a shell is dangerous even when each segment would otherwise look ordinary. A download piped into a shell keeps the more specific "piped download" reason, including through an intermediate command (`curl … | cat | sh`). `$(...)` and backticks are classified with quote and escape state, so `echo "$(printf ')'; rm -rf /)"` is dangerous and a single-quoted `'$(rm -rf /)'` is not executed. `bash -c` re-enters the classifier on its script text; a fully read-only script stays read-only, and `eval` is always dangerous unless that re-entry is already dangerous for a more specific reason.
+
+### Optional Jev risk check
+
+When `TYPESAFE_API_KEY` is set, `bash` adds a second layer for commands the lists do not decide. The key is read from that environment variable only. It is not a config field, it is not written into `~/.gg/config.json`, and it is not put in approval text or logs. Without the key the model is never called, and commands the lists do not decide keep the mode in the table above. The lists themselves apply either way. They are stricter than the previous classifier: any pipe into a shell, `eval`, an interpreter one-liner, command substitution in command position, and a launcher whose suffix is dangerous are denylisted with or without the key.
+
+`tools.RiskJudge` (`internal/tools/risk.go`) is the interface. `NewCommandRiskJudge` is the implementation wired into the bash tool from `config.BashRisk`. The model client is `internal/tools/jev.go` (`ModelScorer`). It POSTs to `https://api.typesafe.ai/v1/systemone` (override the full URL with `TYPESAFE_API_URL` or `bashRisk.endpoint`; userinfo in the URL is rejected) using model `jev-preview` and reads `answers.needs_confirm.noul`.
+
+1. **Lists first.** An allowlist hit runs. A denylist hit asks (and is `ApprovalRiskDangerous`). The model is not called. A low score cannot override either hit. A held line (unparseable, opaque shell, undangerous launcher) asks when this layer is on, again without calling the model; with the layer off it keeps the ordinary policy.
+2. **Model.** `noul < runBelow` (default 0.3) runs without a prompt, by labeling the call read-only for the existing approver. `noul > askAbove` (default 0.7) asks (`ApprovalRiskConfirm`). The closed interval between them, including the two boundaries, keeps the mode's ordinary policy. `--yolo` therefore still auto-runs the middle band and still does not skip a denylist hit, a score above `askAbove`, or a failed check.
+3. **Failure.** An HTTP error, a timeout (default 2s, `bashRisk.timeoutMs`), a malformed body, a probability outside `[0, 1]`, a redirect, or a missing key on a call that expected one asks. It never runs. Nobody present to answer means deny, including under `--yolo`, `--approval never`, and a job's `--allow-all`.
+
+```json
+"bashRisk": {"runBelow": 0.3, "askAbove": 0.7, "timeoutMs": 2000}
+```
+
+`--sandbox` is independent. The risk check decides whether to ask; the sandbox, when the helper starts, wraps the process only after the command is allowed. A model "run" does not turn the sandbox off. The sandbox does not skip the lists or the model. If the helper is missing, the usual "sandbox unavailable" note is appended only when the command is actually allowed to run.
 
 ### Sandbox
 
@@ -264,7 +280,7 @@ The probe runs once per process. Sandboxed commands use `shell -c` so a login pr
 
 ### Known limitations
 
-- The classifier is not a shell. Aliases, encoded payloads, and interpreters (`python -c`, `perl -e`, `busybox`) can express the same effect without matching a pattern. Obfuscation is out of scope; the goal is to catch the obvious cases and to fail closed (ask, or deny) when a line cannot be treated as read-only.
+- The classifier is not a shell. Aliases, a binary earlier on `PATH`, and a payload written in one command and executed in a later one can still miss the lists. Inline interpreters, `eval`, pipes into a shell, and command substitution in command position are denylisted. What remains is fail-closed when the model check is on: a line the lists do not trust is asked, not auto-run. The model is not a substitute for that list.
 - Only `~` and `$HOME` / `${HOME}` are treated as the home directory. `rm -rf $DIR` is not known to be catastrophic.
 - The read-only allowlist is by program name. A different binary earlier on `PATH` would be trusted. The sandbox is the control that does not depend on that name.
 - `--yolo` and `--approval never` run ordinary writes and any shell command the classifier does not flag, as the user.

@@ -146,6 +146,10 @@ func TestUnattendedApprover(t *testing.T) {
 	if err != nil || d.Allow || !strings.Contains(d.Reason, "rm -rf targets /") {
 		t.Errorf("allow-all should still deny dangerous commands, got %+v,%v", d, err)
 	}
+	d, err = allow.Approve(ctx, agent.ApprovalRequest{ToolName: "bash", Risk: agent.ApprovalRiskConfirm, RiskReason: "jev noul 0.9 > 0.7; confirmation required"})
+	if err != nil || d.Allow || !strings.Contains(d.Reason, "confirmation required") {
+		t.Errorf("allow-all should deny model-confirmation commands, got %+v,%v", d, err)
+	}
 }
 
 type fakeExecutor struct {

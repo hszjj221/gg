@@ -61,9 +61,11 @@ Tools run as the user. A nil approver inside the agent runner means allow, so ev
 | `yolo` (`--yolo` or `--approval yolo`) | allow with no prompt | allow with no prompt | prompt in a terminal, otherwise deny |
 | `never` | allow with no prompt | allow with no prompt | deny, because this mode never asks |
 
-"In a terminal" means stdin and stderr are both terminals. `tools.ClassifyCommand` labels each `bash` command before that policy runs. Clearly read-only commands (`ls`, `cat`, `grep`, `git status` / `diff` / `log`, and a short allowlist) skip the prompt in every mode. Dangerous commands — `rm -rf` of `/` or a home directory, a download piped into a shell, `sudo`, disk and format tools, writes that resolve outside the working directory — still need an interactive approval. `--yolo` does not waive them, and a scheduled job's `--allow-all` does not either: nothing is there to answer, so those commands are denied.
+"In a terminal" means stdin and stderr are both terminals. `tools.ClassifyCommand` labels each `bash` command before that policy runs. Clearly read-only commands (`ls`, `cat`, `grep`, `git status` / `diff` / `log`, and a short allowlist) skip the prompt in every mode. Dangerous commands — `rm -rf` of `/` or a home directory, a pipe into a shell, `sudo`, `eval`, an interpreter one-liner, disk and format tools, writes that resolve outside the working directory — still need an interactive approval. `--yolo` does not waive them, and a scheduled job's `--allow-all` does not either: nothing is there to answer, so those commands are denied.
 
-`--sandbox` is off by default. When it is set, `bash` tries bubblewrap on Linux or `sandbox-exec` on macOS, with the working directory writable and the rest of the filesystem read-only. If the helper is missing or cannot start, the command still runs and the output says the sandbox was unavailable. The sandbox does not confine the network.
+If `TYPESAFE_API_KEY` is set, commands the lists do not decide can be scored by TypeSafe Jev. A low score runs, a high score or a failed check asks (and `--yolo` does not skip that ask), and a score in between keeps the mode above. The key stays in the environment. It is not read from config and not written to logs. Without the key this check is off.
+
+`--sandbox` is off by default. When it is set, `bash` tries bubblewrap on Linux or `sandbox-exec` on macOS, with the working directory writable and the rest of the filesystem read-only. If the helper is missing or cannot start, the command still runs and the output says the sandbox was unavailable. The sandbox does not confine the network, and it does not replace the approval check.
 
 Full rules, the classifier's gaps, and the sandbox limits: [security model](docs/architecture.md#security-model).
 

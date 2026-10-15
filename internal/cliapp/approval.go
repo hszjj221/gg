@@ -70,8 +70,9 @@ const (
 // approvalActionFor decides one request.
 //
 // Read-only shell commands run without a prompt in every mode.
-// Dangerous shell commands are prompted when a terminal can ask and the
-// mode is not "never"; otherwise they are denied, including under yolo.
+// Dangerous shell commands, and commands the risk check refused to
+// auto-run, are prompted when a terminal can ask and the mode is not
+// "never"; otherwise they are denied, including under yolo.
 // Other approval-gated tools are prompted in a terminal for auto and
 // on-request, allowed without a prompt for yolo and never, and denied
 // when auto has no terminal.
@@ -84,6 +85,12 @@ func approvalActionFor(mode string, terminal bool, req agent.ApprovalRequest) (a
 			return approvalPrompt, ""
 		}
 		return approvalDeny, denyDangerous(req)
+	}
+	if req.Risk == agent.ApprovalRiskConfirm {
+		if terminal && mode != "never" {
+			return approvalPrompt, ""
+		}
+		return approvalDeny, denyConfirm(req)
 	}
 	switch mode {
 	case "yolo", "never":
@@ -114,4 +121,16 @@ func denyDangerous(req agent.ApprovalRequest) string {
 		why = "dangerous command"
 	}
 	return fmt.Sprintf("tool call %q denied: %s. Dangerous commands always need an interactive approval and stay blocked under --yolo when there is no terminal. Run in a terminal without --approval never and approve the prompt to allow this once.", name, why)
+}
+
+func denyConfirm(req agent.ApprovalRequest) string {
+	name := req.ToolName
+	if name == "" {
+		name = "tool"
+	}
+	why := req.RiskReason
+	if why == "" {
+		why = "the risk check requires confirmation"
+	}
+	return fmt.Sprintf("tool call %q denied: %s. This command needs an interactive confirmation and stays blocked under --yolo when there is no terminal. Run in a terminal without --approval never and approve the prompt to allow this once.", name, why)
 }

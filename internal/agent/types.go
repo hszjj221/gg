@@ -149,6 +149,9 @@ type ApprovalRequest struct {
 	// ApprovalRiskReadOnly may run without a prompt.
 	// ApprovalRiskDangerous always needs a human when one can be asked,
 	// and is denied when nobody can answer — including under --yolo.
+	// ApprovalRiskConfirm also needs a human (a model ask, or a risk
+	// check that failed closed). It is denied when nobody can answer,
+	// including under --yolo, but it is not a classifier denylist hit.
 	// Empty means the ordinary approval policy for that tool.
 	Risk string `json:"risk,omitempty"`
 	// RiskReason explains Risk. Approvers show it with the request.
@@ -162,6 +165,10 @@ const (
 	// ApprovalRiskDangerous marks a call that must not be auto-approved.
 	// Interactive sessions still ask; --yolo and unattended allow-all deny it.
 	ApprovalRiskDangerous = "dangerous"
+	// ApprovalRiskConfirm marks a call the risk check will not auto-run
+	// (model score above the ask threshold, or a failed check). Interactive
+	// sessions ask; --yolo and unattended allow-all do not skip it.
+	ApprovalRiskConfirm = "confirm"
 )
 
 type ApprovalDecision struct {

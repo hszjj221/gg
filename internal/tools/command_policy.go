@@ -17,51 +17,82 @@ type CommandClassification struct {
 	Risk string
 	// Reason is shown on the approval request. Empty when Risk is empty.
 	Reason string
+	// Hold means the lists did not grant a run, and a model must not grant
+	// one either: the line is unparseable, an opaque shell, or some other
+	// shape the classifier will not treat as safe. Risk stays empty so the
+	// ordinary approval policy is unchanged when the model check is off.
+	Hold bool
 }
 
 // ClassifyCommand labels command relative to cwd.
 //
 // Read-only commands (ls, cat, grep, git status/diff/log, and a short
 // allowlist) can run without a prompt. Dangerous patterns — rm -rf of /
-// or home, a download piped into a shell, sudo, disk and format tools,
-// and writes outside cwd — always need an interactive approval and are
-// denied under --yolo when nobody can answer. Everything else keeps the
-// normal approval policy.
+// or home, anything piped into a shell, sudo, disk and format tools,
+// eval, an interpreter -c/-e one-liner, command substitution in command
+// position, and writes outside cwd — always need an interactive approval
+// and are denied under --yolo when nobody can answer. Everything else
+// keeps the normal approval policy. Hold is set when the line is not a
+// list hit but must not be cleared by a model; Risk stays empty then.
 func ClassifyCommand(command, cwd string) CommandClassification {
 	return classifyCommand(command, cwd, 0)
 }
 
 func classifyCommand(command, cwd string, depth int) CommandClassification {
 	command = strings.TrimSpace(command)
-	if command == "" || depth > 8 {
+	if command == "" {
 		return CommandClassification{}
+	}
+	if depth > 8 {
+		return CommandClassification{Hold: true}
+	}
+	if commandPositionSubst(command) {
+		if inner := classifySubstitutions(command, cwd, depth); inner.Risk == agent.ApprovalRiskDangerous {
+			return inner
+		}
+		return CommandClassification{Risk: agent.ApprovalRiskDangerous, Reason: "command substitution executes its output"}
 	}
 	segs, ok := splitSegments(command)
 	if !ok {
 		if inner := classifySubstitutions(command, cwd, depth); inner.Risk == agent.ApprovalRiskDangerous {
 			return inner
 		}
-		return CommandClassification{}
+		return CommandClassification{Hold: true}
 	}
 
 	allReadOnly := true
-	prev := ""
+	held := false
+	var pipe pipeInfo
 	for _, seg := range segs {
-		if strings.TrimSpace(seg.text) == "" {
+		text := strings.TrimSpace(seg.text)
+		if text == "" {
 			continue
 		}
-		class := classifySegment(seg.text, cwd, depth)
+		if stripped, ok := stripBackground(text); ok {
+			text = stripped
+		}
+		if text == "" {
+			continue
+		}
+		if seg.sep != "|" {
+			pipe = pipeInfo{}
+		}
+		name := commandBase(text)
+		if seg.sep == "|" && isShell(name) {
+			if pipe.downloader {
+				return CommandClassification{Risk: agent.ApprovalRiskDangerous, Reason: "piped download into a shell"}
+			}
+			return CommandClassification{Risk: agent.ApprovalRiskDangerous, Reason: "piped into a shell"}
+		}
+		class := classifySegment(text, cwd, depth)
 		if class.Risk == agent.ApprovalRiskDangerous {
 			return class
 		}
-		name := commandBase(seg.text)
-		if seg.sep == "|" && isShell(name) && isDownloader(prev) {
-			return CommandClassification{Risk: agent.ApprovalRiskDangerous, Reason: "piped download into a shell"}
+		if class.Hold {
+			held = true
 		}
 		if isDownloader(name) {
-			prev = name
-		} else if name != "" {
-			prev = name
+			pipe.downloader = true
 		}
 		if class.Risk != agent.ApprovalRiskReadOnly {
 			allReadOnly = false
@@ -71,11 +102,20 @@ func classifyCommand(command, cwd string, depth int) CommandClassification {
 		return inner
 	} else if inner.Risk != agent.ApprovalRiskReadOnly && hasSubstitution(command) {
 		allReadOnly = false
+		held = true
+	}
+	if held {
+		return CommandClassification{Hold: true}
 	}
 	if allReadOnly {
 		return CommandClassification{Risk: agent.ApprovalRiskReadOnly, Reason: "read-only command"}
 	}
 	return CommandClassification{}
+}
+
+// pipeInfo tracks the current pipeline. &&, ||, and ; start a new one.
+type pipeInfo struct {
+	downloader bool
 }
 
 func classifySubstitutions(command, cwd string, depth int) CommandClassification {
@@ -106,12 +146,14 @@ type shellSegment struct {
 }
 
 // splitSegments splits on |, ||, &&, ; and newlines outside quotes.
-// A false ok means the line is too messy to treat as read-only.
+// Parentheses keep their interior together so `(echo | sh)` stays one
+// subshell. A false ok means the line is too messy to treat as read-only.
 func splitSegments(command string) ([]shellSegment, bool) {
 	var segs []shellSegment
 	var b strings.Builder
 	quote := byte(0)
 	escaped := false
+	depth := 0
 	sep := ""
 	flush := func(next string) {
 		segs = append(segs, shellSegment{text: strings.TrimSpace(b.String()), sep: sep})
@@ -156,6 +198,26 @@ func splitSegments(command string) ([]shellSegment, bool) {
 			i++
 			continue
 		}
+		if c == '(' {
+			depth++
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		if c == ')' {
+			if depth == 0 {
+				return nil, false
+			}
+			depth--
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		if depth > 0 {
+			b.WriteByte(c)
+			i++
+			continue
+		}
 		if c == '|' && i+1 < len(command) && command[i+1] == '|' {
 			flush("||")
 			i += 2
@@ -179,7 +241,7 @@ func splitSegments(command string) ([]shellSegment, bool) {
 		b.WriteByte(c)
 		i++
 	}
-	if quote != 0 {
+	if quote != 0 || depth != 0 {
 		return nil, false
 	}
 	flush("")
@@ -187,9 +249,15 @@ func splitSegments(command string) ([]shellSegment, bool) {
 }
 
 func classifySegment(segment, cwd string, depth int) CommandClassification {
+	if depth > 8 {
+		return CommandClassification{Hold: true}
+	}
+	if body, ok := unwrapSubshell(segment); ok {
+		return classifySubshell(body, cwd, depth)
+	}
 	words, redirects, ok := parseSimpleCommand(segment)
 	if !ok {
-		return CommandClassification{}
+		return CommandClassification{Hold: true}
 	}
 	words = stripAssignments(words)
 	if len(words) == 0 {
@@ -201,21 +269,21 @@ func classifySegment(segment, cwd string, depth int) CommandClassification {
 		}
 		return CommandClassification{Risk: agent.ApprovalRiskReadOnly, Reason: "read-only command"}
 	}
-	name := filepath.Base(words[0])
-	args := words[1:]
-	if name == "env" {
-		rest, ok := stripEnvFlags(args)
-		if !ok {
-			return CommandClassification{}
-		}
-		if len(rest) == 0 {
-			return CommandClassification{Risk: agent.ApprovalRiskReadOnly, Reason: "read-only command"}
-		}
-		name = filepath.Base(rest[0])
-		args = rest[1:]
+	name, args, hold := unwrapWrappers(filepath.Base(words[0]), words[1:])
+	if hold {
+		return CommandClassification{Hold: true}
+	}
+	if name == "env" && len(args) == 0 {
+		return CommandClassification{Risk: agent.ApprovalRiskReadOnly, Reason: "read-only command"}
 	}
 	if reason := dangerousArgv(name, args, cwd); reason != "" {
 		return CommandClassification{Risk: agent.ApprovalRiskDangerous, Reason: reason}
+	}
+	if reason := inlineCodeReason(name, args); reason != "" {
+		return CommandClassification{Risk: agent.ApprovalRiskDangerous, Reason: reason}
+	}
+	if isLauncher(name) {
+		return classifyLauncher(args, cwd, depth)
 	}
 	if isShell(name) {
 		if script, ok := shellDashC(args); ok {
@@ -223,15 +291,30 @@ func classifySegment(segment, cwd string, depth int) CommandClassification {
 			if inner.Risk == agent.ApprovalRiskDangerous {
 				return inner
 			}
+			if inner.Risk == agent.ApprovalRiskReadOnly && !inner.Hold {
+				return inner
+			}
+			if inner.Hold {
+				return CommandClassification{Hold: true}
+			}
+			return CommandClassification{}
 		}
-		return CommandClassification{}
+		return CommandClassification{Hold: true}
 	}
-	if name == "eval" && len(args) > 0 {
-		inner := classifyCommand(strings.Join(args, " "), cwd, depth+1)
-		if inner.Risk == agent.ApprovalRiskDangerous {
-			return inner
+	if name == "eval" {
+		if len(args) > 0 {
+			inner := classifyCommand(strings.Join(args, " "), cwd, depth+1)
+			if inner.Risk == agent.ApprovalRiskDangerous {
+				return inner
+			}
 		}
-		return CommandClassification{}
+		return CommandClassification{Risk: agent.ApprovalRiskDangerous, Reason: "eval executes shell code"}
+	}
+	if name == "source" || name == "." {
+		return CommandClassification{Hold: true}
+	}
+	if name == "find" && !findReadOnly(args) {
+		return CommandClassification{Hold: true}
 	}
 	if reason := redirectRisk(redirects, cwd); reason != "" {
 		return CommandClassification{Risk: agent.ApprovalRiskDangerous, Reason: reason}
@@ -277,11 +360,289 @@ func dangerousArgv(name string, args []string, cwd string) string {
 		return pathsOutsideRisk("tee writes outside the working directory", args, cwd)
 	case "touch", "mkdir", "rmdir":
 		return pathsOutsideRisk(name+" writes outside the working directory", args, cwd)
+	case "xargs":
+		for _, a := range args {
+			base := filepath.Base(a)
+			if isShell(base) || base == "eval" {
+				return "xargs runs a shell"
+			}
+		}
+	case "powershell", "powershell.exe", "pwsh", "pwsh.exe":
+		for _, a := range args {
+			flag := strings.ToLower(strings.TrimLeft(a, "-"))
+			if flag == "encodedcommand" || flag == "enc" || flag == "ec" {
+				return "encoded powershell command"
+			}
+		}
 	}
 	if isDiskCommand(name) {
 		return "disk or format command: " + name
 	}
 	return ""
+}
+
+// stripBackground removes trailing unquoted & markers so `rm -rf / &`
+// is still the rm command. The returned ok is false when there is no
+// trailing background marker.
+func stripBackground(s string) (string, bool) {
+	cur := s
+	changed := false
+	for {
+		next, ok := stripOneBackground(cur)
+		if !ok {
+			break
+		}
+		cur = next
+		changed = true
+	}
+	if !changed {
+		return s, false
+	}
+	return strings.TrimSpace(cur), true
+}
+
+func stripOneBackground(s string) (string, bool) {
+	quote := byte(0)
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if quote == '"' && c == '\\' {
+				escaped = true
+				continue
+			}
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		if c == '\'' || c == '"' {
+			quote = c
+			continue
+		}
+		if c != '&' {
+			continue
+		}
+		if i+1 < len(s) && s[i+1] == '&' {
+			return "", false
+		}
+		if strings.TrimSpace(s[i+1:]) != "" {
+			return "", false
+		}
+		return strings.TrimSpace(s[:i]), true
+	}
+	return "", false
+}
+
+func isLauncher(name string) bool {
+	switch name {
+	case "nice", "nohup", "time", "setsid", "timeout", "ionice", "stdbuf", "flock", "watch", "xargs":
+		return true
+	default:
+		return false
+	}
+}
+
+// classifyLauncher scans every non-flag suffix of a wrapper. A dangerous
+// suffix is a denylist hit (`nice rm -rf /`, `xargs rm -rf /`). Anything
+// else is held so a model cannot clear the wrapper on a low score.
+func classifyLauncher(args []string, cwd string, depth int) CommandClassification {
+	for i := 0; i < len(args); i++ {
+		if strings.HasPrefix(args[i], "-") {
+			continue
+		}
+		inner := classifySegment(strings.Join(args[i:], " "), cwd, depth+1)
+		if inner.Risk == agent.ApprovalRiskDangerous {
+			return inner
+		}
+	}
+	return CommandClassification{Hold: true}
+}
+
+func inlineCodeReason(name string, args []string) string {
+	switch name {
+	case "python", "python2", "python3", "perl", "ruby", "node", "nodejs", "php", "lua", "osascript":
+	default:
+		return ""
+	}
+	for _, a := range args {
+		switch a {
+		case "-c", "-e", "-r", "-p", "--eval", "--print":
+			return "interpreter executes inline code (" + name + " " + a + ")"
+		}
+	}
+	return ""
+}
+
+// classifySubshell re-enters on a parenthesized body. A dangerous body
+// stays dangerous. A fully read-only body stays read-only. Anything else
+// keeps the ordinary policy (Hold included) so `(go test)` is judged like
+// `go test`.
+func classifySubshell(body, cwd string, depth int) CommandClassification {
+	inner := classifyCommand(body, cwd, depth+1)
+	if inner.Risk == agent.ApprovalRiskDangerous || inner.Hold || inner.Risk == agent.ApprovalRiskReadOnly {
+		return inner
+	}
+	return CommandClassification{}
+}
+
+// unwrapSubshell returns the body of a segment that is entirely one
+// parenthesized subshell. $(...) is command substitution, not a subshell
+// grouping, and is left alone.
+func unwrapSubshell(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	if len(s) < 2 || s[0] != '(' || strings.HasPrefix(s, "$(") {
+		return "", false
+	}
+	depth := 0
+	quote := byte(0)
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if quote == '"' && c == '\\' {
+				escaped = true
+				continue
+			}
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if escaped {
+			escaped = false
+			continue
+		}
+		switch c {
+		case '\\':
+			escaped = true
+		case '\'', '"':
+			quote = c
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth < 0 {
+				return "", false
+			}
+			if depth == 0 {
+				if strings.TrimSpace(s[i+1:]) != "" {
+					return "", false
+				}
+				return strings.TrimSpace(s[1:i]), true
+			}
+		}
+	}
+	return "", false
+}
+
+// commandPositionSubst reports whether any segment's command word is a
+// substitution, so the substitution's output is executed as code.
+func commandPositionSubst(command string) bool {
+	segs, ok := splitSegments(command)
+	if !ok {
+		return leadingSubst(command)
+	}
+	for _, seg := range segs {
+		if leadingSubst(seg.text) {
+			return true
+		}
+	}
+	return false
+}
+
+func leadingSubst(s string) bool {
+	for _, field := range strings.Fields(s) {
+		if isAssignment(field) {
+			continue
+		}
+		return strings.HasPrefix(field, "$(") || strings.HasPrefix(field, "`")
+	}
+	return false
+}
+
+// unwrapWrappers drops env, command, exec, and busybox shell applets so
+// the program that actually runs is what the lists see. hold is true when
+// a wrapper's flags are not understood.
+func unwrapWrappers(name string, args []string) (string, []string, bool) {
+	for range 8 {
+		switch name {
+		case "env":
+			rest, ok := stripEnvFlags(args)
+			if !ok {
+				return "", nil, true
+			}
+			if len(rest) == 0 {
+				return "env", nil, false
+			}
+			name = filepath.Base(rest[0])
+			args = rest[1:]
+		case "command":
+			rest, ok := stripCommandFlags(args)
+			if !ok {
+				return "", nil, true
+			}
+			if len(rest) == 0 {
+				return "command", nil, false
+			}
+			name = filepath.Base(rest[0])
+			args = rest[1:]
+		case "exec":
+			if len(args) == 0 {
+				return "exec", nil, false
+			}
+			name = filepath.Base(args[0])
+			args = args[1:]
+		case "busybox":
+			if len(args) == 0 {
+				return name, nil, false
+			}
+			applet := filepath.Base(args[0])
+			if isShell(applet) || applet == "eval" || applet == "exec" {
+				name = applet
+				args = args[1:]
+				continue
+			}
+			return name, args, false
+		default:
+			return name, args, false
+		}
+	}
+	return "", nil, true
+}
+
+func stripCommandFlags(args []string) ([]string, bool) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch a {
+		case "-p", "-v", "-V":
+			continue
+		case "--":
+			return args[i+1:], true
+		default:
+			if strings.HasPrefix(a, "-") {
+				return nil, false
+			}
+			return args[i:], true
+		}
+	}
+	return nil, true
 }
 
 func commandReadOnly(name string, args []string) bool {
@@ -762,9 +1123,13 @@ func commandName(words []string) string {
 	}
 	name := filepath.Base(words[0])
 	switch name {
-	case "sudo", "doas", "command":
+	case "sudo", "doas", "command", "exec":
 		rest := words[1:]
 		for len(rest) > 0 && strings.HasPrefix(rest[0], "-") {
+			if rest[0] == "--" {
+				rest = rest[1:]
+				break
+			}
 			rest = rest[1:]
 		}
 		if len(rest) == 0 {
@@ -777,6 +1142,14 @@ func commandName(words []string) string {
 			return name
 		}
 		return commandName(rest)
+	case "busybox":
+		if len(words) > 1 {
+			applet := filepath.Base(words[1])
+			if isShell(applet) || applet == "eval" || applet == "exec" {
+				return commandName(words[1:])
+			}
+		}
+		return name
 	default:
 		return name
 	}
