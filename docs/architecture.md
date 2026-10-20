@@ -290,6 +290,9 @@ The probe runs once per process. Sandboxed commands use `shell -c` so a login pr
 - `--yolo` and `--approval never` run ordinary writes and any shell command the classifier does not flag, as the user.
 - The sandbox does not block network access. On macOS, `/tmp` and the user temp dir stay writable. A helper that fails its probe degrades to no sandbox rather than refusing the command.
 - Windows has no sandbox helper.
+- Windows builds are compiled in CI but daemon pidfile locking is
+  unavailable there; `ggd` refuses to start with an explicit error instead
+  of silently running without a single-instance guard.
 - Approving a prompt, passing `--yolo`, or creating a job with `--allow-all` runs the tool with the user's own privileges. Approval is a checkpoint, not a confinement boundary, except for the optional sandbox's filesystem-write limits.
 
 ## Quality gates
@@ -297,7 +300,7 @@ The probe runs once per process. Sandboxed commands use `shell -c` so a login pr
 Every PR is expected to arrive green and stay reviewable:
 
 - **CI**: the 6 checks (Go on ubuntu-latest and macos-latest, Web and Electron) must pass; `go vet ./...` runs in CI and must be clean.
-- **Race**: `go test -race` on `internal/app`, `internal/session`, `internal/transport/...` (CI runs this on Linux).
+- **Race**: `go test -race` on all of `internal/...` (CI runs this on Linux).
 - **Format**: `gofmt -l` clean. Run `make check` locally before pushing — it runs format, vet, and the full test suite.
 - **New packages**: interfaces first, unit tests on the core paths, typed errors, doc comments on exported symbols.
 - **Size**: keep PRs under ~500 lines so one reviewer can hold them in their head; split bigger work into stacked phases.

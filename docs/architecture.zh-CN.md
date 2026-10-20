@@ -247,6 +247,7 @@ Web 和桌面客户端继续用 daemon 的 `runApprover`：界面上询问，没
 - `--yolo` 和 `--approval never` 会以用户身份运行普通写入，以及分类器没有标成危险的任何 shell 命令。
 - 沙箱不拦截网络。macOS 上 `/tmp` 和用户临时目录仍可写。helper 探测失败时降级为无沙箱，而不是拒绝命令。
 - Windows 没有沙箱 helper。
+- Windows 在 CI 里会编译，但守护进程的 pidfile 锁在该平台上不可用；`ggd` 会以明确的错误拒绝启动，而不是在没有单实例保护的情况下静默运行。
 - 在提示里批准、传入 `--yolo`，或给任务加 `--allow-all`，工具都以用户自己的权限运行。审批是检查点，不是隔离边界；可选沙箱只额外限制文件系统写入。
 
 ## 质量门禁
@@ -254,7 +255,7 @@ Web 和桌面客户端继续用 daemon 的 `runApprover`：界面上询问，没
 每个 PR 都要带着绿色 CI 来、保持可 review：
 
 - **CI**：6 个 check（ubuntu-latest 和 macos-latest 的 Go、Web、Electron）必须过；`go vet ./...` 在 CI 跑，必须干净。
-- **Race**：`internal/app`、`internal/session`、`internal/transport/...` 跑 `go test -race`（CI 在 Linux 跑）。
+- **Race**：`internal/...` 全部跑 `go test -race`（CI 在 Linux 跑）。
 - **格式**：`gofmt -l` 干净。push 前本地跑 `make check`——它跑格式、vet 和全量测试。
 - **新包**：接口先行、核心路径单测、类型化错误、导出符号写 doc 注释。
 - **大小**：PR 控制在 ~500 行以内，一个 reviewer 能装进脑子；大的拆成 stacked phases。
