@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"log/slog"
-	"path/filepath"
 
 	"github.com/hszjj221/gg/internal/app"
 	"github.com/hszjj221/gg/internal/config"
@@ -15,15 +14,8 @@ import (
 // is fatal to daemon startup.
 func newTelegramChannel(cfg config.Config, rt *app.Runtime, logger *slog.Logger) (Channel, error) {
 	var mclient *media.Client
-	if baseURL := nonEmpty(cfg.MediaBaseURL, cfg.BaseURL); baseURL != "" {
-		mclient = media.NewClient(media.Config{
-			BaseURL:    baseURL,
-			APIKey:     nonEmpty(cfg.MediaAPIKey, cfg.APIKey),
-			ImageModel: cfg.MediaImageModel,
-			TTSModel:   cfg.MediaTTSModel,
-			STTModel:   cfg.MediaSTTModel,
-			Dir:        filepath.Join(cfg.HomeDir, ".gg", "media"),
-		})
+	if mc, ok := cfg.MediaClientConfig(); ok {
+		mclient = media.NewClient(mc)
 	}
 	bot, err := telegram.New(telegram.Config{
 		Token:      cfg.TelegramBotToken,
@@ -46,12 +38,3 @@ type telegramChannel struct {
 func (c *telegramChannel) Name() string { return "telegram" }
 
 func (c *telegramChannel) Run(ctx context.Context) error { return c.bot.Run(ctx) }
-
-func nonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}

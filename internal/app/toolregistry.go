@@ -103,16 +103,15 @@ func (m *ToolMemo) MediaClient(cfg config.Config) *media.Client {
 		cfg.MediaImageModel, cfg.MediaTTSModel, cfg.MediaSTTModel,
 		cfg.HomeDir,
 	}, "\x00")
+	mc, ok := cfg.MediaClientConfig()
+	if !ok {
+		m.mediaClient = nil
+		m.mediaKey = ""
+		return nil
+	}
 	if m.mediaClient == nil || m.mediaKey != key {
 		m.mediaKey = key
-		m.mediaClient = media.NewClient(media.Config{
-			BaseURL:    baseURL,
-			APIKey:     firstNonEmpty(cfg.MediaAPIKey, cfg.APIKey),
-			ImageModel: cfg.MediaImageModel,
-			TTSModel:   cfg.MediaTTSModel,
-			STTModel:   cfg.MediaSTTModel,
-			Dir:        filepath.Join(cfg.HomeDir, ".gg", "media"),
-		})
+		m.mediaClient = media.NewClient(mc)
 	}
 	return m.mediaClient
 }

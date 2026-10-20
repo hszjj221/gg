@@ -598,3 +598,28 @@ func walkStrings(v reflect.Value, secret string) bool {
 	}
 	return false
 }
+
+func TestMediaClientConfigFallsBackToProvider(t *testing.T) {
+	cfg := Config{
+		BaseURL:         "https://api.example.com/v1",
+		APIKey:          "sk-test",
+		HomeDir:         "/home/u",
+		MediaImageModel: "img",
+	}
+	mc, ok := cfg.MediaClientConfig()
+	if !ok {
+		t.Fatal("expected media config")
+	}
+	if mc.BaseURL != "https://api.example.com/v1" || mc.APIKey != "sk-test" {
+		t.Fatalf("fallback = %+v", mc)
+	}
+	if mc.Dir != filepath.Join("/home/u", ".gg", "media") {
+		t.Fatalf("dir = %q", mc.Dir)
+	}
+}
+
+func TestMediaClientConfigRequiresBaseURL(t *testing.T) {
+	if _, ok := (Config{}).MediaClientConfig(); ok {
+		t.Fatal("empty config should not produce a media client")
+	}
+}
