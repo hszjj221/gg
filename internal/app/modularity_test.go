@@ -260,3 +260,37 @@ func TestPublishReportsFailedCompensation(t *testing.T) {
 		t.Fatalf("publish must report conflict and failed compensation: %v", err)
 	}
 }
+
+func TestServiceRunFailsBeforeProviderWhenLeaseHeld(t *testing.T) {
+	cwd := t.TempDir()
+	path := filepath.Join(cwd, "session.jsonl")
+	store, err := session.NewStore(path, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := session.NewStore(path, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := other.AcquireTurnLease()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	provider := &runtimeProvider{}
+	svc := NewService(Options{
+		Config:          config.Config{CWD: cwd, Selection: "test:model"},
+		ProviderFactory: func(config.Config) agent.Provider { return provider },
+		Store:           store,
+		ModelRecorded:   true,
+	})
+	defer svc.Close()
+
+	if _, err := svc.Run(context.Background(), "hello", nil, nil); err == nil {
+		t.Fatal("run succeeded while another store held the turn lease")
+	}
+	if provider.calls != 0 {
+		t.Fatalf("provider called %d times before the lease check", provider.calls)
+	}
+}

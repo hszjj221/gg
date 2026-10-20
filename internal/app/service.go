@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
@@ -61,6 +62,18 @@ func (s *Service) run(ctx context.Context, prompt string, onEvent func(agent.Eve
 		return Result{}, err
 	}
 	defer s.endTurn()
+	if s.store != nil {
+		// s.store cannot be replaced while running is true: fork/clone
+		// require an idle conversation, so the lease below covers the same
+		// store for the whole turn.
+		// Holding the lease for the whole turn means a second process
+		// fails before the provider is called, not after side effects.
+		release, err := s.store.AcquireTurnLease()
+		if err != nil {
+			return Result{}, fmt.Errorf("session is busy in another process: %w", err)
+		}
+		defer release()
+	}
 	if result, ok, err := s.handleControlCommand(ctx, prompt); ok || err != nil {
 		return result, err
 	}

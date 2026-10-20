@@ -505,3 +505,46 @@ func TestConcurrentAppendsKeepAtomicParent(t *testing.T) {
 		t.Fatalf("%d records with nil parent, want exactly 1 (the first)", nilParents)
 	}
 }
+
+func TestTurnLeaseIsExclusiveAcrossStores(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s.jsonl")
+	first, err := NewStore(path, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewStore(path, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := first.AcquireTurnLease()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.AcquireTurnLease(); err == nil {
+		t.Fatal("second store acquired a lease held by the first")
+	}
+	release()
+	release() // idempotent
+	release2, err := second.AcquireTurnLease()
+	if err != nil {
+		t.Fatal(err)
+	}
+	release2()
+}
+
+func TestAppendUsesHeldTurnLease(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewStore(filepath.Join(dir, "s.jsonl"), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := store.AcquireTurnLease()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if err := store.AppendModel("p", "m"); err != nil {
+		t.Fatalf("append under own lease: %v", err)
+	}
+}

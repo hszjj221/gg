@@ -64,6 +64,9 @@ type Store struct {
 	records  []entryRecord
 	lastID   *string
 	diskInfo os.FileInfo
+	// leaseRelease is non-nil while a turn holds the cross-process writer
+	// lease. appendRecord then reuses it instead of re-locking.
+	leaseRelease func()
 }
 
 func NewStore(path, cwd string) (*Store, error) {
@@ -364,11 +367,16 @@ func (s *Store) AppendName(name string) error {
 func (s *Store) appendRecord(record entryRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	release, err := acquireWriterLock(s.path)
-	if err != nil {
-		return err
+	if s.leaseRelease == nil {
+		release, err := acquireWriterLock(s.path)
+		if err != nil {
+			return err
+		}
+		defer release()
 	}
-	defer release()
+	// A held turn lease already excludes other processes, but the snapshot
+	// check still runs on every write so a session replaced underneath the
+	// holding process fails with ErrConflict instead of forking the file.
 	if err := s.validateCurrentLocked(); err != nil {
 		return err
 	}
@@ -403,6 +411,43 @@ func (s *Store) appendRecord(record entryRecord) error {
 	last := record.id()
 	s.lastID = &last
 	return nil
+}
+
+// AcquireTurnLease holds the session's cross-process writer lease for the
+// lifetime of one agent turn. It must be released even when the turn fails.
+// A second store (CLI vs daemon, or two daemons) gets ErrLocked before any
+// provider call or tool side effect happens.
+func (s *Store) AcquireTurnLease() (func(), error) {
+	s.mu.Lock()
+	if s.leaseRelease != nil {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("%w: %s", ErrLocked, s.path)
+	}
+	release, err := tryAcquireWriterLock(s.path)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	if err := s.validateCurrentLocked(); err != nil {
+		release()
+		s.mu.Unlock()
+		return nil, err
+	}
+	s.leaseRelease = release
+	s.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.mu.Lock()
+			release := s.leaseRelease
+			s.leaseRelease = nil
+			s.mu.Unlock()
+			if release != nil {
+				release()
+			}
+		})
+	}, nil
 }
 
 func (s *Store) validateCurrentLocked() error {
