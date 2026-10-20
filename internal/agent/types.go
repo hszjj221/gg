@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -197,6 +198,44 @@ func (DefaultApprover) Approve(_ context.Context, req ApprovalRequest) (Approval
 	default:
 		return ApprovalDecision{Allow: true}, nil
 	}
+}
+
+// UnattendedApprover is the approval policy for runs where no human is
+// present to answer prompts: scheduled jobs, daemon jobs, and chat bots. It
+// allows clearly read-only calls, denies ordinary calls unless AllowAll was
+// opted into, and always denies dangerous/confirm calls — even with AllowAll.
+type UnattendedApprover struct {
+	AllowAll bool
+}
+
+// Approve implements Approver. Dangerous commands (see the bash classifier)
+// and commands the risk check refused to auto-run are denied even when the
+// run opted into --allow-all, because nothing is present to approve them.
+func (a UnattendedApprover) Approve(_ context.Context, req ApprovalRequest) (ApprovalDecision, error) {
+	if req.Risk == ApprovalRiskReadOnly {
+		return ApprovalDecision{Allow: true}, nil
+	}
+	if req.Risk == ApprovalRiskDangerous {
+		why := req.RiskReason
+		if why == "" {
+			why = "dangerous command"
+		}
+		return ApprovalDecision{
+			Allow:  false,
+			Reason: fmt.Sprintf("tool call %q denied: %s. Dangerous commands are not run unattended, including with --allow-all.", req.ToolName, why),
+		}, nil
+	}
+	if req.Risk == ApprovalRiskConfirm {
+		why := req.RiskReason
+		if why == "" {
+			why = "confirmation required"
+		}
+		return ApprovalDecision{
+			Allow:  false,
+			Reason: fmt.Sprintf("tool call %q denied: %s. Commands that need confirmation are not run unattended, including with --allow-all.", req.ToolName, why),
+		}, nil
+	}
+	return ApprovalDecision{Allow: a.AllowAll}, nil
 }
 
 type ApprovalDescriber interface {

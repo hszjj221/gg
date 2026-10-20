@@ -434,3 +434,30 @@ func toolUseMessage(id, name, args string) AssistantMessage {
 		StopReason: StopReasonToolUse,
 	}
 }
+
+func TestUnattendedApproverAllowsReadOnly(t *testing.T) {
+	got, err := UnattendedApprover{}.Approve(context.Background(), ApprovalRequest{Risk: ApprovalRiskReadOnly})
+	if err != nil || !got.Allow {
+		t.Fatalf("read-only = %+v, %v; want allow", got, err)
+	}
+}
+
+func TestUnattendedApproverDeniesWithoutAllowAll(t *testing.T) {
+	got, err := UnattendedApprover{}.Approve(context.Background(), ApprovalRequest{})
+	if err != nil || got.Allow {
+		t.Fatalf("ordinary = %+v, %v; want deny", got, err)
+	}
+	got, _ = UnattendedApprover{AllowAll: true}.Approve(context.Background(), ApprovalRequest{})
+	if !got.Allow {
+		t.Fatal("allow-all should allow ordinary tools")
+	}
+}
+
+func TestUnattendedApproverNeverAllowsDangerous(t *testing.T) {
+	for _, risk := range []string{ApprovalRiskDangerous, ApprovalRiskConfirm} {
+		got, _ := UnattendedApprover{AllowAll: true}.Approve(context.Background(), ApprovalRequest{Risk: risk})
+		if got.Allow {
+			t.Fatalf("risk %q allowed unattended", risk)
+		}
+	}
+}

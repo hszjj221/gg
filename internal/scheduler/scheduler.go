@@ -21,41 +21,9 @@ type Executor interface {
 	Execute(ctx context.Context, job Job) (summary string, sessionPath string, err error)
 }
 
-// UnattendedApprover is the approval policy for scheduled runs, where no
-// human is present to answer prompts. By default every tool call that requires
-// approval is denied (the agent can still use read-only tools and produce a
-// text summary); a job created with --allow-all opts into full approval.
-type UnattendedApprover struct {
-	AllowAll bool
-}
-
-// Approve implements agent.Approver. Dangerous commands (see the bash
-// classifier) and commands the risk check refused to auto-run are denied
-// even when the job opted into --allow-all, because nothing is present
-// to approve them.
-func (a UnattendedApprover) Approve(ctx context.Context, req agent.ApprovalRequest) (agent.ApprovalDecision, error) {
-	if req.Risk == agent.ApprovalRiskDangerous {
-		why := req.RiskReason
-		if why == "" {
-			why = "dangerous command"
-		}
-		return agent.ApprovalDecision{
-			Allow:  false,
-			Reason: fmt.Sprintf("tool call %q denied: %s. Dangerous commands are not run unattended, including with --allow-all.", req.ToolName, why),
-		}, nil
-	}
-	if req.Risk == agent.ApprovalRiskConfirm {
-		why := req.RiskReason
-		if why == "" {
-			why = "confirmation required"
-		}
-		return agent.ApprovalDecision{
-			Allow:  false,
-			Reason: fmt.Sprintf("tool call %q denied: %s. Commands that need confirmation are not run unattended, including with --allow-all.", req.ToolName, why),
-		}, nil
-	}
-	return agent.ApprovalDecision{Allow: a.AllowAll}, nil
-}
+// UnattendedApprover is the scheduled-run approval policy. The canonical
+// implementation lives in agent so every unattended entry point shares it.
+type UnattendedApprover = agent.UnattendedApprover
 
 // idlePollInterval is how long the loop sleeps when no job is scheduled.
 const idlePollInterval = 30 * time.Second

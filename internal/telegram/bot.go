@@ -424,14 +424,6 @@ func (b *Bot) workspaceName(workspaceID string) string {
 	return b.ws.DefaultWorkspace().Name
 }
 
-// denyAllApprover refuses every approval request: the bot cannot ask the
-// user interactively, so tools that need approval are simply unavailable.
-type denyAllApprover struct{}
-
-func (denyAllApprover) Approve(_ context.Context, _ agent.ApprovalRequest) (agent.ApprovalDecision, error) {
-	return agent.ApprovalDecision{Allow: false}, nil
-}
-
 // repairBinding fixes an empty or stale workspace reference on a chat and
 // returns the effective binding. A stale workspace also drops the stored
 // session: the session belongs to a workspace that no longer exists, and
@@ -466,7 +458,7 @@ func (b *Bot) runAgent(ctx context.Context, chatID int64, prompt string) (string
 	if binding.SessionID == "" {
 		return b.runAgentNewSession(ctx, chatID, prompt, wsID)
 	}
-	run, err := b.ws.StartTurnWithApprover(ctx, binding.SessionID, prompt, denyAllApprover{})
+	run, err := b.ws.StartTurnWithApprover(ctx, binding.SessionID, prompt, agent.UnattendedApprover{})
 	if err == nil {
 		return b.waitRunResult(ctx, run)
 	}
@@ -490,7 +482,7 @@ func (b *Bot) runAgentNewSession(ctx context.Context, chatID int64, prompt, wsID
 	if err := b.chatStore.set(chatID, chatBinding{WorkspaceID: wsID, SessionID: snap.SessionID}); err != nil {
 		return "", err
 	}
-	run, err := b.ws.StartTurnWithApprover(ctx, snap.SessionID, prompt, denyAllApprover{})
+	run, err := b.ws.StartTurnWithApprover(ctx, snap.SessionID, prompt, agent.UnattendedApprover{})
 	if err != nil {
 		return "", err
 	}
