@@ -75,9 +75,10 @@ func (s *Service) run(ctx context.Context, prompt string, onEvent func(agent.Eve
 	}
 	defer s.endTurn()
 	if s.store != nil {
-		// Fork, clone, checkout, and rename cannot change s.store while a
-		// turn runs (they are idle-only or fail fast on ErrLocked), so the
-		// store reference is stable for the lease's lifetime.
+		// Metadata writes (fork, clone, checkout, rename) reuse the turn's
+		// held lease when present and otherwise try the lock without
+		// retrying, so they never block a running turn; the store reference
+		// stays stable for the lease's lifetime.
 		release, err := s.store.AcquireTurnLease()
 		if err != nil {
 			if errors.Is(err, session.ErrLocked) {
