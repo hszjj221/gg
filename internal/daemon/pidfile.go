@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"syscall"
 )
 
 // pidFileName is written under ~/.gg while ggd is alive so the CLI can tell
@@ -51,10 +50,10 @@ func WritePidFile(home string) (func(), error) {
 		_ = f.Close()
 		return nil, err
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if err := lockPIDFile(f); err != nil {
 		_ = f.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, ErrAlreadyRunning
+		if errors.Is(err, errPIDLockUnsupported) {
+			return nil, fmt.Errorf("pidfile locking is unavailable on this platform")
 		}
 		return nil, fmt.Errorf("lock pid file: %w", err)
 	}
@@ -73,7 +72,7 @@ func WritePidFile(home string) (func(), error) {
 	// locked the (then unlinked) inode, breaking the single-instance
 	// guarantee. DaemonAlive probes the lock, not the file's presence.
 	return func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = unlockPIDFile(f)
 		_ = f.Close()
 	}, nil
 }
@@ -91,5 +90,5 @@ func DaemonAlive(home string) bool {
 		return false
 	}
 	defer func() { _ = f.Close() }()
-	return syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil
+	return pidFileLockHeld(f)
 }
