@@ -248,9 +248,9 @@ func (s *Store) Fork(id *string) (*Store, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	release, err := acquireWriterLock(s.path)
+	release, err := tryAcquireWriterLock(s.path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrLocked, err)
 	}
 	defer release()
 	if err := s.validateCurrentLocked(); err != nil {
@@ -302,9 +302,9 @@ func (s *Store) SetWorkspaceID(id string) error {
 	if s.header.WorkspaceID == id {
 		return nil
 	}
-	release, err := acquireWriterLock(s.path)
+	release, err := tryAcquireWriterLock(s.path)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrLocked, err)
 	}
 	defer release()
 	if err := s.validateCurrentLocked(); err != nil {
@@ -361,14 +361,25 @@ func (s *Store) AppendName(name string) error {
 	}
 	name = strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ").Replace(name))
 	entry := SessionInfoEntry{EntryMetadata: EntryMetadata{Type: "session_info", ID: newID(), Timestamp: now()}, Name: name}
-	return s.appendRecord(entryRecord{entry: &entry})
+	return s.appendRecordFast(entryRecord{entry: &entry})
 }
 
 func (s *Store) appendRecord(record entryRecord) error {
+	return s.appendRecordWith(record, acquireWriterLock)
+}
+
+// appendRecordFast is appendRecord without the retry budget: a session whose
+// turn lease is held by another process rejects the metadata write instead
+// of blocking the active turn for five seconds.
+func (s *Store) appendRecordFast(record entryRecord) error {
+	return s.appendRecordWith(record, tryAcquireWriterLock)
+}
+
+func (s *Store) appendRecordWith(record entryRecord, lock func(string) (func(), error)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.leaseRelease == nil {
-		release, err := acquireWriterLock(s.path)
+		release, err := lock(s.path)
 		if err != nil {
 			return err
 		}

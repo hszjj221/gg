@@ -548,3 +548,65 @@ func TestAppendUsesHeldTurnLease(t *testing.T) {
 		t.Fatalf("append under own lease: %v", err)
 	}
 }
+
+func TestMetadataWritesFailFastWhileTurnLeaseHeld(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	first, err := NewStore(path, "project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewStore(path, "project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := first.AcquireTurnLease()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	start := time.Now()
+	if err := second.AppendName("renamed"); !errors.Is(err, ErrLocked) {
+		t.Fatalf("rename = %v, want ErrLocked", err)
+	}
+	if _, err := second.Fork(nil); !errors.Is(err, ErrLocked) {
+		t.Fatalf("fork = %v, want ErrLocked", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("metadata writes blocked for %s", elapsed)
+	}
+}
+
+func TestHeldLeaseStillValidatesDisk(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	store, err := NewStore(path, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := store.AcquireTurnLease()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	otherPath := filepath.Join(dir, "other.jsonl")
+	other, err := NewStore(otherPath, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := other.AppendMessage(agent.Message{Role: agent.RoleUser, Content: "external"}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(otherPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.AppendModel("p", "m"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("append under lease accepted a replaced file: %v", err)
+	}
+}

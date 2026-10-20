@@ -2,11 +2,13 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/runlog"
+	"github.com/hszjj221/gg/internal/session"
 )
 
 // DegradedProviders returns the providers that failed their most recent
@@ -63,14 +65,15 @@ func (s *Service) run(ctx context.Context, prompt string, onEvent func(agent.Eve
 	}
 	defer s.endTurn()
 	if s.store != nil {
-		// s.store cannot be replaced while running is true: fork/clone
-		// require an idle conversation, so the lease below covers the same
-		// store for the whole turn.
-		// Holding the lease for the whole turn means a second process
-		// fails before the provider is called, not after side effects.
+		// Fork, clone, checkout, and rename cannot change s.store while a
+		// turn runs (they are idle-only or fail fast on ErrLocked), so the
+		// store reference is stable for the lease's lifetime.
 		release, err := s.store.AcquireTurnLease()
 		if err != nil {
-			return Result{}, fmt.Errorf("session is busy in another process: %w", err)
+			if errors.Is(err, session.ErrLocked) {
+				return Result{}, fmt.Errorf("session is busy in another process: %w", err)
+			}
+			return Result{}, fmt.Errorf("cannot start turn: %w", err)
 		}
 		defer release()
 	}
