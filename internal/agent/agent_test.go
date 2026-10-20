@@ -47,6 +47,7 @@ func (t fakeTool) Execute(ctx context.Context, args json.RawMessage) ToolResult 
 type fakeApprovalTool struct {
 	name        string
 	runs        int
+	risk        string
 	approvalErr error
 }
 
@@ -62,7 +63,7 @@ func (t *fakeApprovalTool) ApprovalRequest(args json.RawMessage) (ApprovalReques
 	if t.approvalErr != nil {
 		return ApprovalRequest{}, t.approvalErr
 	}
-	return ApprovalRequest{ToolName: t.name, Summary: "run " + t.name, Details: string(args), Arguments: args}, nil
+	return ApprovalRequest{ToolName: t.name, Summary: "run " + t.name, Details: string(args), Arguments: args, Risk: t.risk}, nil
 }
 
 type fakeApprover struct {
@@ -368,6 +369,55 @@ func TestRunnerReturnsApprovalErrorsAsToolResults(t *testing.T) {
 	last := second.Messages[len(second.Messages)-1]
 	if !strings.Contains(last.Content, "approval failed for tool \"bash\"") || !strings.Contains(last.Content, "approval unavailable") {
 		t.Fatalf("approval error not sent to model: %+v", last)
+	}
+}
+
+func TestNilApproverDeniesDangerousTool(t *testing.T) {
+	tool := &fakeApprovalTool{name: "danger", risk: ApprovalRiskDangerous}
+	provider := &fakeProvider{responses: []AssistantMessage{
+		{
+			Message:    Message{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "danger", Arguments: json.RawMessage(`{}`)}}},
+			StopReason: StopReasonToolUse,
+		},
+		{Message: Message{Role: RoleAssistant, Content: "done"}, StopReason: StopReasonEndTurn},
+	}}
+	runner := NewRunner(provider, []Tool{tool})
+	if _, err := runner.Run(context.Background(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if tool.runs != 0 {
+		t.Fatalf("dangerous tool ran %d times without an approver", tool.runs)
+	}
+	// The denial must reach the model as a tool result, not be silent.
+	last := provider.requests[len(provider.requests)-1]
+	found := false
+	for _, msg := range last.Messages {
+		if msg.Role == RoleTool && strings.Contains(msg.Content, "no approver") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("model did not receive the denial: %+v", last.Messages)
+	}
+}
+
+func TestNilApproverAllowsOrdinaryAndReadOnlyTools(t *testing.T) {
+	for _, risk := range []string{"", ApprovalRiskReadOnly} {
+		tool := &fakeApprovalTool{name: "ok", risk: risk}
+		provider := &fakeProvider{responses: []AssistantMessage{
+			{
+				Message:    Message{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "ok", Arguments: json.RawMessage(`{}`)}}},
+				StopReason: StopReasonToolUse,
+			},
+			{Message: Message{Role: RoleAssistant, Content: "done"}, StopReason: StopReasonEndTurn},
+		}}
+		runner := NewRunner(provider, []Tool{tool})
+		if _, err := runner.Run(context.Background(), nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		if tool.runs != 1 {
+			t.Fatalf("risk %q: tool ran %d times, want 1", risk, tool.runs)
+		}
 	}
 }
 

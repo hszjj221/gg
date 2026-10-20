@@ -182,6 +182,23 @@ type Approver interface {
 	Approve(context.Context, ApprovalRequest) (ApprovalDecision, error)
 }
 
+// DefaultApprover is the policy used when a caller supplies no approver.
+// It never auto-approves a call that needs a human: dangerous and confirm
+// risks are denied, everything else (including read-only) keeps running.
+// A nil approver must therefore not mean "allow everything".
+type DefaultApprover struct{}
+
+func (DefaultApprover) Approve(_ context.Context, req ApprovalRequest) (ApprovalDecision, error) {
+	switch req.Risk {
+	case ApprovalRiskDangerous:
+		return ApprovalDecision{Allow: false, Reason: "dangerous command denied: no approver is configured"}, nil
+	case ApprovalRiskConfirm:
+		return ApprovalDecision{Allow: false, Reason: "command needs confirmation but no approver is configured"}, nil
+	default:
+		return ApprovalDecision{Allow: true}, nil
+	}
+}
+
 type ApprovalDescriber interface {
 	ApprovalRequest(json.RawMessage) (ApprovalRequest, error)
 }
