@@ -461,3 +461,31 @@ func TestUnattendedApproverNeverAllowsDangerous(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultApproverOnlyAllowsKnownSafeRisks(t *testing.T) {
+	tests := []struct {
+		name string
+		risk string
+		want bool
+	}{
+		{name: "read-only", risk: ApprovalRiskReadOnly, want: true},
+		{name: "unclassified", risk: "", want: true},
+		{name: "dangerous", risk: ApprovalRiskDangerous, want: false},
+		{name: "confirm", risk: ApprovalRiskConfirm, want: false},
+		{name: "unrecognized", risk: "future-risk", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decision, err := DefaultApprover{}.Approve(context.Background(), ApprovalRequest{Risk: tt.risk})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Allow != tt.want {
+				t.Fatalf("risk %q: allow = %t, want %t", tt.risk, decision.Allow, tt.want)
+			}
+			if !tt.want && !strings.Contains(decision.Reason, tt.risk) && tt.risk != "" {
+				t.Fatalf("risk %q: denial reason %q does not name the risk", tt.risk, decision.Reason)
+			}
+		})
+	}
+}
