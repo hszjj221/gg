@@ -225,7 +225,7 @@ The three layers, from most to least trusted:
 
 ## Security model
 
-Tool use runs as the user. Approval is the gate for writes and other side effects; a nil approver in the agent runner still means "allow", so every caller that can run tools passes an approver on purpose. The CLI no longer uses a nil approver for `--approval auto`.
+Tool use runs as the user. Approval is the gate for writes and other side effects. A nil approver in the agent runner does not mean allow: it falls back to `agent.DefaultApprover`, which denies `dangerous` and `confirm` risks when no human can answer and lets ordinary and read-only calls run. The CLI passes an approver on purpose; its `--approval auto` no longer uses nil.
 
 ### Approval modes
 
@@ -239,6 +239,10 @@ The CLI policy lives in `internal/cliapp`. It applies to one-shot prompts (`gg -
 | `never` | allow without a prompt | allow without a prompt | deny (this mode never asks) |
 
 "Terminal" means stdin and stderr are both terminals, which is what the line prompt can actually use. Clearly read-only `bash` commands skip the prompt in every mode. `edit`, `write`, and the other approval-gated tools are not read-only. Writes into the workspace agent area (`.gg/agent/`) stay pre-approved, as before.
+
+`requireApproval:false` from a transport client does not disable policy:
+calls classified `dangerous` or `confirm` are denied when no human approver
+is attached, exactly like an unattended scheduled run.
 
 The Web and desktop clients keep the daemon's `runApprover`: the UI asks, and a missing answer does not become an allow. That includes read-only `bash` and a model decision to run; the UI approver does not special-case risk. Scheduled jobs use `scheduler.UnattendedApprover` (deny by default, `--allow-all` opts in, dangerous `bash` and risk-check confirmations still denied).
 
@@ -286,6 +290,14 @@ The probe runs once per process. Sandboxed commands use `shell -c` so a login pr
 - `--yolo` and `--approval never` run ordinary writes and any shell command the classifier does not flag, as the user.
 - The sandbox does not block network access. On macOS, `/tmp` and the user temp dir stay writable. A helper that fails its probe degrades to no sandbox rather than refusing the command.
 - Windows has no sandbox helper.
+- Windows builds are compiled in CI but daemon pidfile locking is
+  unavailable there; `ggd` refuses to start with an explicit error instead
+  of silently running without a single-instance guard.
+- On non-Unix platforms `processAlive` always reports a live owner, so a
+  stale session lock that names a PID is never reclaimed: a crashed `gg`
+  leaves `session.jsonl.lock` behind and later opens fail as locked until
+  the file is removed by hand. A corrupt lock that names no PID is still
+  reclaimed.
 - Approving a prompt, passing `--yolo`, or creating a job with `--allow-all` runs the tool with the user's own privileges. Approval is a checkpoint, not a confinement boundary, except for the optional sandbox's filesystem-write limits.
 
 ## Quality gates
@@ -293,7 +305,7 @@ The probe runs once per process. Sandboxed commands use `shell -c` so a login pr
 Every PR is expected to arrive green and stay reviewable:
 
 - **CI**: the 6 checks (Go on ubuntu-latest and macos-latest, Web and Electron) must pass; `go vet ./...` runs in CI and must be clean.
-- **Race**: `go test -race` on `internal/app`, `internal/session`, `internal/transport/...` (CI runs this on Linux).
+- **Race**: `go test -race` on all of `internal/...` (CI runs this on Linux).
 - **Format**: `gofmt -l` clean. Run `make check` locally before pushing — it runs format, vet, and the full test suite.
 - **New packages**: interfaces first, unit tests on the core paths, typed errors, doc comments on exported symbols.
 - **Size**: keep PRs under ~500 lines so one reviewer can hold them in their head; split bigger work into stacked phases.

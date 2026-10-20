@@ -283,42 +283,47 @@ func (r *Runner) prepareToolCall(ctx context.Context, call ToolCall, onEvent fun
 		emitToolFinish(onEvent, call, summary, result)
 		return nil, "", &result
 	}
-	if r.approver != nil {
-		if _, ok := tool.(ApprovalDescriber); ok {
-			if req.ToolName == "" {
-				req.ToolName = call.Name
+	approver := r.approver
+	if approver == nil {
+		// Fail closed: a missing approver is not permission to run
+		// approval-gated calls. The tool is still denied only for risks
+		// that require a human; ordinary tools keep working.
+		approver = DefaultApprover{}
+	}
+	if _, ok := tool.(ApprovalDescriber); ok {
+		if req.ToolName == "" {
+			req.ToolName = call.Name
+		}
+		if len(req.Arguments) == 0 {
+			req.Arguments = call.Arguments
+		}
+		// A pre-approved request skips the approver entirely: the tool
+		// asserted a narrow, registry-allowed exemption (agent-area
+		// writes). The start/finish events above and below are still
+		// emitted, with the summary annotated for transparency.
+		if !req.PreApproved {
+			started := time.Now()
+			decision, err := approver.Approve(ctx, req)
+			outcome := runlog.Outcome(err)
+			if err == nil && !decision.Allow {
+				outcome = "denied"
 			}
-			if len(req.Arguments) == 0 {
-				req.Arguments = call.Arguments
+			runlog.Logger(ctx, slog.Default()).DebugContext(ctx, "tool approval finished", "tool", call.Name, "toolCallID", call.ID, "durationMs", float64(time.Since(started).Microseconds())/1000, "outcome", outcome)
+			if err != nil {
+				reason = "approval_failed"
+				result := toolError(fmt.Errorf("approval failed for tool %q: %w", call.Name, err))
+				emitToolFinish(onEvent, call, summary, result)
+				return nil, "", &result
 			}
-			// A pre-approved request skips the approver entirely: the tool
-			// asserted a narrow, registry-allowed exemption (agent-area
-			// writes). The start/finish events above and below are still
-			// emitted, with the summary annotated for transparency.
-			if !req.PreApproved {
-				started := time.Now()
-				decision, err := r.approver.Approve(ctx, req)
-				outcome := runlog.Outcome(err)
-				if err == nil && !decision.Allow {
-					outcome = "denied"
+			if !decision.Allow {
+				reason = "approval_denied"
+				msg := fmt.Sprintf("tool call %q denied by user", call.Name)
+				if decision.Reason != "" {
+					msg = decision.Reason
 				}
-				runlog.Logger(ctx, slog.Default()).DebugContext(ctx, "tool approval finished", "tool", call.Name, "toolCallID", call.ID, "durationMs", float64(time.Since(started).Microseconds())/1000, "outcome", outcome)
-				if err != nil {
-					reason = "approval_failed"
-					result := toolError(fmt.Errorf("approval failed for tool %q: %w", call.Name, err))
-					emitToolFinish(onEvent, call, summary, result)
-					return nil, "", &result
-				}
-				if !decision.Allow {
-					reason = "approval_denied"
-					msg := fmt.Sprintf("tool call %q denied by user", call.Name)
-					if decision.Reason != "" {
-						msg = decision.Reason
-					}
-					result := toolError(fmt.Errorf("%s", msg))
-					emitToolFinish(onEvent, call, summary, result)
-					return nil, "", &result
-				}
+				result := toolError(fmt.Errorf("%s", msg))
+				emitToolFinish(onEvent, call, summary, result)
+				return nil, "", &result
 			}
 		}
 	}

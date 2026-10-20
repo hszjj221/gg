@@ -1,4 +1,6 @@
 .DS_Store
+.worktrees/
+.superpowers/
 .gg/outputs/
 ui/node_modules/
 ui/dist/

@@ -2,10 +2,15 @@ package app
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/runlog"
+	"github.com/hszjj221/gg/internal/session"
 )
 
 // DegradedProviders returns the providers that failed their most recent
@@ -20,6 +25,9 @@ func (s *Service) Queue() *agent.MessageQueue {
 }
 
 func (s *Service) Run(ctx context.Context, prompt string, onEvent func(agent.Event), approver agent.Approver) (result Result, err error) {
+	if s.closed.Load() {
+		return Result{}, errorf(ErrorRuntimeClosed, false, "conversation is closed")
+	}
 	id, _ := ctx.Value(runIDKey{}).(string)
 	if id == "" {
 		id = newRuntimeID()
@@ -54,20 +62,46 @@ func (s *Service) Run(ctx context.Context, prompt string, onEvent func(agent.Eve
 
 // Service exposes conversation use cases to adapters. State, turn execution,
 // prompt construction and tool resources each have one owner behind this facade.
-type Service struct{ *turnExecutor }
+type Service struct {
+	*turnExecutor
+	closeOnce sync.Once
+	closeErr  error
+	closed    atomic.Bool
+}
 
 func (s *Service) run(ctx context.Context, prompt string, onEvent func(agent.Event), approver agent.Approver) (Result, error) {
 	if err := s.beginTurn(); err != nil {
 		return Result{}, err
 	}
 	defer s.endTurn()
+	if s.store != nil {
+		// Append-based metadata writes (rename, checkout) reuse this held
+		// lease instead of taking their own lock. Fork/clone and workspace
+		// binding make a single non-blocking lock attempt and fail with
+		// ErrLocked while the lease is held, so none of them wait on the
+		// running turn.
+		release, err := s.store.AcquireTurnLease()
+		if err != nil {
+			if errors.Is(err, session.ErrLocked) {
+				return Result{}, fmt.Errorf("session is busy in another process: %w", err)
+			}
+			return Result{}, fmt.Errorf("cannot start turn: %w", err)
+		}
+		defer release()
+	}
 	if result, ok, err := s.handleControlCommand(ctx, prompt); ok || err != nil {
 		return result, err
 	}
 	return s.execute(ctx, prompt, onEvent, approver)
 }
 
-func (s *Service) Close() error { return s.tools.Close() }
+func (s *Service) Close() error {
+	s.closeOnce.Do(func() {
+		s.closed.Store(true)
+		s.closeErr = s.tools.Close()
+	})
+	return s.closeErr
+}
 
 func (s *Service) buildTools(ctx context.Context, provider agent.Provider) []agent.Tool {
 	return s.tools.Build(ctx, s.cfg, provider)

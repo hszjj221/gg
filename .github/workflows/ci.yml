@@ -30,9 +30,12 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Cross-compile Windows
+        run: GOOS=windows GOARCH=amd64 go build ./...
+
       - name: Race
         if: runner.os == 'Linux'
-        run: go test -race -count=1 ./internal/app ./internal/session ./internal/transport/...
+        run: go test -race -count=1 ./internal/...
 
   ui:
     name: Web and Electron

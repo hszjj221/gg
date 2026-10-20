@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -180,6 +181,64 @@ type ApprovalDecision struct {
 
 type Approver interface {
 	Approve(context.Context, ApprovalRequest) (ApprovalDecision, error)
+}
+
+// DefaultApprover is the policy used when a caller supplies no approver.
+// It never auto-approves a call that needs a human: dangerous and confirm
+// risks are denied, ordinary risk-free and read-only calls keep running,
+// and an unrecognized risk is denied rather than assumed safe.
+// A nil approver must therefore not mean "allow everything".
+type DefaultApprover struct{}
+
+func (DefaultApprover) Approve(_ context.Context, req ApprovalRequest) (ApprovalDecision, error) {
+	switch req.Risk {
+	case "", ApprovalRiskReadOnly:
+		return ApprovalDecision{Allow: true}, nil
+	case ApprovalRiskDangerous:
+		return ApprovalDecision{Allow: false, Reason: "dangerous command denied: no approver is configured"}, nil
+	case ApprovalRiskConfirm:
+		return ApprovalDecision{Allow: false, Reason: "command needs confirmation but no approver is configured"}, nil
+	default:
+		return ApprovalDecision{Allow: false, Reason: fmt.Sprintf("unknown approval risk %q denied", req.Risk)}, nil
+	}
+}
+
+// UnattendedApprover is the approval policy for runs where no human is
+// present to answer prompts: scheduled jobs, daemon jobs, and chat bots. It
+// allows clearly read-only calls, denies ordinary calls unless AllowAll was
+// opted into, and always denies dangerous/confirm calls — even with AllowAll.
+type UnattendedApprover struct {
+	AllowAll bool
+}
+
+// Approve implements Approver. Dangerous commands (see the bash classifier)
+// and commands the risk check refused to auto-run are denied even when the
+// run opted into --allow-all, because nothing is present to approve them.
+func (a UnattendedApprover) Approve(_ context.Context, req ApprovalRequest) (ApprovalDecision, error) {
+	if req.Risk == ApprovalRiskReadOnly {
+		return ApprovalDecision{Allow: true}, nil
+	}
+	if req.Risk == ApprovalRiskDangerous {
+		why := req.RiskReason
+		if why == "" {
+			why = "dangerous command"
+		}
+		return ApprovalDecision{
+			Allow:  false,
+			Reason: fmt.Sprintf("tool call %q denied: %s. Dangerous commands are not run unattended, including with --allow-all.", req.ToolName, why),
+		}, nil
+	}
+	if req.Risk == ApprovalRiskConfirm {
+		why := req.RiskReason
+		if why == "" {
+			why = "confirmation required"
+		}
+		return ApprovalDecision{
+			Allow:  false,
+			Reason: fmt.Sprintf("tool call %q denied: %s. Commands that need confirmation are not run unattended, including with --allow-all.", req.ToolName, why),
+		}, nil
+	}
+	return ApprovalDecision{Allow: a.AllowAll}, nil
 }
 
 type ApprovalDescriber interface {

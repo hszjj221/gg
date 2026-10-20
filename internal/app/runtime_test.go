@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"path/filepath"
@@ -327,5 +328,123 @@ func TestManagerRunPanicWithoutLogger(t *testing.T) {
 	events := waitForRun(t, run, nil)
 	if last := events[len(events)-1]; last.Type != EventRunFailed {
 		t.Fatalf("last event = %s, want %s", last.Type, EventRunFailed)
+	}
+}
+
+// toolCallProvider asks for one tool by name, then ends the turn.
+type toolCallProvider struct {
+	name     string
+	calls    int
+	requests []agent.Request
+}
+
+func (p *toolCallProvider) Complete(_ context.Context, request agent.Request, _ func(agent.Event)) (agent.AssistantMessage, error) {
+	p.calls++
+	p.requests = append(p.requests, request)
+	if p.calls == 1 {
+		return agent.AssistantMessage{
+			Message: agent.Message{
+				Role:      agent.RoleAssistant,
+				ToolCalls: []agent.ToolCall{{ID: "c1", Name: p.name, Arguments: json.RawMessage(`{}`)}},
+			},
+			StopReason: agent.StopReasonToolUse,
+		}, nil
+	}
+	return agent.AssistantMessage{
+		Message:    agent.Message{Role: agent.RoleAssistant, Content: "done"},
+		StopReason: agent.StopReasonEndTurn,
+	}, nil
+}
+
+type dangerousFakeTool struct{ ran *bool }
+
+func (t *dangerousFakeTool) Name() string { return "dangerous" }
+func (t *dangerousFakeTool) Definition() agent.ToolDefinition {
+	return agent.ToolDefinition{Name: "dangerous", Description: "test", Parameters: map[string]any{"type": "object"}}
+}
+func (t *dangerousFakeTool) Execute(context.Context, json.RawMessage) agent.ToolResult {
+	*t.ran = true
+	return agent.ToolResult{Content: []agent.ContentBlock{{Type: agent.ContentText, Text: "ran"}}}
+}
+func (t *dangerousFakeTool) ApprovalRequest(json.RawMessage) (agent.ApprovalRequest, error) {
+	return agent.ApprovalRequest{ToolName: "dangerous", Risk: agent.ApprovalRiskDangerous}, nil
+}
+
+// runtimeTestManagerWithTools mirrors runtimeTestManagerWithOptions but
+// injects the tool registry that owns the fake capability.
+func runtimeTestManagerWithTools(t *testing.T, provider agent.Provider, providers []ToolProvider) (*Manager, string) {
+	t.Helper()
+	manager := NewManagerWithOptions(ManagerOptions{})
+	cwd := t.TempDir()
+	store, err := session.NewStore(filepath.Join(cwd, "session.jsonl"), cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(Options{
+		Config:          config.Config{CWD: cwd, Selection: "test:model"},
+		ProviderFactory: func(config.Config) agent.Provider { return provider },
+		Store:           store,
+		ModelRecorded:   true,
+		ToolProviders:   providers,
+	})
+	sessionID, err := manager.Add(service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manager, sessionID
+}
+
+func TestStartTurnWithoutApprovalStillDeniesDangerousTools(t *testing.T) {
+	ran := false
+	tool := &dangerousFakeTool{ran: &ran}
+	provider := &toolCallProvider{name: "dangerous"}
+	manager, sessionID := runtimeTestManagerWithTools(t,
+		provider,
+		[]ToolProvider{{
+			Name: "test",
+			Build: func(context.Context, ToolContext) ([]agent.Tool, error) {
+				return []agent.Tool{tool}, nil
+			},
+		}},
+	)
+
+	run, err := manager.StartTurn(context.Background(), sessionID, "go", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.Await(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if ran {
+		t.Fatal("dangerous tool ran with requireApproval=false")
+	}
+	// The denial must reach the model as a tool result, not be silent.
+	if len(provider.requests) < 2 {
+		t.Fatalf("provider calls = %d, want at least 2", len(provider.requests))
+	}
+	last := provider.requests[len(provider.requests)-1]
+	found := false
+	for _, msg := range last.Messages {
+		if msg.Role == agent.RoleTool && strings.Contains(msg.Content, "no approver") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("model did not receive the denial: %+v", last.Messages)
+	}
+}
+
+func TestManagerAddClosesServiceWithoutSession(t *testing.T) {
+	manager := NewManagerWithOptions(ManagerOptions{})
+	service := NewService(Options{
+		Config: config.Config{CWD: t.TempDir(), Selection: "test:model"},
+	})
+	if _, err := manager.Add(service); err == nil {
+		t.Fatal("Add accepted a service without a persisted session")
+	}
+	_, err := service.Run(context.Background(), "hello", nil, nil)
+	var appErr *AppError
+	if !errors.As(err, &appErr) || appErr.Code != ErrorRuntimeClosed {
+		t.Fatalf("service was not closed after Add failed: %v", err)
 	}
 }

@@ -3,6 +3,7 @@ package session
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -64,6 +65,9 @@ type Store struct {
 	records  []entryRecord
 	lastID   *string
 	diskInfo os.FileInfo
+	// leaseRelease is non-nil while a turn holds the cross-process writer
+	// lease. appendRecord then reuses it instead of re-locking.
+	leaseRelease func()
 }
 
 func NewStore(path, cwd string) (*Store, error) {
@@ -237,6 +241,16 @@ func (s *Store) State() Loaded {
 	return loaded
 }
 
+// classifyLockErr tags only genuine lock contention with ErrLocked. Real I/O
+// failures (ENOSPC, EACCES, ...) are returned unchanged so callers do not
+// mistake them for "session changed in another process" and drop the service.
+func classifyLockErr(err error) error {
+	if err == nil || !errors.Is(err, ErrLocked) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", ErrLocked, err)
+}
+
 // Fork creates a new session containing the path through id. Passing nil forks
 // from the root. The original session and all of its branches remain untouched.
 func (s *Store) Fork(id *string) (*Store, error) {
@@ -245,9 +259,9 @@ func (s *Store) Fork(id *string) (*Store, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	release, err := acquireWriterLock(s.path)
+	release, err := tryAcquireWriterLock(s.path)
 	if err != nil {
-		return nil, err
+		return nil, classifyLockErr(err)
 	}
 	defer release()
 	if err := s.validateCurrentLocked(); err != nil {
@@ -299,9 +313,9 @@ func (s *Store) SetWorkspaceID(id string) error {
 	if s.header.WorkspaceID == id {
 		return nil
 	}
-	release, err := acquireWriterLock(s.path)
+	release, err := tryAcquireWriterLock(s.path)
 	if err != nil {
-		return err
+		return classifyLockErr(err)
 	}
 	defer release()
 	if err := s.validateCurrentLocked(); err != nil {
@@ -358,17 +372,33 @@ func (s *Store) AppendName(name string) error {
 	}
 	name = strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ").Replace(name))
 	entry := SessionInfoEntry{EntryMetadata: EntryMetadata{Type: "session_info", ID: newID(), Timestamp: now()}, Name: name}
-	return s.appendRecord(entryRecord{entry: &entry})
+	return s.appendRecordFast(entryRecord{entry: &entry})
 }
 
 func (s *Store) appendRecord(record entryRecord) error {
+	return s.appendRecordWith(record, acquireWriterLock)
+}
+
+// appendRecordFast is appendRecord without the retry budget: a session whose
+// turn lease is held by another process rejects the metadata write instead
+// of blocking the active turn for five seconds.
+func (s *Store) appendRecordFast(record entryRecord) error {
+	return s.appendRecordWith(record, tryAcquireWriterLock)
+}
+
+func (s *Store) appendRecordWith(record entryRecord, lock func(string) (func(), error)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	release, err := acquireWriterLock(s.path)
-	if err != nil {
-		return err
+	if s.leaseRelease == nil {
+		release, err := lock(s.path)
+		if err != nil {
+			return err
+		}
+		defer release()
 	}
-	defer release()
+	// A held turn lease already excludes other processes, but the snapshot
+	// check still runs on every write so a session replaced underneath the
+	// holding process fails with ErrConflict instead of forking the file.
 	if err := s.validateCurrentLocked(); err != nil {
 		return err
 	}
@@ -403,6 +433,43 @@ func (s *Store) appendRecord(record entryRecord) error {
 	last := record.id()
 	s.lastID = &last
 	return nil
+}
+
+// AcquireTurnLease holds the session's cross-process writer lease for the
+// lifetime of one agent turn. It must be released even when the turn fails.
+// A second store (CLI vs daemon, or two daemons) gets ErrLocked before any
+// provider call or tool side effect happens.
+func (s *Store) AcquireTurnLease() (func(), error) {
+	s.mu.Lock()
+	if s.leaseRelease != nil {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("%w: %s", ErrLocked, s.path)
+	}
+	release, err := tryAcquireWriterLock(s.path)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	if err := s.validateCurrentLocked(); err != nil {
+		release()
+		s.mu.Unlock()
+		return nil, err
+	}
+	s.leaseRelease = release
+	s.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.mu.Lock()
+			release := s.leaseRelease
+			s.leaseRelease = nil
+			s.mu.Unlock()
+			if release != nil {
+				release()
+			}
+		})
+	}, nil
 }
 
 func (s *Store) validateCurrentLocked() error {

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hszjj221/gg/internal/media"
 	"github.com/hszjj221/gg/internal/memory"
 	"github.com/hszjj221/gg/internal/userprofile"
 )
@@ -360,6 +361,32 @@ func (c Config) WithSelection(selection string) (Config, error) {
 	}.APIKey(providerName, provider)
 	next.Compat = provider.Compat
 	return next, nil
+}
+
+// MediaClientConfig maps the resolved configuration to the media client's
+// inputs. The second result is false when no base URL is available, which
+// means media tools and commands should be unavailable rather than built
+// against an empty endpoint.
+func (c Config) MediaClientConfig() (media.Config, bool) {
+	baseURL := c.MediaBaseURL
+	if baseURL == "" {
+		baseURL = c.BaseURL
+	}
+	if baseURL == "" {
+		return media.Config{}, false
+	}
+	apiKey := c.MediaAPIKey
+	if apiKey == "" {
+		apiKey = c.APIKey
+	}
+	return media.Config{
+		BaseURL:    baseURL,
+		APIKey:     apiKey,
+		ImageModel: c.MediaImageModel,
+		TTSModel:   c.MediaTTSModel,
+		STTModel:   c.MediaSTTModel,
+		Dir:        filepath.Join(c.HomeDir, ".gg", "media"),
+	}, true
 }
 
 func (c Config) AvailableSelections() []string {

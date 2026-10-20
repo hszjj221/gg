@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"path/filepath"
 
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/media"
@@ -21,22 +20,11 @@ with GG_MEDIA_BASE_URL / GG_MEDIA_API_KEY / GG_MEDIA_{IMAGE,TTS,STT}_MODEL.`
 
 // mediaClientForCLI builds the media client from resolved config.
 func mediaClientForCLI(cfg config.Config) *media.Client {
-	baseURL := cfg.MediaBaseURL
-	if baseURL == "" {
-		baseURL = cfg.BaseURL
+	mc, ok := cfg.MediaClientConfig()
+	if !ok {
+		return nil
 	}
-	apiKey := cfg.MediaAPIKey
-	if apiKey == "" {
-		apiKey = cfg.APIKey
-	}
-	return media.NewClient(media.Config{
-		BaseURL:    baseURL,
-		APIKey:     apiKey,
-		ImageModel: cfg.MediaImageModel,
-		TTSModel:   cfg.MediaTTSModel,
-		STTModel:   cfg.MediaSTTModel,
-		Dir:        filepath.Join(cfg.HomeDir, ".gg", "media"),
-	})
+	return media.NewClient(mc)
 }
 
 func runMediaCommand(ctx context.Context, cfg config.Config, mediaArgs []string, stdout, stderr io.Writer) int {
@@ -45,6 +33,10 @@ func runMediaCommand(ctx context.Context, cfg config.Config, mediaArgs []string,
 		return 2
 	}
 	client := mediaClientForCLI(cfg)
+	if client == nil {
+		fmt.Fprintln(stderr, "media is not configured: set GG_MEDIA_BASE_URL or a provider base URL")
+		return 1
+	}
 	switch mediaArgs[0] {
 	case "image":
 		return runMediaImage(ctx, client, mediaArgs[1:], stdout, stderr)

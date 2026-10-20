@@ -16,10 +16,9 @@ import (
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/app"
 	"github.com/hszjj221/gg/internal/artifact"
+	"github.com/hszjj221/gg/internal/bootstrap"
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/library"
-	"github.com/hszjj221/gg/internal/provider"
-	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/transport/httpapi"
 	"github.com/hszjj221/gg/internal/transport/jsonrpc"
 	"github.com/hszjj221/gg/internal/transport/stdio"
@@ -141,10 +140,7 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	providerFactory := options.ProviderFactory
-	if providerFactory == nil {
-		providerFactory = provider.New
-	}
+	providerFactory := bootstrap.ProviderFactory(options.ProviderFactory)
 	logger := newLogger(stderr)
 	personal, notice, err := app.SetupPersonal(cfg)
 	if err != nil {
@@ -159,7 +155,7 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		ProviderFactory:   providerFactory,
 		WorkspaceRegistry: reg,
 		NoSkills:          noSkills,
-		Repository:        session.NewFileRepository(cfg.SessionDir),
+		Repository:        bootstrap.Repository(cfg),
 		Profile:           personal.Profile,
 		MemoryStore:       personal.Store,
 		ArtifactStore:     openArtifactStore(logger, cfg),

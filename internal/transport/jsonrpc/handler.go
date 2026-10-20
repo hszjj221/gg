@@ -20,6 +20,10 @@ const Version = "2.0"
 // listing tool providers whose build failed and degraded to absent.
 // 1.4: run.start accepts an optional workspace (name or ID); absent → the
 // session's bound workspace.
+//
+// requireApproval=false disables interactive prompts for ordinary tools
+// only: dangerous and confirm-risk calls are still denied by the agent's
+// default policy when no approver is available.
 const ProtocolVersion = "1.4"
 
 // capabilities lists transport-level features. Tool capabilities are

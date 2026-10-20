@@ -47,6 +47,7 @@ func (t fakeTool) Execute(ctx context.Context, args json.RawMessage) ToolResult 
 type fakeApprovalTool struct {
 	name        string
 	runs        int
+	risk        string
 	approvalErr error
 }
 
@@ -62,7 +63,7 @@ func (t *fakeApprovalTool) ApprovalRequest(args json.RawMessage) (ApprovalReques
 	if t.approvalErr != nil {
 		return ApprovalRequest{}, t.approvalErr
 	}
-	return ApprovalRequest{ToolName: t.name, Summary: "run " + t.name, Details: string(args), Arguments: args}, nil
+	return ApprovalRequest{ToolName: t.name, Summary: "run " + t.name, Details: string(args), Arguments: args, Risk: t.risk}, nil
 }
 
 type fakeApprover struct {
@@ -371,6 +372,55 @@ func TestRunnerReturnsApprovalErrorsAsToolResults(t *testing.T) {
 	}
 }
 
+func TestNilApproverDeniesDangerousTool(t *testing.T) {
+	tool := &fakeApprovalTool{name: "danger", risk: ApprovalRiskDangerous}
+	provider := &fakeProvider{responses: []AssistantMessage{
+		{
+			Message:    Message{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "danger", Arguments: json.RawMessage(`{}`)}}},
+			StopReason: StopReasonToolUse,
+		},
+		{Message: Message{Role: RoleAssistant, Content: "done"}, StopReason: StopReasonEndTurn},
+	}}
+	runner := NewRunner(provider, []Tool{tool})
+	if _, err := runner.Run(context.Background(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if tool.runs != 0 {
+		t.Fatalf("dangerous tool ran %d times without an approver", tool.runs)
+	}
+	// The denial must reach the model as a tool result, not be silent.
+	last := provider.requests[len(provider.requests)-1]
+	found := false
+	for _, msg := range last.Messages {
+		if msg.Role == RoleTool && strings.Contains(msg.Content, "no approver") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("model did not receive the denial: %+v", last.Messages)
+	}
+}
+
+func TestNilApproverAllowsOrdinaryAndReadOnlyTools(t *testing.T) {
+	for _, risk := range []string{"", ApprovalRiskReadOnly} {
+		tool := &fakeApprovalTool{name: "ok", risk: risk}
+		provider := &fakeProvider{responses: []AssistantMessage{
+			{
+				Message:    Message{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: "c1", Name: "ok", Arguments: json.RawMessage(`{}`)}}},
+				StopReason: StopReasonToolUse,
+			},
+			{Message: Message{Role: RoleAssistant, Content: "done"}, StopReason: StopReasonEndTurn},
+		}}
+		runner := NewRunner(provider, []Tool{tool})
+		if _, err := runner.Run(context.Background(), nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		if tool.runs != 1 {
+			t.Fatalf("risk %q: tool ran %d times, want 1", risk, tool.runs)
+		}
+	}
+}
+
 func toolUseMessage(id, name, args string) AssistantMessage {
 	return AssistantMessage{
 		Message: Message{
@@ -382,5 +432,60 @@ func toolUseMessage(id, name, args string) AssistantMessage {
 			}},
 		},
 		StopReason: StopReasonToolUse,
+	}
+}
+
+func TestUnattendedApproverAllowsReadOnly(t *testing.T) {
+	got, err := UnattendedApprover{}.Approve(context.Background(), ApprovalRequest{Risk: ApprovalRiskReadOnly})
+	if err != nil || !got.Allow {
+		t.Fatalf("read-only = %+v, %v; want allow", got, err)
+	}
+}
+
+func TestUnattendedApproverDeniesWithoutAllowAll(t *testing.T) {
+	got, err := UnattendedApprover{}.Approve(context.Background(), ApprovalRequest{})
+	if err != nil || got.Allow {
+		t.Fatalf("ordinary = %+v, %v; want deny", got, err)
+	}
+	got, _ = UnattendedApprover{AllowAll: true}.Approve(context.Background(), ApprovalRequest{})
+	if !got.Allow {
+		t.Fatal("allow-all should allow ordinary tools")
+	}
+}
+
+func TestUnattendedApproverNeverAllowsDangerous(t *testing.T) {
+	for _, risk := range []string{ApprovalRiskDangerous, ApprovalRiskConfirm} {
+		got, _ := UnattendedApprover{AllowAll: true}.Approve(context.Background(), ApprovalRequest{Risk: risk})
+		if got.Allow {
+			t.Fatalf("risk %q allowed unattended", risk)
+		}
+	}
+}
+
+func TestDefaultApproverOnlyAllowsKnownSafeRisks(t *testing.T) {
+	tests := []struct {
+		name string
+		risk string
+		want bool
+	}{
+		{name: "read-only", risk: ApprovalRiskReadOnly, want: true},
+		{name: "unclassified", risk: "", want: true},
+		{name: "dangerous", risk: ApprovalRiskDangerous, want: false},
+		{name: "confirm", risk: ApprovalRiskConfirm, want: false},
+		{name: "unrecognized", risk: "future-risk", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decision, err := DefaultApprover{}.Approve(context.Background(), ApprovalRequest{Risk: tt.risk})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Allow != tt.want {
+				t.Fatalf("risk %q: allow = %t, want %t", tt.risk, decision.Allow, tt.want)
+			}
+			if !tt.want && !strings.Contains(decision.Reason, tt.risk) && tt.risk != "" {
+				t.Fatalf("risk %q: denial reason %q does not name the risk", tt.risk, decision.Reason)
+			}
+		})
 	}
 }
