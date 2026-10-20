@@ -3,6 +3,7 @@ package session
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -240,6 +241,16 @@ func (s *Store) State() Loaded {
 	return loaded
 }
 
+// classifyLockErr tags only genuine lock contention with ErrLocked. Real I/O
+// failures (ENOSPC, EACCES, ...) are returned unchanged so callers do not
+// mistake them for "session changed in another process" and drop the service.
+func classifyLockErr(err error) error {
+	if err == nil || !errors.Is(err, ErrLocked) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", ErrLocked, err)
+}
+
 // Fork creates a new session containing the path through id. Passing nil forks
 // from the root. The original session and all of its branches remain untouched.
 func (s *Store) Fork(id *string) (*Store, error) {
@@ -250,7 +261,7 @@ func (s *Store) Fork(id *string) (*Store, error) {
 	defer s.mu.Unlock()
 	release, err := tryAcquireWriterLock(s.path)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrLocked, err)
+		return nil, classifyLockErr(err)
 	}
 	defer release()
 	if err := s.validateCurrentLocked(); err != nil {
@@ -304,7 +315,7 @@ func (s *Store) SetWorkspaceID(id string) error {
 	}
 	release, err := tryAcquireWriterLock(s.path)
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrLocked, err)
+		return classifyLockErr(err)
 	}
 	defer release()
 	if err := s.validateCurrentLocked(); err != nil {

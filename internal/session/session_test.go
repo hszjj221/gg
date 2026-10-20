@@ -3,6 +3,7 @@ package session
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -608,5 +609,21 @@ func TestHeldLeaseStillValidatesDisk(t *testing.T) {
 
 	if err := store.AppendModel("p", "m"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("append under lease accepted a replaced file: %v", err)
+	}
+}
+
+func TestClassifyLockErrOnlyWrapsLockConflicts(t *testing.T) {
+	diskFull := errors.New("disk full")
+	err := classifyLockErr(diskFull)
+	if errors.Is(err, ErrLocked) {
+		t.Fatalf("non-lock error classified as ErrLocked: %v", err)
+	}
+	if !errors.Is(err, diskFull) {
+		t.Fatalf("original error lost: %v", err)
+	}
+
+	err = classifyLockErr(fmt.Errorf("acquire: %w", ErrLocked))
+	if !errors.Is(err, ErrLocked) {
+		t.Fatalf("lock conflict lost ErrLocked: %v", err)
 	}
 }
