@@ -75,10 +75,11 @@ func (s *Service) run(ctx context.Context, prompt string, onEvent func(agent.Eve
 	}
 	defer s.endTurn()
 	if s.store != nil {
-		// Metadata writes (fork, clone, checkout, rename) reuse the turn's
-		// held lease when present and otherwise try the lock without
-		// retrying, so they never block a running turn; the store reference
-		// stays stable for the lease's lifetime.
+		// Append-based metadata writes (rename, checkout) reuse this held
+		// lease instead of taking their own lock. Fork/clone and workspace
+		// binding make a single non-blocking lock attempt and fail with
+		// ErrLocked while the lease is held, so none of them wait on the
+		// running turn.
 		release, err := s.store.AcquireTurnLease()
 		if err != nil {
 			if errors.Is(err, session.ErrLocked) {

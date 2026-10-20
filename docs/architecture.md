@@ -294,9 +294,10 @@ The probe runs once per process. Sandboxed commands use `shell -c` so a login pr
   unavailable there; `ggd` refuses to start with an explicit error instead
   of silently running without a single-instance guard.
 - On non-Unix platforms `processAlive` always reports a live owner, so a
-  stale session lock is never reclaimed: a crashed `gg` leaves
-  `session.jsonl.lock` behind and later opens fail as locked until the file
-  is removed by hand.
+  stale session lock that names a PID is never reclaimed: a crashed `gg`
+  leaves `session.jsonl.lock` behind and later opens fail as locked until
+  the file is removed by hand. A corrupt lock that names no PID is still
+  reclaimed.
 - Approving a prompt, passing `--yolo`, or creating a job with `--allow-all` runs the tool with the user's own privileges. Approval is a checkpoint, not a confinement boundary, except for the optional sandbox's filesystem-write limits.
 
 ## Quality gates
