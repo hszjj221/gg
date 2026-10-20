@@ -192,7 +192,7 @@ Skills（`internal/skills`）是第三层扩展：markdown playbook，从项目 
 
 ## 安全模型
 
-工具以当前用户的权限运行。写操作和其他副作用要过审批；agent runner 里 nil approver 仍然表示"放行"，所以每个会跑工具的调用方都显式传入 approver。CLI 的 `--approval auto` 不再使用 nil approver。
+工具以当前用户的权限运行。写操作和其他副作用要过审批。agent runner 里的 nil approver 不再表示放行：它会退回 `agent.DefaultApprover`，没有人能应答时拒绝 `dangerous` 和 `confirm` 风险，普通调用和只读调用仍然执行。CLI 会显式传入 approver；`--approval auto` 不再使用 nil approver。
 
 ### 审批模式
 
@@ -206,6 +206,8 @@ CLI 策略在 `internal/cliapp`，覆盖一次性 prompt（`gg -p` 和 `gg <prom
 | `never` | 不询问直接放行 | 不询问直接放行 | 拒绝（这个模式从不询问） |
 
 "有终端"指 stdin 和 stderr 都是终端，行内提问实际用得到它们。明显只读的 `bash` 命令在所有模式下都不询问。`edit`、`write` 和其他需要审批的工具都不是只读。写到工作区 agent 目录（`.gg/agent/`）仍像以前一样预先放行。
+
+传输客户端传入 `requireApproval:false` 不会关闭安全策略：没有人类 approver 时，被分类为 `dangerous` 或 `confirm` 的调用仍会被拒绝，和无人值守的定时任务完全一致。
 
 Web 和桌面客户端继续用 daemon 的 `runApprover`：界面上询问，没人回答不会变成放行。这包括只读 `bash` 和模型判定可运行的命令，界面上的 approver 不按 risk 特殊放行。定时任务用 `scheduler.UnattendedApprover`（默认拒绝，`--allow-all` 才放行，危险 `bash` 和风险检查要求确认的命令仍然拒绝）。
 

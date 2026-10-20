@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"path/filepath"
@@ -327,5 +328,91 @@ func TestManagerRunPanicWithoutLogger(t *testing.T) {
 	events := waitForRun(t, run, nil)
 	if last := events[len(events)-1]; last.Type != EventRunFailed {
 		t.Fatalf("last event = %s, want %s", last.Type, EventRunFailed)
+	}
+}
+
+// toolCallProvider asks for one tool by name, then ends the turn.
+type toolCallProvider struct {
+	name  string
+	calls int
+}
+
+func (p *toolCallProvider) Complete(_ context.Context, _ agent.Request, _ func(agent.Event)) (agent.AssistantMessage, error) {
+	p.calls++
+	if p.calls == 1 {
+		return agent.AssistantMessage{
+			Message: agent.Message{
+				Role:      agent.RoleAssistant,
+				ToolCalls: []agent.ToolCall{{ID: "c1", Name: p.name, Arguments: json.RawMessage(`{}`)}},
+			},
+			StopReason: agent.StopReasonToolUse,
+		}, nil
+	}
+	return agent.AssistantMessage{
+		Message:    agent.Message{Role: agent.RoleAssistant, Content: "done"},
+		StopReason: agent.StopReasonEndTurn,
+	}, nil
+}
+
+type dangerousFakeTool struct{ ran *bool }
+
+func (t *dangerousFakeTool) Name() string { return "dangerous" }
+func (t *dangerousFakeTool) Definition() agent.ToolDefinition {
+	return agent.ToolDefinition{Name: "dangerous", Description: "test", Parameters: map[string]any{"type": "object"}}
+}
+func (t *dangerousFakeTool) Execute(context.Context, json.RawMessage) agent.ToolResult {
+	*t.ran = true
+	return agent.ToolResult{Content: []agent.ContentBlock{{Type: agent.ContentText, Text: "ran"}}}
+}
+func (t *dangerousFakeTool) ApprovalRequest(json.RawMessage) (agent.ApprovalRequest, error) {
+	return agent.ApprovalRequest{ToolName: "dangerous", Risk: agent.ApprovalRiskDangerous}, nil
+}
+
+// runtimeTestManagerWithTools mirrors runtimeTestManagerWithOptions but
+// injects the tool registry that owns the fake capability.
+func runtimeTestManagerWithTools(t *testing.T, provider agent.Provider, providers []ToolProvider) (*Manager, string) {
+	t.Helper()
+	manager := NewManagerWithOptions(ManagerOptions{})
+	cwd := t.TempDir()
+	store, err := session.NewStore(filepath.Join(cwd, "session.jsonl"), cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(Options{
+		Config:          config.Config{CWD: cwd, Selection: "test:model"},
+		ProviderFactory: func(config.Config) agent.Provider { return provider },
+		Store:           store,
+		ModelRecorded:   true,
+		ToolProviders:   providers,
+	})
+	sessionID, err := manager.Add(service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manager, sessionID
+}
+
+func TestStartTurnWithoutApprovalStillDeniesDangerousTools(t *testing.T) {
+	ran := false
+	tool := &dangerousFakeTool{ran: &ran}
+	manager, sessionID := runtimeTestManagerWithTools(t,
+		&toolCallProvider{name: "dangerous"},
+		[]ToolProvider{{
+			Name: "test",
+			Build: func(context.Context, ToolContext) ([]agent.Tool, error) {
+				return []agent.Tool{tool}, nil
+			},
+		}},
+	)
+
+	run, err := manager.StartTurn(context.Background(), sessionID, "go", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.Await(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if ran {
+		t.Fatal("dangerous tool ran with requireApproval=false")
 	}
 }

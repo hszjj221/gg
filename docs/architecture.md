@@ -225,7 +225,7 @@ The three layers, from most to least trusted:
 
 ## Security model
 
-Tool use runs as the user. Approval is the gate for writes and other side effects; a nil approver in the agent runner still means "allow", so every caller that can run tools passes an approver on purpose. The CLI no longer uses a nil approver for `--approval auto`.
+Tool use runs as the user. Approval is the gate for writes and other side effects. A nil approver in the agent runner does not mean allow: it falls back to `agent.DefaultApprover`, which denies `dangerous` and `confirm` risks when no human can answer and lets ordinary and read-only calls run. The CLI passes an approver on purpose; its `--approval auto` no longer uses nil.
 
 ### Approval modes
 
@@ -239,6 +239,10 @@ The CLI policy lives in `internal/cliapp`. It applies to one-shot prompts (`gg -
 | `never` | allow without a prompt | allow without a prompt | deny (this mode never asks) |
 
 "Terminal" means stdin and stderr are both terminals, which is what the line prompt can actually use. Clearly read-only `bash` commands skip the prompt in every mode. `edit`, `write`, and the other approval-gated tools are not read-only. Writes into the workspace agent area (`.gg/agent/`) stay pre-approved, as before.
+
+`requireApproval:false` from a transport client does not disable policy:
+calls classified `dangerous` or `confirm` are denied when no human approver
+is attached, exactly like an unattended scheduled run.
 
 The Web and desktop clients keep the daemon's `runApprover`: the UI asks, and a missing answer does not become an allow. That includes read-only `bash` and a model decision to run; the UI approver does not special-case risk. Scheduled jobs use `scheduler.UnattendedApprover` (deny by default, `--allow-all` opts in, dangerous `bash` and risk-check confirmations still denied).
 
