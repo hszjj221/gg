@@ -333,12 +333,14 @@ func TestManagerRunPanicWithoutLogger(t *testing.T) {
 
 // toolCallProvider asks for one tool by name, then ends the turn.
 type toolCallProvider struct {
-	name  string
-	calls int
+	name     string
+	calls    int
+	requests []agent.Request
 }
 
-func (p *toolCallProvider) Complete(_ context.Context, _ agent.Request, _ func(agent.Event)) (agent.AssistantMessage, error) {
+func (p *toolCallProvider) Complete(_ context.Context, request agent.Request, _ func(agent.Event)) (agent.AssistantMessage, error) {
 	p.calls++
+	p.requests = append(p.requests, request)
 	if p.calls == 1 {
 		return agent.AssistantMessage{
 			Message: agent.Message{
@@ -395,8 +397,9 @@ func runtimeTestManagerWithTools(t *testing.T, provider agent.Provider, provider
 func TestStartTurnWithoutApprovalStillDeniesDangerousTools(t *testing.T) {
 	ran := false
 	tool := &dangerousFakeTool{ran: &ran}
+	provider := &toolCallProvider{name: "dangerous"}
 	manager, sessionID := runtimeTestManagerWithTools(t,
-		&toolCallProvider{name: "dangerous"},
+		provider,
 		[]ToolProvider{{
 			Name: "test",
 			Build: func(context.Context, ToolContext) ([]agent.Tool, error) {
@@ -414,6 +417,20 @@ func TestStartTurnWithoutApprovalStillDeniesDangerousTools(t *testing.T) {
 	}
 	if ran {
 		t.Fatal("dangerous tool ran with requireApproval=false")
+	}
+	// The denial must reach the model as a tool result, not be silent.
+	if len(provider.requests) < 2 {
+		t.Fatalf("provider calls = %d, want at least 2", len(provider.requests))
+	}
+	last := provider.requests[len(provider.requests)-1]
+	found := false
+	for _, msg := range last.Messages {
+		if msg.Role == agent.RoleTool && strings.Contains(msg.Content, "no approver") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("model did not receive the denial: %+v", last.Messages)
 	}
 }
 
