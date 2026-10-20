@@ -416,3 +416,18 @@ func TestStartTurnWithoutApprovalStillDeniesDangerousTools(t *testing.T) {
 		t.Fatal("dangerous tool ran with requireApproval=false")
 	}
 }
+
+func TestManagerAddClosesServiceWithoutSession(t *testing.T) {
+	manager := NewManagerWithOptions(ManagerOptions{})
+	service := NewService(Options{
+		Config: config.Config{CWD: t.TempDir(), Selection: "test:model"},
+	})
+	if _, err := manager.Add(service); err == nil {
+		t.Fatal("Add accepted a service without a persisted session")
+	}
+	_, err := service.Run(context.Background(), "hello", nil, nil)
+	var appErr *AppError
+	if !errors.As(err, &appErr) || appErr.Code != ErrorRuntimeClosed {
+		t.Fatalf("service was not closed after Add failed: %v", err)
+	}
+}

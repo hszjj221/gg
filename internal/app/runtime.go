@@ -155,6 +155,7 @@ func (m *Manager) getOrAdd(service *Service) (*Service, error) {
 	}
 	id := service.Snapshot().SessionID
 	if id == "" {
+		_ = service.Close()
 		return nil, fmt.Errorf("conversation must have a persisted session")
 	}
 	m.mu.Lock()
