@@ -13,13 +13,12 @@ import (
 
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/app"
+	"github.com/hszjj221/gg/internal/bootstrap"
 	"github.com/hszjj221/gg/internal/cli"
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/memory"
-	"github.com/hszjj221/gg/internal/provider"
 	"github.com/hszjj221/gg/internal/runlog"
 	"github.com/hszjj221/gg/internal/session"
-	"github.com/hszjj221/gg/internal/skills"
 	"github.com/hszjj221/gg/internal/userprofile"
 	"github.com/hszjj221/gg/internal/workspace"
 )
@@ -154,15 +153,12 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		fmt.Fprintln(stderr, "--approval on-request requires a terminal")
 		return 2
 	}
-	skillSet, err := loadSkills(parsed, cfg.CWD, options.HomeDir)
+	skillSet, err := bootstrap.LoadSkills(cfg.CWD, options.HomeDir, parsed.NoSkills)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	providerFactory := options.ProviderFactory
-	if providerFactory == nil {
-		providerFactory = provider.New
-	}
+	providerFactory := bootstrap.ProviderFactory(options.ProviderFactory)
 
 	sessionStore, loaded, err := openSession(parsed, cfg)
 	if err != nil {
@@ -520,13 +516,6 @@ func sessionName(loaded session.Loaded) string {
 	return loaded.LastInfo.Name
 }
 
-func loadSkills(args cli.Args, cwd, homeDir string) (skills.Set, error) {
-	if args.NoSkills {
-		return skills.Set{}, nil
-	}
-	return skills.Load(skills.LoadOptions{CWD: cwd, HomeDir: homeDir})
-}
-
 func printUsage(stderr io.Writer, usage agent.Usage) {
 	fmt.Fprintf(stderr, "tokens: prompt=%d completion=%d total=%d\n", usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
 }
@@ -574,7 +563,7 @@ func openSession(args cli.Args, cfg config.Config) (*session.Store, session.Load
 	if args.NoSession {
 		return nil, session.Loaded{}, nil
 	}
-	repository := session.NewFileRepository(cfg.SessionDir)
+	repository := bootstrap.Repository(cfg)
 	switch {
 	case args.Command == cli.CommandResume:
 		return repository.OpenForCWD(cfg.CWD, args.ResumeTarget, true)

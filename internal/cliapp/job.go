@@ -10,12 +10,10 @@ import (
 	"time"
 
 	"github.com/hszjj221/gg/internal/app"
+	"github.com/hszjj221/gg/internal/bootstrap"
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/daemon"
-	"github.com/hszjj221/gg/internal/provider"
 	"github.com/hszjj221/gg/internal/scheduler"
-	"github.com/hszjj221/gg/internal/session"
-	"github.com/hszjj221/gg/internal/skills"
 	"github.com/hszjj221/gg/internal/userprofile"
 	"github.com/hszjj221/gg/internal/workspace"
 )
@@ -346,16 +344,12 @@ func runJobRun(ctx context.Context, cfg config.Config, options Options, store *s
 	if notice != "" {
 		fmt.Fprintln(stderr, "note: "+notice)
 	}
-	skillSet := skills.Set{}
-	if !options.NoSkills {
-		var err error
-		skillSet, err = skills.Load(skills.LoadOptions{CWD: cfg.CWD, HomeDir: options.HomeDir})
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
+	skillSet, err := bootstrap.LoadSkills(cfg.CWD, options.HomeDir, options.NoSkills)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
 	}
-	repo := session.NewFileRepository(cfg.SessionDir)
+	repo := bootstrap.Repository(cfg)
 	sessionStore, _, err := repo.Create(cfg.CWD)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -365,10 +359,7 @@ func runJobRun(ctx context.Context, cfg config.Config, options Options, store *s
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	providerFactory := options.ProviderFactory
-	if providerFactory == nil {
-		providerFactory = provider.New
-	}
+	providerFactory := bootstrap.ProviderFactory(options.ProviderFactory)
 	executor, err := app.NewSessionService(app.Options{
 		Config:          cfg,
 		ProviderFactory: providerFactory,
