@@ -283,3 +283,16 @@ func TestParseMemoryShowRejectsExtraArgs(t *testing.T) {
 		t.Fatal("expected usage error for gg memory show daily extra")
 	}
 }
+
+func TestParseStandingAuth(t *testing.T) {
+	for _, rest := range [][]string{nil, {"list"}, {"add", "--subject", "gg for alice"}, {"revoke", "id"}} {
+		args, err := Parse(append([]string{"standing-auth"}, rest...))
+		if err != nil || args.Command != CommandStandingAuth || args.Prompt != "" || strings.Join(args.StandingAuthArgs, " ") != strings.Join(rest, " ") {
+			t.Fatalf("recognized subcommand became prompt: %+v, %v", args, err)
+		}
+	}
+	args, err := Parse([]string{"standing-auth", "explain", "the concept"})
+	if err != nil || args.Command != CommandRun || args.Prompt != "standing-auth explain the concept" {
+		t.Fatalf("unexpected prompt parsing: %+v, %v", args, err)
+	}
+}

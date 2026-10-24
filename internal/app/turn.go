@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
+	"github.com/hszjj221/gg/internal/standingauth"
 )
 
 // turnExecutor coordinates a provider turn using state, prompt and tool
@@ -43,6 +44,11 @@ func (s *turnExecutor) execute(ctx context.Context, prompt string, onEvent func(
 	}
 	provider := &observedProvider{Provider: s.providerFactory(s.cfg), model: s.cfg.Selection}
 	summaryUsage := agent.Usage{}
+	// Production config resolves HomeDir. Embedders without one retain P1
+	// policy rather than trusting a standing-auth directory under the CWD.
+	if s.cfg.HomeDir != "" {
+		approver = standingauth.Approver{Inner: approver, Store: standingauth.New(standingauth.DefaultDir(s.cfg.HomeDir))}
+	}
 	runner := agent.NewRunnerWithOptions(provider, s.tools.Build(ctx, s.cfg, provider), agent.RunnerOptions{
 		Approver:      approver,
 		OnMessage:     s.persistMessage,

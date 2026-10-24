@@ -1,8 +1,8 @@
-# Personal Agent: consequence routing (P1)
+# Personal Agent: consequence routing and standing authorization (P2)
 
 English | [简体中文](personal-agent.zh-CN.md)
 
-P0 defined the consequence language and approval baseline. P1 adds consequence metadata and routing to the shared runtime, gates durable memory writes, and offers an optional Gmail draft path. Standing authorization (P2) and separate personal identity/defaults (P3) remain future work.
+P0 defined the consequence language and approval baseline. P1 added consequence metadata and routing to the shared runtime, gated durable memory writes, and offered an optional Gmail draft path. P2 adds durable, explicit standing grants, CLI management, and audited matching before the existing approval policy. Separate personal identity/defaults (P3) remain future work.
 
 ## Personal and coding agents
 
@@ -31,6 +31,8 @@ The plan's routing principle is to use these attributes rather than enumerate ac
 
 ## P1 runtime behavior
 
+These rules remain the fallback when no standing grant matches.
+
 [`agent.ApprovalRequest`](../internal/agent/types.go) carries four optional `*bool` fields alongside `Risk` / `RiskReason`:
 
 | Dimension | Go field | JSON key |
@@ -50,7 +52,7 @@ P1 populates `gmail_send` and `calendar_create` with E/U=true, M=false, R=false,
 
 `memory_add` now implements `ApprovalDescriber` on the shared coding runtime because `SetupPersonal` has no personal-only profile switch. Its approval preview shows content, scope, and requested workspace/global target (all writes use global memory without a workspace context). `memory_search` remains ungated and read-only. P3 may narrow the default policy to personal identity without removing the describer.
 
-`gmail_send` accepts optional `as_draft` (default `false`, preserving send behavior). With `true`, it creates a real Gmail draft, returns the **draft ID**, and does not send; an API failure never falls back to sending. The preview and result say “not sent.” A draft still has E/U=true because Google sees it and it is created in the user's mailbox as them. Its content can be deleted, but the whole effect remains R=false because provider-visible traces cannot be undone locally. Both modes require human confirmation.
+`gmail_send` accepts optional `as_draft` (default `false`, preserving send behavior). With `true`, it creates a real Gmail draft, returns the **draft ID**, and does not send; an API failure never falls back to sending. The preview and result say “not sent.” A draft still has E/U=true because Google sees it and it is created in the user's mailbox as them. Its content can be deleted, but the whole effect remains R=false because provider-visible traces cannot be undone locally. Both modes require human confirmation or a matching explicit standing grant.
 
 Draft creation requires `gmail.compose`, now included in newly requested Google scopes alongside the existing scopes. Existing connections can still send; to use drafts, re-authorize with `gg connect google --force`. A missing draft scope produces an error with a reconnect hint. See [Connectors](connectors.md#security-boundaries).
 
@@ -64,7 +66,54 @@ Standing authorization must be explicit, with all three parts:
 | **Scope** | Which resources, destinations, and effects are allowed, with limits such as recipients, spending, or permitted permission changes. A broad goal alone is not a scope. |
 | **TTL** | The grant's explicit validity window or expiry. Do not infer indefinite authorization or reuse an expired grant. |
 
-User preferences in `USER.md`, remembered habits, an OAuth connection, or a previous approval do not by themselves establish a standing grant. P2 will implement standing authorization; P1 creates no standing grants.
+User preferences in `USER.md`, remembered habits, an OAuth connection, or a previous approval do not by themselves establish a standing grant. P2 requires a **plain-text source quote** of the user's authorization as well as all three parts. “你看着办,” “随便,” “you figure it out,” “do what you think is best,” “whatever,” and “as you like” are rejected, including within longer quotes. Missing structured fields and a goal without tool/resource/effect limits are rejected before storing anything. Quotes are recorded, never interpreted by a model to derive permission.
+
+### Storage and CLI
+
+[`internal/standingauth`](../internal/standingauth/) stores one JSON file per grant at `~/.gg/standing-auth/<id>.json`, resolved from the same `Config.HomeDir` used by other gg state. The directory is 0700; grant files and `audit.jsonl` are 0600. Atomic file publication lets the CLI and running daemon share grants without restarting. Each record contains:
+
+| Field | Meaning |
+| --- | --- |
+| `id`, `createdAt` | Generated stable ID and UTC creation time (validity starts here). |
+| `subject` | Explicit string naming gg as actor and the user/account it represents, supplied by the user. |
+| `scope.tools` | Nonempty allowlist of exact tool names, without wildcards. |
+| `scope.consequences` | Explicit allowed E/M/U effects; `[]` allows none. R never grants permission. |
+| `scope.arguments` | Nonempty JSON object of exact top-level argument limits, such as recipient and draft mode. Unspecified arguments remain unrestricted. |
+| `expiresAt` | Required future RFC3339 expiry, computed from `--ttl` or provided via `--expires`. No indefinite default. |
+| `sourceQuote`, `notes` | Required plain-text authorization quote and optional notes. |
+
+```sh
+gg standing-auth add \
+  --subject 'gg on behalf of alice@example.com' \
+  --tools gmail_send --consequences E,U \
+  --arguments '{"to":"bob@example.com","as_draft":true}' \
+  --ttl 24h \
+  --source-quote 'For 24 hours, gg may create Gmail drafts as alice@example.com addressed only to bob@example.com; do not send.'
+gg standing-auth list
+gg standing-auth revoke <id>
+```
+
+Add prints the ID. Use `--expires '2026-12-01T09:00:00+08:00'` instead of `--ttl` for an absolute expiry; `--notes` is optional. Use `--consequences none` for explicitly local effects. List shows subject, structured scope, expiry/status, and source quote, including expired grants. Revoke is safe to repeat; it prevents subsequent matches, but cannot undo an already approved call.
+
+The example allows any subject/body to that exact recipient **only when `as_draft` is explicitly `true`**. Missing `as_draft`, sending instead, a different recipient, or extra asserted M consequences cannot match. Add further exact argument limits to restrict content. P2 has no recipient patterns, spending counters, or interpretation of free-form scope text.
+
+### Shared matching and audit
+
+The shared turn executor wraps the supplied approver with `standingauth.Approver`, covering interactive CLI, `--approval never`, `--yolo`, nil/default approvers, manual/daemon jobs, and Telegram. Only approval-gated tools participate; existing local pre-approval exemptions remain. Embedders without a resolved `Config.HomeDir` retain P1 behavior rather than loading grants from the working directory.
+
+Before asking or denying, the wrapper reads current grants in ID order. A match requires current validity, an exact tool, all E/M/U metadata known, every asserted effect included in the scope, and every constrained argument present and exactly equal as a JSON value. Unknown consequences miss; scopes from separate grants are never combined. `dangerous`, `confirm`, and unknown Risk classes **never match**, even with an E/M/U grant. P2 offers no flag to waive those classes; the existing human approval/denial path handles them.
+
+On a hit, gg appends and syncs an audit record containing `timestamp`, `grantId`, `toolName`, `summary`, and `decision="allow-by-standing-grant"`, then allows without prompting. Storage corruption/read errors or an audit write failure fail closed. The audit records authorization, not successful execution. On a miss, the existing P1 approver runs unchanged.
+
+Grants apply across workspaces and transports using the same gg home. `subject` records the explicitly declared actor/account; it does not introduce a P3 identity selector or verify an OAuth account. Keep the configured account consistent with that declaration and revoke/recreate grants when changing it. Telegram's chat allowlist still controls who may initiate turns; Telegram remains `UnattendedApprover{}`, never AllowAll.
+
+Scheduled `--allow-all` is retained for backward compatibility: it still permits ordinary tools under P1 rules, but cannot waive asserted E/M/U or dangerous/confirm risks. Matching standing grants are the only unattended authorization path for asserted E/M/U in these approval-gated calls; no `--allow-all` is needed for a hit.
+
+### TODO / follow-ups
+
+- Manual jobs (`internal/cliapp/job.go`) and daemon jobs (`internal/daemon/scheduler.go`) still pass `AllowAll: job.AutoApprove`. Replace that ordinary-tool compatibility path only with an explicit migration; there is no blanket removal in P2.
+- More tool consequence classification is needed before grants can match unclassified calls (including bash/MCP/media and the unknown M/U of browser navigation). Tools without `ApprovalDescriber` remain outside this gate.
+- Account/actor verification, transport-specific grant subjects, spending/usage limits, and richer destination limits remain follow-ups. P3 identity/default policy separation is outside P2.
 
 ## Current approval inventory
 
@@ -119,4 +168,4 @@ The tables use R/E/M/U as shorthand for the dimensions above. They describe effe
 
 Current runtime policy is documented in the architecture's [Security model](architecture.md#security-model) and [Approval modes](architecture.md#approval-modes). P1 extends #53's fail-closed nil-approver handling for `dangerous`/`confirm` risks to asserted E/M/U consequences, while retaining existing Risk behavior for unclassified tools.
 
-P1 ships the fields, routing, memory-write gate, and optional Gmail draft switch described above. P2 will add explicit standing authorization. P3 will separate identity and default policy while retaining the shared runtime.
+P1 shipped the fields, routing, memory-write gate, and optional Gmail draft switch described above. P2 ships explicit standing authorization with durable storage, CLI management, shared matching, and an allow audit. P3 will separate identity and default policy while retaining the shared runtime.
