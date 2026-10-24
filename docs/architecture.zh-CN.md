@@ -2,6 +2,8 @@
 
 `gg` 把产品行为收敛到可复用的 Go 核心里，每个界面都只是适配器。CLI、Web、Electron 客户端因此共享会话语义、并发规则、审批处理和工具执行。
 
+[Core + 第一方插件方案](core-plugin.zh-CN.md)记录 C0 归属决策：保留 Go Core 及其审批/存储/协议不变量，后续阶段引入稳定 SPI，第一方插件继续静态链接，profile 用于能力启用列表。C0 仅修改文档；本文描述的运行时与 coding 默认值保持不变，第三方能力继续 MCP-first。
+
 ```mermaid
 flowchart LR
     CLI[gg CLI: one-shot + 按行交互] --> CLIAPP[internal/cliapp adapter]
