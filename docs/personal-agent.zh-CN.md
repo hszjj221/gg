@@ -53,7 +53,7 @@ Personal Gmail 调用省略 `as_draft` 时创建真实草稿。显式 `as_draft=
 - Coding（包括未设置 profile）返回 Quiet／禁用。未知 profile 和场景也保持安静。
 - Personal 的邮件／日历摘要可在本地 Summarize。安静时段默认关闭；`QuietHours="22:00-07:00"` 使用传入时间的时区，包含起点、不含终点，支持跨午夜。起止相同或格式错误会被拒绝；无效策略输入保持 Quiet。
 - 显式的稍后记住请求选择 Note-only，包括在安静时段内。它不会改变拟议工具或通知的授权要求。
-- OS `notify` 关闭，每次运行固定最多 **零条通知**，本切片不提供开启选项。拟议通知返回 Quiet；OS 通知按 E 处理。现有 `notify` 工具仍未实现 `ApprovalDescriber`（见下方 P0 清单／P1 覆盖缺口）；本策略不改变它在普通轮次中的可用性。
+- OS `notify` 关闭，每次运行固定最多 **零条通知**，本切片不提供开启选项。拟议通知返回 Quiet；OS 通知按 E 处理。`notify` 工具现已实现 `ApprovalDescriber` 并设置 E=true，可用时走共享审批门禁。C2 仍在 personal 中禁用 computer 工具；本策略不会启用它们。
 - 拟议工具动作返回 Quiet，必须走现有 Approver／常驻授权路径。明确的 E/M/U 始终须人工确认或匹配常驻授权。`gmail_send`（包括真实 Gmail 草稿）和 `calendar_create` 保留 P1–P3 门禁。Summarize 与 Note-only 均不授权工具调用，未知工具元数据也不是许可。
 
 ## 运行假数据自用验证
@@ -92,7 +92,7 @@ gg --profile personal -p '使用 gmail_search/gmail_read 汇总最近未读邮�
 | 计划项 | 本切片已交付 | 延后 |
 | --- | --- | --- |
 | 主动触发策略 | 确定性的 Summarize／Quiet／Note-only 决定、仅 personal 启用的默认值、安静时段、通知抑制与后果边界。 | 自动发现触发条件、持续运行的摘要调度。 |
-| 首位用户自用验证 | 可发现的 CLI 假邮件摘要、日历提醒与常驻授权拒绝场景，配套测试及可选真实只读操作说明。 | Daemon／Telegram 主动投递、为 `notify` 实现 `ApprovalDescriber`。 |
+| 首位用户自用验证 | 可发现的 CLI 假邮件摘要、日历提醒与常驻授权拒绝场景，配套测试及可选真实只读操作说明。 | Daemon／Telegram 主动投递。 |
 | 停止条件指针 | 保持编码优先默认值和共享运行时。 | 物理拆分仓库。 |
 
 **计划停止条件：** 仅当 personal 默认策略**系统性损害 coding**，出现审批噪声、工具循环或 README 人设漂移的证据时，才考虑物理拆分仓库。本切片不拆仓库、不重写 agent 循环、不增加第二运行时，也不扩大 MCP／bash 后果分类。现有 `gg job`／`internal/scheduler` 继续承担调度；不新增调度器，也不将 demo 接入调度。
@@ -136,6 +136,8 @@ gg --profile personal -p '使用 gmail_search/gmail_read 汇总最近未读邮�
 P1 为 `gmail_send` 和 `calendar_create` 填写 E/U=true、M=false、R=false，为 `browser_navigate` 填写 E=true、R=false。`memory_add` 的 E/M/U=false、R=未知：它是持久本地写入，删除条目不能撤销后续已经发生的使用。其他工具可保留未知维度；本阶段不增加媒体端点的本地性／计费分类，也不增加 bash 后果分类。
 
 `memory_add` 在两种 profile 中均实现 `ApprovalDescriber`。审批预览展示内容、scope 及请求的 workspace/global target（没有工作区上下文时均写入全局记忆）。`memory_search` 保持只读且不加审批。
+
+`notify` 现已在共享运行时实现 `ApprovalDescriber`，并设置 E=true，因为 OS 通知会展示内容且可能打扰用户。预览展示截断后的标题／正文；M/U 保持未知。这解决了 notify 审批缺口，但不改变 C2：personal 仍禁用 computer 工具。
 
 `gmail_send` 接受可选 `as_draft`（coding 默认 `false`，personal 默认 `true`）。为 `true` 时创建真实 Gmail 草稿，返回**草稿 ID**，不发送；API 失败绝不回退到发送。预览和结果明确标注 “not sent”。草稿仍为 E/U=true，因为 Google 可见，且内容以用户身份创建在其邮箱内。草稿内容可以删除，但整个效果仍为 R=false，因为服务方痕迹无法在本地撤销。两种模式都必须人工确认，或匹配显式常驻授权。
 
@@ -226,6 +228,7 @@ P0（#54）之后的 P1 清单，对照了[内置工具实现](../internal/tools
 | [`stt`](../internal/tools/media.go) | 是 | R：远程披露或已产生费用不可逆；远程时 E，计费时 M。 | 上传本地音频进行转写，不只是读取本地文件。 |
 | [`process_kill`](../internal/tools/computer.go) | 是 | R：丢失的进程状态通常不可逆；联网服务可能涉及 E。 | 发送 SIGTERM 或 SIGKILL。重启不一定恢复状态或撤销中断。 |
 | [`open`](../internal/tools/computer.go) | 是 | R：视情况；第三方 URL 涉及 E；其他维度取决于目标／应用。 | 将文件或 URL 交给默认应用。应判断后续效果，不能只看本地启动动作。 |
+| [`notify`](../internal/tools/computer.go) | 是 | R：已展示／打扰后不可逆；E（OS 通知）。 | 审批缺口已由 D3 解决：预览标题／正文并设置 E=true；M/U 保持未知。C2 仍在 personal 中禁用 computer 工具。 |
 | [`clipboard_read`](../internal/tools/computer.go) | 是 | R：本地读取；无直接 E/M/U。 | 剪贴板可能有敏感内容，因此有意加审批。后续披露不能靠清空剪贴板撤销。 |
 | [`clipboard_write`](../internal/tools/computer.go) | 是 | R：取决于能否恢复被替换内容；同步或外部消费时可能涉及 E。 | 替换系统剪贴板文本。本地写入可能影响其他应用或设备。 |
 | [`mcp_<server>_<tool>`](../internal/mcp/tool.go) | 是，全部 MCP 工具 | R/E/M/U：取决于 server、操作和参数。 | 每个桥接的 MCP 调用都过审批，包括自称只读的远程工具。审批覆盖完整，但桥接层目前尚未提供后果分类。 |
@@ -245,7 +248,6 @@ P0（#54）之后的 P1 清单，对照了[内置工具实现](../internal/tools
 | [`calendar_agenda`](../internal/tools/connectors.go) | 否 | R：服务方请求痕迹不可逆；E。 | 经 Calendar API 读取近期事件，不创建事件。 |
 | [`computer_info`](../internal/tools/computer.go) | 否 | R：本地读取；无直接 E/M/U。 | 读取 OS、主机、CPU、内存和磁盘信息。 |
 | [`process_list`](../internal/tools/computer.go) | 否 | R：本地读取；无直接 E/M/U。 | 查看运行中的进程，不会终止它们。 |
-| [`notify`](../internal/tools/computer.go) | 否 | R：已展示／打扰后不可逆；E（OS 通知）。 | **潜在的个人模式缺口。** 当前视作无害且不走审批；内容在 OS 界面上可见，也可能打扰用户。此缺口仍在 P1 最小覆盖范围之外。 |
 | [`subagent`](../internal/tools/subagent.go) | 否 | R：取决于 provider 痕迹；远程聊天 provider 涉及 E。 | 子工具仅有 `read`/`list`/`grep`。会增加普通聊天调用，仅普通聊天费用不算 M。子工具只读不代表处理全在本地完成。 |
 | [`kb_search`](../internal/tools/kb_search.go) | 否 | R：视情况；远程 embedding 端点涉及 E，计费时涉及 M。 | 本地索引只读，但会经配置的 API 为查询生成 embedding。披露／花费是另一个个人模式待评估点；“搜索”不保证没有外部后果。 |
 

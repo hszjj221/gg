@@ -151,11 +151,76 @@ func TestClipboardReadApprovalRequest(t *testing.T) {
 	}
 }
 
+func TestNotifyToolApprovalRequest(t *testing.T) {
+	tool := NewNotifyTool()
+	var _ agent.ApprovalDescriber = tool
+
+	for _, tt := range []struct {
+		name  string
+		raw   string
+		title string
+		body  string
+	}{
+		{"title and body", `{"title":" Reminder ","body":" Meeting soon "}`, "Reminder", "Meeting soon"},
+		{"title only", `{"title":"Reminder"}`, "Reminder", ""},
+		{"body only", `{"body":"Meeting soon"}`, "", "Meeting soon"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := tool.ApprovalRequest(json.RawMessage(tt.raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if req.ToolName != "notify" || string(req.Arguments) != tt.raw {
+				t.Errorf("unexpected tool name or arguments: %+v", req)
+			}
+			if !strings.Contains(req.Summary, tt.title) || !strings.Contains(req.Summary, tt.body) {
+				t.Errorf("summary should preview title and body: %q", req.Summary)
+			}
+			if want := "title: " + tt.title + "\nbody: " + tt.body; req.Details != want {
+				t.Errorf("details = %q, want %q", req.Details, want)
+			}
+			if req.ExternallyVisible == nil || !*req.ExternallyVisible || !req.RequiresHumanConfirm() {
+				t.Error("OS notifications must assert E and require human confirmation")
+			}
+			if req.SpendsMoneyOrChangesPermissions != nil || req.ActsInUserName != nil {
+				t.Error("M/U must remain unknown")
+			}
+		})
+	}
+}
+
+func TestNotifyToolApprovalPreviewTruncation(t *testing.T) {
+	raw, err := json.Marshal(map[string]string{
+		"title": strings.Repeat("提", 201),
+		"body":  strings.Repeat("文", 2001),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := NewNotifyTool().ApprovalRequest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `show OS notification "` + strings.Repeat("提", 80) + `…": "` + strings.Repeat("文", 120) + `…"`; req.Summary != want {
+		t.Errorf("summary = %q, want %q", req.Summary, want)
+	}
+	if want := "title: " + strings.Repeat("提", 200) + "…\nbody: " + strings.Repeat("文", 2000) + "…"; req.Details != want {
+		t.Errorf("details should match the truncated notification: %q", req.Details)
+	}
+}
+
 func TestNotifyToolValidation(t *testing.T) {
 	tool := NewNotifyTool()
-	res := tool.Execute(context.Background(), json.RawMessage(`{"title":"","body":""}`))
-	if !res.IsError {
-		t.Error("expected error when both title and body are empty")
+	for _, raw := range []string{
+		`not json`, `{"title":42}`, `{"body":false}`, `{}`, `null`,
+		`{"title":"","body":""}`, `{"title":" \t ","body":" \n "}`,
+	} {
+		if _, err := tool.ApprovalRequest(json.RawMessage(raw)); err == nil {
+			t.Errorf("expected approval request to reject %q", raw)
+		}
+		if res := tool.Execute(context.Background(), json.RawMessage(raw)); !res.IsError {
+			t.Errorf("expected execution to reject %q", raw)
+		}
 	}
 }
 

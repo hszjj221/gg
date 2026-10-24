@@ -111,7 +111,7 @@ gg -p "List the files in this project"
 | 知识库 | 本地 RAG 索引和 `kb_search` 工具。 | [RAG](docs/rag.zh-CN.md) |
 | Artifacts 与 library | 带版本的文档和个人文件库。 | [使用说明](docs/usage.zh-CN.md#artifacts-and-library) |
 | MCP | `~/.gg/mcp.json` 里声明的外部工具。 | [架构](docs/architecture.zh-CN.md#mcp-servers) |
-| 电脑操作 | Linux 和 macOS 上的系统信息、进程、剪贴板和通知。 | [使用说明](docs/usage.zh-CN.md#computer-tools) |
+| 电脑操作 | Linux 和 macOS 上的系统信息、进程、剪贴板和需审批的 OS 通知。 | [使用说明](docs/usage.zh-CN.md#computer-tools) |
 | 诊断 | stderr 上的 JSON 日志，以及如何跟踪一轮运行。 | [诊断](docs/diagnostics.zh-CN.md) |
 
 包边界和 JSON-RPC 接口见[架构文档](docs/architecture.zh-CN.md)。

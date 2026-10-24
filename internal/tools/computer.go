@@ -31,8 +31,8 @@ import (
 //	writeClipboard(ctx, text string) error
 //
 // Safety levels (per the architecture design):
-//   - computer_info, process_list, notify: read-only or harmless, no approval.
-//   - process_kill, open, clipboard_read, clipboard_write: approval-gated via
+//   - computer_info, process_list: read-only, no approval.
+//   - process_kill, open, notify, clipboard_read, clipboard_write: approval-gated via
 //     agent.ApprovalDescriber.
 
 const (
@@ -346,7 +346,7 @@ func (t OpenTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {
 }
 
 // ---------------------------------------------------------------------------
-// notify
+// notify (approval-gated)
 // ---------------------------------------------------------------------------
 
 type NotifyTool struct{}
@@ -358,7 +358,7 @@ func (t NotifyTool) Name() string { return "notify" }
 func (t NotifyTool) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "notify",
-		Description: "Show a system notification with a title and body. Harmless; no approval needed.",
+		Description: "Show an OS notification with a title and body. Requires approval: the content is visible and may interrupt the user.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -370,18 +370,40 @@ func (t NotifyTool) Definition() agent.ToolDefinition {
 	}
 }
 
-func (t NotifyTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {
+func parseNotifyInput(raw json.RawMessage) (title, body string, err error) {
 	var input struct {
 		Title string `json:"title"`
 		Body  string `json:"body"`
 	}
 	if err := json.Unmarshal(raw, &input); err != nil {
-		return errorResult(fmt.Errorf("invalid notify arguments: %w", err))
+		return "", "", fmt.Errorf("invalid notify arguments: %w", err)
 	}
-	title := truncateRunes(strings.TrimSpace(input.Title), 200)
-	body := truncateRunes(strings.TrimSpace(input.Body), 2000)
+	title = truncateRunes(strings.TrimSpace(input.Title), 200)
+	body = truncateRunes(strings.TrimSpace(input.Body), 2000)
 	if title == "" && body == "" {
-		return errorResult(fmt.Errorf("title or body is required"))
+		return "", "", fmt.Errorf("title or body is required")
+	}
+	return title, body, nil
+}
+
+func (t NotifyTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, error) {
+	title, body, err := parseNotifyInput(raw)
+	if err != nil {
+		return agent.ApprovalRequest{}, err
+	}
+	return agent.ApprovalRequest{
+		ToolName:          "notify",
+		Summary:           fmt.Sprintf("show OS notification %q: %q", truncateRunes(title, 80), truncateRunes(body, 120)),
+		Details:           fmt.Sprintf("title: %s\nbody: %s", title, body),
+		Arguments:         raw,
+		ExternallyVisible: new(true),
+	}, nil
+}
+
+func (t NotifyTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {
+	title, body, err := parseNotifyInput(raw)
+	if err != nil {
+		return errorResult(err)
 	}
 	ctx, cancel := boundedComputerCtx(ctx)
 	defer cancel()
