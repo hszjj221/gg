@@ -44,7 +44,7 @@ The existing consequence contract in [`agent.ApprovalRequest`](../internal/agent
 
 An omitted consequence is unknown, not evidence of safety or authorization. Asserted E/M/U still needs a human decision or a matching explicit standing grant, including under coding `--yolo` and scheduled `--allow-all`. Standing grants do not waive `dangerous`/`confirm` risks. R alone does not authorize an operation. C0 neither expands classification coverage nor removes the existing risk-based compatibility path for unclassified calls; see the [personal-agent consequence and approval inventory](personal-agent.md).
 
-First-party plugins execute with gg's OS privileges. Static linking and an SPI provide ownership boundaries, not a sandbox. Implementations must preserve existing approval descriptions and cannot bypass approval or standing-auth. Proactive decisions about when to surface a digest are delivery policy, not authorization to send, notify, or write memory. MCP tools retain their existing universal approval gate and documented classification limitations.
+First-party plugins execute with gg's OS privileges. Static linking and an SPI provide ownership boundaries, not a sandbox. Implementations must preserve existing approval descriptions and cannot bypass approval or standing-auth. Proactive decisions about when to surface a digest are delivery policy, not authorization to send, notify, or write memory. D1a keeps the universal MCP approval gate and classifies unknown server tools fail-closed with R=false, E/M/U=true and `Risk=confirm`; human confirmation is required.
 
 ## Lessons from Magpie and dsh
 

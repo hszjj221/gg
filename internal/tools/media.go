@@ -62,10 +62,14 @@ func (t ImageGenerateTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalR
 		size = "default"
 	}
 	return agent.ApprovalRequest{
-		ToolName:  "image_generate",
-		Summary:   fmt.Sprintf("generate %d image(s) [%s]: %q", n, size, truncateRunes(input.Prompt, 80)),
-		Details:   fmt.Sprintf("count: %d\nsize: %s\nprompt: %s", n, size, input.Prompt),
-		Arguments: raw,
+		ToolName:                        "image_generate",
+		Summary:                         fmt.Sprintf("generate %d image(s) [%s]: %q", n, size, truncateRunes(input.Prompt, 80)),
+		Details:                         fmt.Sprintf("count: %d\nsize: %s\nprompt: %s", n, size, input.Prompt),
+		Arguments:                       raw,
+		Reversible:                      new(false),
+		ExternallyVisible:               new(true),
+		SpendsMoneyOrChangesPermissions: new(true),
+		ActsInUserName:                  new(false),
 	}, nil
 }
 
@@ -135,10 +139,14 @@ func (t TTSTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, er
 		format = "mp3"
 	}
 	return agent.ApprovalRequest{
-		ToolName:  "tts",
-		Summary:   fmt.Sprintf("synthesize speech [%s/%s]: %q", voice, format, truncateRunes(input.Text, 80)),
-		Details:   fmt.Sprintf("voice: %s\nformat: %s\ntext: %s", voice, format, input.Text),
-		Arguments: raw,
+		ToolName:                        "tts",
+		Summary:                         fmt.Sprintf("synthesize speech [%s/%s]: %q", voice, format, truncateRunes(input.Text, 80)),
+		Details:                         fmt.Sprintf("voice: %s\nformat: %s\ntext: %s", voice, format, input.Text),
+		Arguments:                       raw,
+		Reversible:                      new(false),
+		ExternallyVisible:               new(true),
+		SpendsMoneyOrChangesPermissions: new(true),
+		ActsInUserName:                  new(false),
 	}, nil
 }
 
@@ -207,10 +215,14 @@ func (t STTTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, er
 		language = "auto"
 	}
 	return agent.ApprovalRequest{
-		ToolName:  "stt",
-		Summary:   fmt.Sprintf("transcribe audio [%s]: %q", language, truncateRunes(input.AudioPath, 80)),
-		Details:   fmt.Sprintf("audio_path: %s\nlanguage: %s", input.AudioPath, language),
-		Arguments: raw,
+		ToolName:                        "stt",
+		Summary:                         fmt.Sprintf("transcribe audio [%s]: %q", language, truncateRunes(input.AudioPath, 80)),
+		Details:                         fmt.Sprintf("audio_path: %s\nlanguage: %s", input.AudioPath, language),
+		Arguments:                       raw,
+		Reversible:                      new(false),
+		ExternallyVisible:               new(true),
+		SpendsMoneyOrChangesPermissions: new(true),
+		ActsInUserName:                  new(false),
 	}, nil
 }
 

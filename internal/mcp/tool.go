@@ -22,8 +22,9 @@ const previewLimit = 1200
 // MCPTool adapts one tool from an MCP server to agent.Tool.
 //
 // It always implements agent.ApprovalDescriber: MCP servers are external
-// capabilities, so every call passes through the approval pipeline (the
-// unattended approver denies them unless the job opted in).
+// capabilities, so every call passes through the approval pipeline. Unknown
+// server consequences are classified fail-closed and marked confirm, so
+// yolo and unattended allow-all cannot authorize them.
 type MCPTool struct {
 	server      string // MCP server name from mcp.json
 	remote      string // original tool name on the server
@@ -85,15 +86,20 @@ func (t *MCPTool) Execute(ctx context.Context, args json.RawMessage) agent.ToolR
 	return resultFromContent(t.name, res)
 }
 
-// ApprovalRequest describes the call for the human approver. Because the
-// tool always implements ApprovalDescriber, the runner asks for approval
-// on every MCP call — there is no silent external execution.
+// ApprovalRequest describes the call for the human approver. Server tools
+// may disclose data, incur costs, change permissions, or act as the user;
+// without trusted classification, every call requires human confirmation.
 func (t *MCPTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, error) {
 	return agent.ApprovalRequest{
-		ToolName:  t.name,
-		Summary:   fmt.Sprintf("MCP %s.%s", t.server, t.remote),
-		Details:   "arguments: " + previewJSON(raw),
-		Arguments: raw,
+		ToolName:                        t.name,
+		Summary:                         fmt.Sprintf("MCP %s.%s", t.server, t.remote),
+		Details:                         "arguments: " + previewJSON(raw),
+		Arguments:                       raw,
+		Risk:                            agent.ApprovalRiskConfirm,
+		Reversible:                      new(false),
+		ExternallyVisible:               new(true),
+		SpendsMoneyOrChangesPermissions: new(true),
+		ActsInUserName:                  new(true),
 	}, nil
 }
 
