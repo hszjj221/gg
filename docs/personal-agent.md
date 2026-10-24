@@ -1,8 +1,8 @@
-# Personal Agent: personal profile and defaults (P3)
+# Personal Agent: proactive policy and dogfood path (P4 first slice)
 
 English | [简体中文](personal-agent.zh-CN.md)
 
-P0 defined the consequence language and approval baseline. P1 added consequence routing, memory-write approval, and Gmail drafts. P2 added explicit standing grants and audited matching. P3 adds a personal profile with its own base identity and stricter defaults, while the default `gg` CLI remains coding-first.
+P0 defined the consequence language and approval baseline. P1 added consequence routing, memory-write approval, and Gmail drafts. P2 added explicit standing grants and audited matching. P3 added a personal profile with its own base identity and stricter defaults. P4's first slice adds a deterministic proactive policy and a runnable fake dogfood path that checks those brakes. The default `gg` CLI remains coding-first.
 
 ## Personal and coding agents
 
@@ -34,7 +34,66 @@ Personal's default `on-request` requires stdin and stderr to be terminals; witho
 
 Personal Gmail calls with omitted `as_draft` create real drafts. Explicit `as_draft=false` can still request sending, through the same E/U approval path. Previews and results reflect the effective action. Both draft and send remain E/U; neither is automatically authorized. A failed draft never falls back to sending. Standing-grant argument limits still match the original explicit arguments: a grant constrained to `as_draft=true` requires the call to include it, even in personal mode.
 
-The selected `Config.Profile` reaches the shared prompt and tool registry, including manual `gg --profile personal job run ...` turns. Manual jobs retain their job approval policy (`--allow-all`), rather than the interactive CLI mode. Profiles are not saved in job definitions. `ggd`, Web/Electron, Telegram, and daemon-scheduled jobs keep their existing coding profile and approval policies; adding selectors there is deferred. P4 proactivity, digests, and reminders are outside this PR.
+The selected `Config.Profile` reaches the shared prompt and tool registry, including manual `gg --profile personal job run ...` turns. Manual jobs retain their job approval policy (`--allow-all`), rather than the interactive CLI mode. Profiles are not saved in job definitions. `ggd`, Web/Electron, Telegram, and daemon-scheduled jobs keep their existing coding profile and approval policies; adding selectors there is deferred. The P4 demo below is an explicit CLI invocation, separate from scheduled agent turns.
+
+## Proactive policy (P4 first slice)
+
+[`internal/proactive.Policy.Decide`](../internal/proactive/policy.go) is a pure function: no model, I/O, clock reads, or inferred authorization. Inputs are the runtime profile, scenario (`email_summary`, `calendar_reminder`, `standing_auth_check`), supplied local time, an explicit remember-later request, and any proposed notification or tool approval request. This slice calls it from the demo; it does not add triggers to ordinary agent turns or the daemon.
+
+| Decision | Meaning | Action in this slice |
+| --- | --- | --- |
+| **Summarize** | A brief digest would help now. | Print a local digest to stdout; no outbound delivery. |
+| **Quiet** | Do not interrupt. | No payload, notification, or outbound message; demo diagnostics may show the decision. |
+| **Note-only** | Capture for later without surfacing content now. | Write a private local candidate file; do not insert it into durable memory. Using `memory_add` later still goes through its existing approval gate. |
+
+Defaults and precedence:
+
+- Coding (including an unset profile) returns Quiet/disabled. Unknown profiles and scenarios also stay quiet.
+- Personal email/calendar digests may Summarize locally. Quiet hours are disabled by default; `QuietHours="22:00-07:00"` uses the supplied time's location, includes the start, excludes the end, and supports overnight windows. Equal endpoints or malformed windows are rejected; invalid policy input stays Quiet.
+- An explicit remember-later request selects Note-only, including during quiet hours. It never changes authorization for a proposed tool or notification.
+- OS `notify` is off, with a fixed maximum of **zero notifications per run** and no opt-in in this slice. A proposed notification returns Quiet; OS notifications count as E. The existing `notify` tool still lacks `ApprovalDescriber` (the P0 inventory/P1 coverage gap below); this policy does not change its availability in ordinary turns.
+- A proposed tool action returns Quiet and must use the existing Approver/standing-auth path. In particular, asserted E/M/U always requires human confirmation or a matching standing grant. `gmail_send`, including a real Gmail draft, and `calendar_create` retain P1–P3 gates. Neither Summarize nor Note-only authorizes any tool, and unknown tool metadata is not permission.
+
+## Run the fake dogfood path
+
+No model key, Google connection, live mailbox, or terminal is required:
+
+```sh
+gg --profile personal proactive demo
+# From a checkout: go run ./cmd/gg --profile personal proactive demo
+
+# Suppress both digest payloads during fake local quiet hours:
+gg --profile personal proactive demo --quiet-hours 22:00-07:00 --at 23:00
+
+# Capture private candidates instead, including during quiet hours:
+gg --profile personal proactive demo --remember-later --quiet-hours 22:00-07:00 --at 23:00
+```
+
+The default fake time is 10:00 in the machine's local timezone (`--at HH:MM` changes it). Fake inbox snippets produce a short digest; a fake event 30 minutes away produces a local reminder when policy permits, without calling `calendar_create`. Note-only writes 0600 candidate files into a fresh 0700 `~/.gg/proactive/demo-*` directory, resolved from `Config.HomeDir`. Only candidate paths/decision metadata are printed, not their content. Demo directories are retained for inspection and may be removed afterward; they are never loaded as memory.
+
+The standing-auth scene uses real `GmailSendTool.ApprovalRequest` metadata (personal's omitted `as_draft` means draft, explicit `false` means send), the shared `standingauth.Approver`, and the CLI approver with no human available. A fresh empty grant store inside the demo directory isolates this check from real grants. Both attempts must be denied, or the command fails. It never executes either tool action or creates a grant. Successful runs exit 0 with **“brakes held”** lines. `gg proactive demo` under coding prints Quiet/disabled and creates no demo state. The demo returns before session, workspace, or memory setup and never constructs a live connector/model client.
+
+Policy and CLI tests cover local digest visibility, Note-only capture, quiet hours, notify off, and denied draft/send attempts even when the real gg home contains a matching grant. Existing standing-auth tests cover matching-grant authorization and audit. No live credentials are needed in CI.
+
+### Optional live read-only smoke
+
+With a configured model and an existing Google connection (`gg connect google`), run in a terminal:
+
+```sh
+gg --profile personal -p 'Use gmail_search/gmail_read to summarize recent unread mail and calendar_agenda for today. Keep the digest in this session. Do not send, create drafts or events, notify, or add memory.'
+```
+
+This uses the normal personal-profile agent path, not the fake demo or automatic policy triggers. It is optional and excluded from CI. Gmail/Calendar reads contact Google and their results enter the configured chat provider's context; they are not local-only processing. Sending, real Gmail drafts, and event creation still require human approval or a matching explicit grant. Keep credentials in the existing local provider configuration/environment.
+
+## P4 scope and stop condition
+
+| Plan item | Landed in this slice | Deferred |
+| --- | --- | --- |
+| Proactive trigger policy | Deterministic Summarize/Quiet/Note-only decisions, personal-only defaults, quiet hours, notification suppression, and consequence boundary. | Automatic trigger discovery and always-on digest scheduling. |
+| First-user dogfood | Fake email digest, calendar reminder, and standing-auth denial scene through the discoverable CLI, with tests and optional live read-only instructions. | Daemon/Telegram proactive delivery and making `notify` implement `ApprovalDescriber`. |
+| Stop-condition pointer | Keep coding-first defaults and the shared runtime. | Physical repository split. |
+
+**Plan stop condition:** only consider a physical repository split if personal defaults **systematically hurt coding**, evidenced by approval noise, tool loops, or README persona drift. This slice does not split the repository, rewrite the agent loop, add a second runtime, or broaden MCP/bash consequence classification. Existing `gg job`/`internal/scheduler` remain the scheduling mechanism; no new scheduler is introduced or wired to this demo.
 
 ## Four consequence dimensions
 
@@ -192,4 +251,4 @@ The tables use R/E/M/U as shorthand for the dimensions above. They describe effe
 
 Current runtime policy is documented in the architecture's [Security model](architecture.md#security-model) and [Approval modes](architecture.md#approval-modes). P1 extends #53's fail-closed nil-approver handling for `dangerous`/`confirm` risks to asserted E/M/U consequences, while retaining existing Risk behavior for unclassified tools.
 
-P1 shipped the fields, routing, memory-write gate, and optional Gmail draft switch described above. P2 ships explicit standing authorization with durable storage, CLI management, shared matching, and an allow audit. P3 ships the personal profile selector, personal base identity, stricter personal defaults, and Gmail draft preference while retaining the shared runtime. P4 proactivity remains future work.
+P1 shipped the fields, routing, memory-write gate, and optional Gmail draft switch described above. P2 shipped explicit standing authorization with durable storage, CLI management, shared matching, and an allow audit. P3 shipped the personal profile selector, personal base identity, stricter personal defaults, and Gmail draft preference while retaining the shared runtime. P4's first slice ships the local proactive policy and fake dogfood CLI above; broader delivery remains deferred under the stated stop condition.

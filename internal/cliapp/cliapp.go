@@ -82,6 +82,9 @@ func Run(ctx context.Context, argv []string, options Options) int {
 		return 1
 	}
 	cfg.BashSandbox = parsed.Sandbox
+	if parsed.Command == cli.CommandProactive {
+		return runProactiveCommand(ctx, cfg, parsed, stdout, stderr)
+	}
 	// P1 workspace: the process working directory is auto-registered as the
 	// "default" workspace on first run after upgrade. Today the runtime
 	// still serves this single root exactly like before; later phases bind

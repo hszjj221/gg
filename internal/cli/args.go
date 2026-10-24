@@ -50,6 +50,8 @@ type Args struct {
 	JobArgs []string
 	// StandingAuthArgs carries `gg standing-auth list|add|revoke`.
 	StandingAuthArgs []string
+	// ProactiveArgs carries the fake proactive demo subcommand.
+	ProactiveArgs []string
 	// ArtifactArgs carries the subcommand for `gg artifact ...`.
 	ArtifactArgs []string
 	// LibraryArgs carries the subcommand for `gg library ...`.
@@ -73,6 +75,7 @@ const (
 	CommandMemory       Command = "memory"
 	CommandJob          Command = "job"
 	CommandStandingAuth Command = "standing-auth"
+	CommandProactive    Command = "proactive"
 	CommandArtifact     Command = "artifact"
 	CommandLibrary      Command = "library"
 	CommandConnect      Command = "connect"
@@ -220,6 +223,13 @@ func parseCommand(args *Args, rest []string) error {
 		if len(rest) == 1 || rest[1] == "list" || rest[1] == "add" || rest[1] == "revoke" {
 			args.Command = CommandStandingAuth
 			args.StandingAuthArgs = rest[1:]
+		} else {
+			args.Prompt = strings.Join(rest, " ")
+		}
+	case "proactive":
+		if len(rest) == 1 || rest[1] == "demo" {
+			args.Command = CommandProactive
+			args.ProactiveArgs = rest[1:]
 		} else {
 			args.Prompt = strings.Join(rest, " ")
 		}
@@ -427,6 +437,7 @@ Usage:
   gg memory search <query>
   gg memory show [daily]
   gg standing-auth list|add|revoke   manage explicit standing grants
+  gg --profile personal proactive demo   fake local digests + approval brakes (no credentials)
   gg job add --cron "0 9 * * *" --name NAME PROMPT
   gg job list [--all]
   gg artifact list
@@ -483,6 +494,12 @@ Standing authorization (~/.gg/standing-auth):
   add also accepts --expires RFC3339 instead of --ttl, and optional --notes.
   Exact argument limits and explicit effects (E,M,U or none) are required.
   Standing grants never waive dangerous/confirm risks.
+
+Proactive demo (personal only; no model or live connectors):
+  gg --profile personal proactive demo [--quiet-hours HH:MM-HH:MM] [--at HH:MM] [--remember-later]
+  --at defaults to fake local time 10:00; quiet hours are disabled by default.
+  --remember-later writes local candidates, without inserting durable memory.
+  OS notify is off; maximum notifications per run is zero.
 
 Scheduled jobs (fire while the ggd daemon is alive):
   gg job add --cron "0 9 * * *" --name NAME [--timezone TZ] [--allow-all] [--timeout 10m] PROMPT

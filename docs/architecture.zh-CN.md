@@ -71,7 +71,9 @@ CLI 与 Runtime 通过 `app.PublishArtifact` 共用版本校验和失败补偿�
 
 系统提示词组装顺序（所选 profile 的基础指令之后）：用户画像、精选记忆（`MEMORY.md`）、今天的日常日志尾部（`YYYY-MM-DD.md`），然后是项目指令（AGENTS.md）和 skills。工具面：`memory_add` 接受 `scope=general|daily|person:<name>|group:<name>`（默认 general）；`memory_search` 跨 scope 做大小写不敏感的关键词检索，最多返回 10 条 `path:line: snippet`。记忆关闭时两者都隐藏。
 
-CLI `--profile personal` 设置 `Config.Profile`，选择个人身份、默认 `on-request` 审批、拒绝 yolo、默认 Gmail 草稿。未设置／空值选择 coding；daemon 传输入口保持 coding 默认值。两种 profile 共用后果路由、记忆写入审批和常驻授权：明确 E/M/U 须人工确认或匹配授权，包括 coding 的 `--yolo`／定时任务的 `--allow-all`。参见 [Personal Agent（P3）](personal-agent.zh-CN.md)。
+CLI `--profile personal` 设置 `Config.Profile`，选择个人身份、默认 `on-request` 审批、拒绝 yolo、默认 Gmail 草稿。未设置／空值选择 coding；daemon 传输入口保持 coding 默认值。两种 profile 共用后果路由、记忆写入审批和常驻授权：明确 E/M/U 须人工确认或匹配授权，包括 coding 的 `--yolo`／定时任务的 `--allow-all`。参见 [Personal Agent（P4 首个切片）](personal-agent.zh-CN.md)。
+
+`internal/proactive` 增加本地投递的纯函数决定（Summarize／Quiet／Note-only），coding 中禁用，OS 通知关闭。`gg --profile personal proactive demo` 使用假摘要及现有常驻授权／CLI 拒绝路径，不创建真实客户端。它不授权工具调用，也不增加 daemon 触发器。[P4 范围与停止条件](personal-agent.zh-CN.md#p4-范围与停止条件) 明确：仅当 personal 默认策略系统性损害 coding 时才考虑物理拆分。
 
 ## 定时任务（cron / 单次）
 

@@ -1,8 +1,8 @@
-# Personal Agent：个人 profile 与默认策略（P3）
+# Personal Agent：主动性策略与自用验证路径（P4 首个切片）
 
 [English](personal-agent.md) | 简体中文
 
-P0 定义后果语言与审批基线。P1 增加后果路由、记忆写入审批及 Gmail 草稿。P2 增加显式常驻授权与审计匹配。P3 增加独立基础身份与更严格默认策略的个人 profile，默认 `gg` CLI 仍以编码为主。
+P0 定义后果语言与审批基线。P1 增加后果路由、记忆写入审批及 Gmail 草稿。P2 增加显式常驻授权与审计匹配。P3 增加独立基础身份与更严格默认策略的个人 profile。P4 首个切片增加确定性的主动性策略，以及验证这些刹车仍有效的可运行假数据自用路径。默认 `gg` CLI 仍以编码为主。
 
 ## 个人代理与编码代理
 
@@ -34,7 +34,66 @@ Personal 默认的 `on-request` 要求 stdin 和 stderr 都是终端，否则 CL
 
 Personal Gmail 调用省略 `as_draft` 时创建真实草稿。显式 `as_draft=false` 仍可请求发送，经过相同的 E/U 审批路径。预览与结果反映实际动作。草稿与发送均为 E/U，不会自动获准；草稿失败绝不回退到发送。常驻授权的参数限制仍匹配原始显式参数：即使在 personal 中，限制 `as_draft=true` 的授权也要求调用明确包含它。
 
-选定的 `Config.Profile` 传入共享提示词与工具注册表，包括手动 `gg --profile personal job run ...` 轮次。手动任务保留任务审批策略（`--allow-all`），不使用交互 CLI 模式；profile 不存入任务定义。`ggd`、Web/Electron、Telegram 及 daemon 定时任务保持现有 coding profile 和审批策略，入口选择器留待后续。P4 主动性、摘要和提醒不在本 PR 范围内。
+选定的 `Config.Profile` 传入共享提示词与工具注册表，包括手动 `gg --profile personal job run ...` 轮次。手动任务保留任务审批策略（`--allow-all`），不使用交互 CLI 模式；profile 不存入任务定义。`ggd`、Web/Electron、Telegram 及 daemon 定时任务保持现有 coding profile 和审批策略，入口选择器留待后续。下方 P4 demo 由用户显式调用 CLI，与定时 agent 轮次分开。
+
+## 主动性策略（P4 首个切片）
+
+[`internal/proactive.Policy.Decide`](../internal/proactive/policy.go) 是纯函数：不调用模型、不做 I/O、不读取时钟、不推导授权。输入包括运行时 profile、场景（`email_summary`、`calendar_reminder`、`standing_auth_check`）、传入的本地时间、显式的稍后记住请求，以及拟议通知或工具审批请求。本切片在 demo 中调用它，不向普通 agent 轮次或 daemon 添加自动触发器。
+
+| 决定 | 含义 | 本切片中的动作 |
+| --- | --- | --- |
+| **Summarize（摘要）** | 现在提供简短摘要有帮助。 | 将本地摘要输出到 stdout，不向外投递。 |
+| **Quiet（安静）** | 不打扰。 | 不展示正文、不通知、不发送消息；demo 诊断可记录决定。 |
+| **Note-only（仅记录）** | 留待以后，不在此刻展示内容。 | 写入私有本地候选文件，不插入持久记忆；之后使用 `memory_add` 仍须经过现有审批。 |
+
+默认值与优先顺序：
+
+- Coding（包括未设置 profile）返回 Quiet／禁用。未知 profile 和场景也保持安静。
+- Personal 的邮件／日历摘要可在本地 Summarize。安静时段默认关闭；`QuietHours="22:00-07:00"` 使用传入时间的时区，包含起点、不含终点，支持跨午夜。起止相同或格式错误会被拒绝；无效策略输入保持 Quiet。
+- 显式的稍后记住请求选择 Note-only，包括在安静时段内。它不会改变拟议工具或通知的授权要求。
+- OS `notify` 关闭，每次运行固定最多 **零条通知**，本切片不提供开启选项。拟议通知返回 Quiet；OS 通知按 E 处理。现有 `notify` 工具仍未实现 `ApprovalDescriber`（见下方 P0 清单／P1 覆盖缺口）；本策略不改变它在普通轮次中的可用性。
+- 拟议工具动作返回 Quiet，必须走现有 Approver／常驻授权路径。明确的 E/M/U 始终须人工确认或匹配常驻授权。`gmail_send`（包括真实 Gmail 草稿）和 `calendar_create` 保留 P1–P3 门禁。Summarize 与 Note-only 均不授权工具调用，未知工具元数据也不是许可。
+
+## 运行假数据自用验证
+
+无需模型 key、Google 连接、真实邮箱或终端：
+
+```sh
+gg --profile personal proactive demo
+# 在 checkout 中：go run ./cmd/gg --profile personal proactive demo
+
+# 在模拟的本地安静时段内隐藏两种摘要正文：
+gg --profile personal proactive demo --quiet-hours 22:00-07:00 --at 23:00
+
+# 改为捕获私有候选，即使当前处于安静时段：
+gg --profile personal proactive demo --remember-later --quiet-hours 22:00-07:00 --at 23:00
+```
+
+默认模拟时间是机器本地时区的 10:00（`--at HH:MM` 可修改）。假收件箱片段生成简短摘要；30 分钟后的假事件在策略允许时生成本地提醒，不调用 `calendar_create`。Note-only 将权限为 0600 的候选文件写入新建的 0700 `~/.gg/proactive/demo-*` 目录，通过 `Config.HomeDir` 定位。仅输出候选路径／决定元数据，不输出内容。demo 目录保留供检查，之后可删除；它们从不作为记忆加载。
+
+常驻授权场景使用真实 `GmailSendTool.ApprovalRequest` 元数据（personal 省略 `as_draft` 为草稿，显式 `false` 为发送）、共享 `standingauth.Approver` 以及无人可应答的 CLI 审批器。demo 目录内全新的空授权存储将检查与真实授权隔离。两个尝试均须被拒绝，否则命令失败。它从不执行这两个工具动作，也不创建授权。成功退出码为 0，并输出 **“brakes held”**。Coding 下的 `gg proactive demo` 输出 Quiet／禁用，不创建 demo 状态。demo 在会话、工作区和记忆初始化前返回，从不构造真实连接器／模型客户端。
+
+策略和 CLI 测试覆盖本地摘要可见性、Note-only 捕获、安静时段、通知关闭，以及真实 gg home 存在匹配授权时 demo 中的草稿／发送仍被拒绝。现有常驻授权测试覆盖匹配授权放行与审计。CI 无需真实凭据。
+
+### 可选的真实只读冒烟
+
+已配置模型且已有 Google 连接（`gg connect google`）时，在终端运行：
+
+```sh
+gg --profile personal -p '使用 gmail_search/gmail_read 汇总最近未读邮件，用 calendar_agenda 查看今天日程。摘要只留在此会话中，不发送、不创建草稿或事件、不通知、不添加记忆。'
+```
+
+这里使用正常的 personal-profile agent 路径，不是假数据 demo，也不由策略自动触发。此步骤可选，不纳入 CI。Gmail／Calendar 读取会访问 Google，结果进入配置的聊天 provider 上下文，并非纯本地处理。发送、真实 Gmail 草稿和事件创建仍须人工审批或匹配显式授权。凭据仅保存在现有本地 provider 配置／环境变量中。
+
+## P4 范围与停止条件
+
+| 计划项 | 本切片已交付 | 延后 |
+| --- | --- | --- |
+| 主动触发策略 | 确定性的 Summarize／Quiet／Note-only 决定、仅 personal 启用的默认值、安静时段、通知抑制与后果边界。 | 自动发现触发条件、持续运行的摘要调度。 |
+| 首位用户自用验证 | 可发现的 CLI 假邮件摘要、日历提醒与常驻授权拒绝场景，配套测试及可选真实只读操作说明。 | Daemon／Telegram 主动投递、为 `notify` 实现 `ApprovalDescriber`。 |
+| 停止条件指针 | 保持编码优先默认值和共享运行时。 | 物理拆分仓库。 |
+
+**计划停止条件：** 仅当 personal 默认策略**系统性损害 coding**，出现审批噪声、工具循环或 README 人设漂移的证据时，才考虑物理拆分仓库。本切片不拆仓库、不重写 agent 循环、不增加第二运行时，也不扩大 MCP／bash 后果分类。现有 `gg job`／`internal/scheduler` 继续承担调度；不新增调度器，也不将 demo 接入调度。
 
 ## 四个后果维度
 
@@ -192,4 +251,4 @@ P0（#54）之后的 P1 清单，对照了[内置工具实现](../internal/tools
 
 当前运行时策略见架构文档的[安全模型](architecture.zh-CN.md#安全模型)和[审批模式](architecture.zh-CN.md#审批模式)。P1 将 #53 对 `dangerous`/`confirm` 风险的 nil approver 失败关闭处理扩展到明确的 E/M/U 后果，同时保留未分类工具现有的 Risk 行为。
 
-P1 已交付上述字段、路由、记忆写入审批和可选 Gmail 草稿开关。P2 交付显式常驻授权的持久存储、CLI 管理、共享匹配与放行审计。P3 交付 personal profile 选择器、个人基础身份、更严默认与 Gmail 草稿偏好，并继续共享运行时。P4 主动性仍属后续工作。
+P1 已交付上述字段、路由、记忆写入审批和可选 Gmail 草稿开关。P2 已交付显式常驻授权的持久存储、CLI 管理、共享匹配与放行审计。P3 已交付 personal profile 选择器、个人基础身份、更严默认与 Gmail 草稿偏好，并继续共享运行时。P4 首个切片交付上方本地主动性策略及假数据自用 CLI；更广泛的投递仍按已述停止条件延后。
