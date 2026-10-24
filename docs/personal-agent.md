@@ -1,8 +1,8 @@
-# Personal Agent: boundaries and baseline (P0)
+# Personal Agent: consequence routing (P1)
 
 English | [简体中文](personal-agent.zh-CN.md)
 
-P0 (definition and baseline) of the gg → Personal Agent plan defines consequence language and records current approval coverage. This phase changes documentation only; the policy described as a target below is future work.
+P0 defined the consequence language and approval baseline. P1 adds consequence metadata and routing to the shared runtime, gates durable memory writes, and offers an optional Gmail draft path. Standing authorization (P2) and separate personal identity/defaults (P3) remain future work.
 
 ## Personal and coding agents
 
@@ -10,11 +10,7 @@ Today gg is primarily a terminal **coding** agent, as the [README](../README.md)
 
 The target keeps the shared runtime for sessions, providers, tools, and approvals. P3 will separate **identity and default policy**: coding defaults stay coding-friendly, while personal defaults become stricter about consequences outside private, reversible work. This is a policy and identity split, not a second runtime.
 
-P0 succeeds when:
-
-- P1 can add consequence fields beside `risk` on `agent.ApprovalRequest` without reopening the definitions below.
-- The approval inventory matches the `origin/main` baseline, including deliberate exemptions and personal-mode gaps.
-- This change leaves runtime behavior untouched: approval modes, CLI flags, `DefaultApprover`, fail-closed runner logic, tool defaults, `ApprovalDescriber` implementations, and tests asserting current approval behavior all stay unchanged.
+P1 extends the existing `ApprovalDescriber` → `ApprovalRequest` → `Approver` path. It preserves `Risk` / `RiskReason`, approval modes for ordinary calls, and the bash classifier. Routing uses consequence attributes, not a list of tool names.
 
 ## Four consequence dimensions
 
@@ -31,7 +27,32 @@ The dimensions are independent: a local permission change can be M without E; cr
 
 These dimensions describe tool effects. Data returned by local reads can also reach the configured chat provider as conversation context; that shared runtime data flow still matters, but is distinct from a tool making its own external request. Existing sensitive-read gates, such as clipboard approval, remain relevant even without a direct E/M/U effect.
 
-The plan's routing principle is to use these attributes rather than enumerate action names. Deterministic evidence and explicit authorization establish the boundary. The model only fills gaps in **reversible versus irreversible** judgment; it cannot invent authorization, waive E/M/U consequences, or broaden a grant. Missing evidence stays unresolved rather than becoming permission. P0 establishes this vocabulary; it adds no consequence fields, routing logic, or new approval defaults.
+The plan's routing principle is to use these attributes rather than enumerate action names. Deterministic evidence and explicit authorization establish the boundary. The model only fills gaps in **reversible versus irreversible** judgment; it cannot invent authorization, waive E/M/U consequences, or broaden a grant. Missing evidence stays unresolved rather than becoming permission. P1 implements the asserted E/M/U boundary below; unclassified calls retain their existing risk-based policy.
+
+## P1 runtime behavior
+
+[`agent.ApprovalRequest`](../internal/agent/types.go) carries four optional `*bool` fields alongside `Risk` / `RiskReason`:
+
+| Dimension | Go field | JSON key |
+| --- | --- | --- |
+| R | `Reversible` | `reversible` |
+| E | `ExternallyVisible` | `externallyVisible` |
+| M | `SpendsMoneyOrChangesPermissions` | `spendsMoneyOrChangesPermissions` |
+| U | `ActsInUserName` | `actsInUserName` |
+
+`nil` (omitted JSON) means unknown; explicit `false` means the dimension was assessed and is absent. Unknown is not a claim of safety or authorization. `RequiresHumanConfirm()` reports whether E, M, or U is explicitly true. This check precedes read-only shortcuts: R alone never grants permission or overrides risk.
+
+- Interactive `runApprover` continues to ask the human. The CLI prompts for asserted E/M/U in a terminal, including under `--yolo`; `--approval never` or no terminal denies them.
+- A nil approver uses `DefaultApprover`, which denies asserted E/M/U. `UnattendedApprover` also denies them, including with `AllowAll` / scheduled `--allow-all`. Pre-approved local-write exemptions cannot bypass asserted E/M/U.
+- Requests with unknown or false E/M/U keep existing approval-mode and Risk rules, including `dangerous` / `confirm` denial without a human. No standing grant is inferred.
+
+P1 populates `gmail_send` and `calendar_create` with E/U=true, M=false, R=false, and `browser_navigate` with E=true, R=false. `memory_add` carries E/M/U=false and R=unknown: it is a durable local write, and removing an entry cannot undo later use. Other tools can leave dimensions unknown; media endpoint locality/billing classification and bash consequence classification are not added here.
+
+`memory_add` now implements `ApprovalDescriber` on the shared coding runtime because `SetupPersonal` has no personal-only profile switch. Its approval preview shows content, scope, and requested workspace/global target (all writes use global memory without a workspace context). `memory_search` remains ungated and read-only. P3 may narrow the default policy to personal identity without removing the describer.
+
+`gmail_send` accepts optional `as_draft` (default `false`, preserving send behavior). With `true`, it creates a real Gmail draft, returns the **draft ID**, and does not send; an API failure never falls back to sending. The preview and result say “not sent.” A draft still has E/U=true because Google sees it and it is created in the user's mailbox as them. Its content can be deleted, but the whole effect remains R=false because provider-visible traces cannot be undone locally. Both modes require human confirmation.
+
+Draft creation requires `gmail.compose`, now included in newly requested Google scopes alongside the existing scopes. Existing connections can still send; to use drafts, re-authorize with `gg connect google --force`. A missing draft scope produces an error with a reconnect hint. See [Connectors](connectors.md#security-boundaries).
 
 ## Standing authorization boundary (P2)
 
@@ -43,15 +64,15 @@ Standing authorization must be explicit, with all three parts:
 | **Scope** | Which resources, destinations, and effects are allowed, with limits such as recipients, spending, or permitted permission changes. A broad goal alone is not a scope. |
 | **TTL** | The grant's explicit validity window or expiry. Do not infer indefinite authorization or reuse an expired grant. |
 
-User preferences in `USER.md`, remembered habits, an OAuth connection, or a previous approval do not by themselves establish a standing grant. P2 will implement standing authorization; P0 neither creates grants nor changes how existing approvals work.
+User preferences in `USER.md`, remembered habits, an OAuth connection, or a previous approval do not by themselves establish a standing grant. P2 will implement standing authorization; P1 creates no standing grants.
 
 ## Current approval inventory
 
-Baseline: `origin/main` at `8776b83` (#53), also the base of `docs/personal-agent-p0`. The inventory was checked against [built-in implementations](../internal/tools/), the [tool registry](../internal/app/toolregistry.go), and the [MCP bridge](../internal/mcp/tool.go). It covers **30 built-in tools: 15 with and 15 without `agent.ApprovalDescriber`**, plus every dynamically registered MCP tool. Registration depends on configuration, granted scopes, available providers, and platform support; this is not a claim that every session exposes all tools.
+P1 inventory, following P0 (#54), checked against [built-in implementations](../internal/tools/), the [tool registry](../internal/app/toolregistry.go), and the [MCP bridge](../internal/mcp/tool.go). It covers **30 built-in tools: 16 with and 14 without `agent.ApprovalDescriber`**, plus every dynamically registered MCP tool. Registration depends on configuration, granted scopes, available providers, and platform support; not every session exposes all tools.
 
 [`agent.ApprovalDescriber`](../internal/agent/types.go) is the interface with the `ApprovalRequest` method. “Yes” means the tool supplies an approval request to the [runner](../internal/agent/runner.go), not that every call produces a human prompt. Existing policy can allow or deny it, and `write`/`edit` have a narrow pre-approval exemption. “No” means this interface does not gate the tool; it does not mean the tool has no consequences.
 
-The tables use R/E/M/U as documentation shorthand, not proposed API field names. R describes reversibility of the whole effect; “depends” requires call-specific evidence. E/M/U entries describe typical or conditional direct effects, not an exhaustive policy. Synced destinations, application behavior, and remote endpoints can change the assessment.
+The tables use R/E/M/U as shorthand for the dimensions above. They describe effects, not a claim that every tool already populates runtime metadata. R describes reversibility of the whole effect; “depends” requires call-specific evidence. E/M/U entries describe typical or conditional direct effects, not an exhaustive policy. Synced destinations, application behavior, and remote endpoints can change the assessment.
 
 ### Tools that implement ApprovalDescriber
 
@@ -60,8 +81,9 @@ The tables use R/E/M/U as documentation shorthand, not proposed API field names.
 | [`write`](../internal/tools/write.go) | Yes | R: depends on recovering overwritten content; usually local. | Creates/overwrites workspace files. Writes in the real `.gg/agent/` directory are pre-approved; this exemption stays unchanged. |
 | [`edit`](../internal/tools/edit.go) | Yes | R: depends on restoring prior content; usually local. | Exact replacements with a before/after preview. Same real `.gg/agent/` pre-approval exemption. |
 | [`bash`](../internal/tools/bash.go) | Yes | R/E/M/U: depend on command and targets. | Current classifier and optional risk check populate `risk`/`riskReason`. A shell command can have any of the four dimensions. |
+| [`memory_add`](../internal/tools/memory_add.go) | Yes | R: unknown, depends on removing the entry before reuse; E/M/U: false. | Durable workspace/global write, now approval-gated on the shared runtime. Preview shows content, scope, and target; may influence later turns. |
 | [`browser_navigate`](../internal/tools/browser.go) | Yes | R: no for a third-party request trace; E. | Initial URL is SSRF-checked; approval covers navigation. Redirect/subresource limitations remain as documented in architecture. |
-| [`gmail_send`](../internal/tools/connectors.go) | Yes | R: no once sent; E, U. | Sends from the user's Gmail account. Removing a local copy cannot recall delivery or attribution. |
+| [`gmail_send`](../internal/tools/connectors.go) | Yes | R: no once sent; E, U. | Sends by default; `as_draft=true` creates a draft without sending. Both modes assert E/U. Deleting draft content does not undo provider traces. |
 | [`calendar_create`](../internal/tools/connectors.go) | Yes | R: no for the external trace; E, U. | Creates on the primary calendar under the user's account. Current arguments do not include attendees; invite sending is a boundary example, not a claim about this tool. |
 | [`artifact_create`](../internal/tools/artifact.go) | Yes | R: local creation can be removed; no direct E/M/U. | Writes the local artifact store outside the workspace. Does not publish to an external service. |
 | [`artifact_edit`](../internal/tools/artifact.go) | Yes | R: prior content recoverable from retained versions; no direct E/M/U. | Appends a complete local version. Library publish is a separate application/CLI operation, not this tool. |
@@ -78,7 +100,6 @@ The tables use R/E/M/U as documentation shorthand, not proposed API field names.
 
 | Tool | ApprovalDescriber? | Typical consequence dimensions | Notes / personal gap? |
 | --- | --- | --- | --- |
-| [`memory_add`](../internal/tools/memory_add.go) | No | R: depends on removing the entry before reuse; durable local mutation. | **Explicit personal-mode gap.** Appends workspace/global memory that can influence later turns. [`TestMemoryAddToolDoesNotRequireApproval`](../internal/tools/memory_add_test.go) asserts the absence of this interface. P1 will gate it at least in personal mode; P0 preserves implementation and test expectations. |
 | [`memory_search`](../internal/tools/memory_search.go) | No | R: local read; no direct E/M/U. | Read-only keyword search across workspace/global memory. Its lack of approval is also asserted in `memory_add_test.go`. |
 | [`read`](../internal/tools/read.go) | No | R: local read; no direct E/M/U. | Reads workspace files or configured extra read roots. Sensitive content still enters the conversation. |
 | [`list`](../internal/tools/list.go) | No | R: local read; no direct E/M/U. | Lists workspace directory entries. |
@@ -90,12 +111,12 @@ The tables use R/E/M/U as documentation shorthand, not proposed API field names.
 | [`calendar_agenda`](../internal/tools/connectors.go) | No | R: no for provider request traces; E. | Reads upcoming events through the Calendar API; creates no event. |
 | [`computer_info`](../internal/tools/computer.go) | No | R: local read; no direct E/M/U. | Reads OS, host, CPU, memory, and disk information. |
 | [`process_list`](../internal/tools/computer.go) | No | R: local read; no direct E/M/U. | Inspects running processes; does not terminate them. |
-| [`notify`](../internal/tools/computer.go) | No | R: no once seen/interrupted; E (OS notification). | **Potential personal-mode gap.** Currently treated as harmless and ungated; content can be visible or interruptive on the OS surface. P0 records the gap without adding a gate. |
+| [`notify`](../internal/tools/computer.go) | No | R: no once seen/interrupted; E (OS notification). | **Potential personal-mode gap.** Currently treated as harmless and ungated; content can be visible or interruptive on the OS surface. This gap remains outside P1’s minimal coverage. |
 | [`subagent`](../internal/tools/subagent.go) | No | R: depends on provider trace; E if the chat provider is remote. | Child tools are restricted to `read`/`list`/`grep`. Uses additional normal chat calls; ordinary chat cost alone is not M. Read-only child tools do not imply entirely local processing. |
 | [`kb_search`](../internal/tools/kb_search.go) | No | R: depends; E if embeddings endpoint is remote, M if billed. | Read-only over the local index, but embeds the query through the configured API. Additional personal-mode review point for disclosure/cost; “search” does not guarantee no external consequence. |
 
 ## Existing policy and phase boundary
 
-Current runtime policy is documented in the architecture's [Security model](architecture.md#security-model) and [Approval modes](architecture.md#approval-modes). This includes #53's fail-closed nil-approver handling for `dangerous`/`confirm` risks via `agent.DefaultApprover`; P0 leaves it unchanged.
+Current runtime policy is documented in the architecture's [Security model](architecture.md#security-model) and [Approval modes](architecture.md#approval-modes). P1 extends #53's fail-closed nil-approver handling for `dangerous`/`confirm` risks to asserted E/M/U consequences, while retaining existing Risk behavior for unclassified tools.
 
-P1 will add consequence metadata beside the existing `risk` language and address coverage, including personal-mode memory writes. P2 will add explicit standing authorization. P3 will separate identity and default policy while retaining the shared runtime. None of those mechanisms, stricter defaults, or new gates is implemented by this document.
+P1 ships the fields, routing, memory-write gate, and optional Gmail draft switch described above. P2 will add explicit standing authorization. P3 will separate identity and default policy while retaining the shared runtime.

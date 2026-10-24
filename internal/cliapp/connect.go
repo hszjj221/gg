@@ -86,7 +86,7 @@ func runConnectGoogle(ctx context.Context, cfg config.Config, store *connector.S
 	}
 
 	flowCfg := google.Config{ClientID: id, ClientSecret: secret}.FlowConfig(*manual)
-	fmt.Fprintln(stdout, "正在启动 Google 授权（Gmail 读取/发送 + 日历事件）…")
+	fmt.Fprintln(stdout, "正在启动 Google 授权（Gmail 读取/发送/草稿 + 日历事件）…")
 	tok, err := connector.RunFlow(ctx, flowCfg)
 	if err != nil {
 		fmt.Fprintln(stderr, "授权失败：", err)

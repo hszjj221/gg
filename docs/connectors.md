@@ -62,7 +62,7 @@ Once connected, the agent automatically gets 5 tools (they don't exist when disc
 |---|---|---|
 | `gmail_search` | Search mail with Gmail syntax, e.g. `newer_than:1d`, `from:boss@example.com`, `is:unread` | No |
 | `gmail_read` | Read one message (From/Subject/Date + body) | No |
-| `gmail_send` | Send mail | **Yes** |
+| `gmail_send` | Send mail, or save without sending with `as_draft=true` | **Yes** |
 | `calendar_agenda` | List events for the next N days (today by default) | No |
 | `calendar_create` | Create a calendar event | **Yes** |
 
@@ -72,12 +72,14 @@ Examples:
 - "What meetings do I have tomorrow afternoon" → `calendar_agenda` (days=2)
 - "Schedule a meeting for 10 AM tomorrow" → `calendar_create` (needs your confirmation)
 
-The requested scopes are the minimal set: `gmail.readonly` + `gmail.send` (no full `gmail.modify`) + `calendar.events` (event read/write only, not whole-calendar settings).
+Requested scopes are `gmail.readonly` + `gmail.send` + `gmail.compose` (draft management, also permits sending; no full `gmail.modify`) + `calendar.events` (event read/write only, not whole-calendar settings).
+
+`gmail_send` still sends by default. Optional `as_draft=true` calls the Gmail draft API and returns a draft ID without sending; failures never fall back to sending. Drafts remain Google-visible and attributable to the user, so they also require human confirmation. Existing connections need `gg connect google --force` to grant `gmail.compose` before using drafts; existing send behavior remains available. See the [Google draft API](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.drafts/create).
 
 ## Security boundaries
 
 - The OAuth callback binds only to `127.0.0.1`, on a random port, with `state` CSRF protection.
 - Token file 0600, directory 0700; expired access tokens are refreshed automatically via the refresh token (cross-process locking, no duplicate refreshes).
-- `gmail_send` / `calendar_create` require your confirmation (preview shows recipients/subject/time); scheduled jobs are denied by default unless the job explicitly sets `--allow-all`.
+- `gmail_send` / `calendar_create` require your confirmation (preview shows recipients/subject/time); asserted E/U consequences are denied without a human, including scheduled `--allow-all`.
 - Tokens are never printed in logs or error messages.
 - To revoke: remove access under "Third-party access" in your Google account, or run `gg connect remove google` locally.

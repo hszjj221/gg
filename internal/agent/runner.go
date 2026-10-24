@@ -271,8 +271,9 @@ func (r *Runner) prepareToolCall(ctx context.Context, call ToolCall, onEvent fun
 	details := req.Details
 	// A tool may pre-approve its own request for a narrow, path-scoped
 	// exemption (write/edit inside the workspace agent area). The
-	// annotation keeps the exemption visible in the event stream.
-	preApproved := reqErr == nil && req.PreApproved
+	// annotation keeps the exemption visible in the event stream. Asserted
+	// E/M/U consequences still need the approver, even with this exemption.
+	preApproved := reqErr == nil && req.PreApproved && !req.RequiresHumanConfirm()
 	if preApproved {
 		summary += " [agent area]"
 	}
@@ -301,7 +302,7 @@ func (r *Runner) prepareToolCall(ctx context.Context, call ToolCall, onEvent fun
 		// asserted a narrow, registry-allowed exemption (agent-area
 		// writes). The start/finish events above and below are still
 		// emitted, with the summary annotated for transparency.
-		if !req.PreApproved {
+		if !preApproved {
 			started := time.Now()
 			decision, err := approver.Approve(ctx, req)
 			outcome := runlog.Outcome(err)

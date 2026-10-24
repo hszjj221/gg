@@ -152,6 +152,46 @@ func TestSend(t *testing.T) {
 	}
 }
 
+func TestCreateDraft(t *testing.T) {
+	requests := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Method != http.MethodPost || r.URL.Path != "/gmail/v1/users/me/drafts" ||
+			r.Header.Get("Content-Type") != "application/json" || r.Header.Get("Authorization") != "Bearer at" {
+			t.Errorf("unexpected draft request: %s %s", r.Method, r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+			return
+		}
+		var in struct {
+			Message struct {
+				Raw string `json:"raw"`
+			} `json:"message"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			t.Error(err)
+		}
+		decoded, err := base64.RawURLEncoding.DecodeString(in.Message.Raw)
+		want := "To: a@b.c\r\nSubject: Hi\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nbody text"
+		if err != nil || string(decoded) != want {
+			t.Errorf("draft message = %q, %v", decoded, err)
+		}
+		w.Write([]byte(`{"id":"draft1","message":{"id":"message1"}}`))
+	})
+	c := testClient(t, mux, freshToken())
+	id, err := c.CreateDraft(context.Background(), "a@b.c", "Hi", "body text")
+	if err != nil || id != "draft1" || requests != 1 {
+		t.Fatalf("draft = %q, %v; requests = %d", id, err, requests)
+	}
+	found := false
+	for _, scope := range (Config{}).FlowConfig(false).Scopes {
+		found = found || scope == ScopeGmailCompose
+	}
+	if !found {
+		t.Fatal("Google connect must request gmail.compose for drafts")
+	}
+}
+
 func TestAgenda(t *testing.T) {
 	var gotMin, gotMax string
 	mux := http.NewServeMux()
@@ -378,14 +418,16 @@ func TestReadNestedMIME(t *testing.T) {
 func TestSendRejectsHeaderInjection(t *testing.T) {
 	mux := http.NewServeMux()
 	c := testClient(t, mux, freshToken())
-	if _, err := c.Send(context.Background(), "a@b.c\r\nBcc: evil@x.y", "s", "b"); err == nil {
-		t.Fatal("expected error for CRLF in To")
-	}
-	if _, err := c.Send(context.Background(), "a@b.c", "s\r\nX-Extra: 1", "b"); err == nil {
-		t.Fatal("expected error for CRLF in Subject")
-	}
-	if _, err := c.Send(context.Background(), "not-an-address", "s", "b"); err == nil {
-		t.Fatal("expected error for invalid address")
+	for _, write := range []func(context.Context, string, string, string) (string, error){c.Send, c.CreateDraft} {
+		if _, err := write(context.Background(), "a@b.c\r\nBcc: evil@x.y", "s", "b"); err == nil {
+			t.Fatal("expected error for CRLF in To")
+		}
+		if _, err := write(context.Background(), "a@b.c", "s\r\nX-Extra: 1", "b"); err == nil {
+			t.Fatal("expected error for CRLF in Subject")
+		}
+		if _, err := write(context.Background(), "not-an-address", "s", "b"); err == nil {
+			t.Fatal("expected error for invalid address")
+		}
 	}
 }
 

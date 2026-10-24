@@ -71,7 +71,7 @@ CLI 与 Runtime 通过 `app.PublishArtifact` 共用版本校验和失败补偿�
 
 系统提示词组装顺序（代码指令之后）：用户画像、精选记忆（`MEMORY.md`）、今天的日常日志尾部（`YYYY-MM-DD.md`），然后是项目指令（AGENTS.md）和 skills。工具面：`memory_add` 接受 `scope=general|daily|person:<name>|group:<name>`（默认 general）；`memory_search` 跨 scope 做大小写不敏感的关键词检索，最多返回 10 条 `path:line: snippet`。记忆关闭时两者都隐藏。
 
-Personal Agent 的目标边界与审批覆盖基线见 [Personal Agent（P0）](personal-agent.zh-CN.md)。
+后果属性路由（明确的 E/M/U 必须人工确认，包括 `--yolo`／`--allow-all`）、记忆写入审批与覆盖清单见 [Personal Agent（P1）](personal-agent.zh-CN.md)。
 
 ## 定时任务（cron / 单次）
 

@@ -62,7 +62,7 @@ gg connect remove google   # 断开（删除本地 token）
 |---|---|---|
 | `gmail_search` | 按 Gmail 搜索语法查邮件，如 `newer_than:1d`、`from:boss@example.com`、`is:unread` | 否 |
 | `gmail_read` | 读一封邮件（From/Subject/Date + 正文） | 否 |
-| `gmail_send` | 发邮件 | **是** |
+| `gmail_send` | 发邮件，或用 `as_draft=true` 保存草稿但不发送 | **是** |
 | `calendar_agenda` | 查未来 N 天日程（默认今天） | 否 |
 | `calendar_create` | 创建日历事件 | **是** |
 
@@ -72,12 +72,14 @@ gg connect remove google   # 断开（删除本地 token）
 - "我明天下午有什么会" → `calendar_agenda`（days=2）
 - "帮我约个明天上午 10 点的会" → `calendar_create`（需你确认）
 
-申请的 scope 是最小集：`gmail.readonly` + `gmail.send`（不要 `gmail.modify` 全权）+ `calendar.events`（只要事件读写，不要整个日历设置）。
+申请的 scope 为 `gmail.readonly` + `gmail.send` + `gmail.compose`（草稿管理，也允许发送；不请求 `gmail.modify` 全权）+ `calendar.events`（事件读写，不含整个日历设置）。
+
+`gmail_send` 默认仍发送。可选 `as_draft=true` 调用 Gmail 草稿 API，返回草稿 ID，绝不发送，也不会在失败时回退到发送。草稿仍对 Google 可见并归属于用户，因此同样必须人工确认。已有连接需运行 `gg connect google --force` 补授 `gmail.compose` 后才能使用草稿；原有发送不受影响。参见 [Google 草稿 API](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.drafts/create)。
 
 ## 安全边界
 
 - OAuth 回调只绑 `127.0.0.1`，随机端口，`state` 防 CSRF。
 - token 文件 0600、目录 0700；access token 过期自动用 refresh token 续（跨进程加锁，不会重复刷新）。
-- `gmail_send` / `calendar_create` 必须经过你的确认（preview 显示收件人/主题/时间）；定时任务默认会被拒绝，除非任务显式开了 `--allow-all`。
+- `gmail_send` / `calendar_create` 必须经过你的确认（preview 显示收件人/主题/时间）；明确的 E/U 后果在无人确认时拒绝，包括定时任务的 `--allow-all`。
 - 日志和报错里永远不会打印 token。
 - 撤销：在 Google 账号的"第三方访问权限"里移除，或本地 `gg connect remove google`。

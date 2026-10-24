@@ -1,6 +1,8 @@
 package cliapp
 
 import (
+	"bufio"
+	"context"
 	"strings"
 	"testing"
 
@@ -45,5 +47,37 @@ func TestApprovalActionFor(t *testing.T) {
 				t.Fatalf("reason %q does not contain %q", reason, tc.reason)
 			}
 		})
+	}
+}
+
+func TestConsequenceApprovalModes(t *testing.T) {
+	for _, req := range []agent.ApprovalRequest{
+		{ExternallyVisible: new(true)},
+		{SpendsMoneyOrChangesPermissions: new(true)},
+		{ActsInUserName: new(true)},
+	} {
+		for _, risk := range []string{"", agent.ApprovalRiskReadOnly} {
+			req.Risk = risk
+			for _, mode := range []string{"auto", "on-request", "yolo", "never"} {
+				for _, terminal := range []bool{false, true} {
+					got, reason := approvalActionFor(mode, terminal, req)
+					want := approvalDeny
+					if terminal && mode != "never" {
+						want = approvalPrompt
+					}
+					if got != want || (want == approvalDeny && !strings.Contains(reason, "human confirmation")) {
+						t.Fatalf("mode %q terminal %v risk %q: got %v (%s), want %v", mode, terminal, risk, got, reason, want)
+					}
+				}
+			}
+		}
+	}
+	for _, answer := range []string{"yes\n", "no\n"} {
+		var output strings.Builder
+		a := policyApprover{mode: "yolo", terminal: true, reader: bufio.NewReader(strings.NewReader(answer)), stderr: &output}
+		got, err := a.Approve(context.Background(), agent.ApprovalRequest{ExternallyVisible: new(true)})
+		if err != nil || got.Allow != (answer == "yes\n") || !strings.Contains(output.String(), "Approve? [y/N]") {
+			t.Fatalf("answer %q: %+v, %v; output %s", answer, got, err, output.String())
+		}
 	}
 }

@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -194,10 +196,59 @@ func TestMemoryAddToolDefinitionHasTarget(t *testing.T) {
 	}
 }
 
-func TestMemoryAddToolDoesNotRequireApproval(t *testing.T) {
+func TestMemoryAddToolRequiresApproval(t *testing.T) {
 	var tool any = NewMemoryAddTool(newTestMemoryStore(t))
-	if _, ok := tool.(agent.ApprovalDescriber); ok {
-		t.Fatalf("memory_add should not implement ApprovalDescriber")
+	if _, ok := tool.(agent.ApprovalDescriber); !ok {
+		t.Fatalf("memory_add must implement ApprovalDescriber")
+	}
+}
+
+func TestMemoryAddApprovalRequest(t *testing.T) {
+	tool := NewMemoryAddTool(newTestMemoryStore(t))
+	for _, tc := range []struct{ raw, target, scope string }{
+		{`{"content":"prefers concise answers"}`, "workspace", "general"},
+		{`{"content":"prefers concise answers","target":" GLOBAL ","scope":" person:Alex "}`, "global", "person:Alex"},
+	} {
+		req, err := tool.ApprovalRequest(json.RawMessage(tc.raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if req.ToolName != "memory_add" || req.PreApproved || string(req.Arguments) != tc.raw {
+			t.Fatalf("request = %+v", req)
+		}
+		for _, want := range []string{tc.target, tc.scope, "prefers concise answers"} {
+			if !strings.Contains(req.Summary, want) || !strings.Contains(req.Details, want) {
+				t.Fatalf("missing %q in approval: %+v", want, req)
+			}
+		}
+		if req.Reversible != nil || req.ExternallyVisible == nil || *req.ExternallyVisible ||
+			req.SpendsMoneyOrChangesPermissions == nil || *req.SpendsMoneyOrChangesPermissions ||
+			req.ActsInUserName == nil || *req.ActsInUserName || req.RequiresHumanConfirm() {
+			t.Fatalf("expected unknown R and explicit false E/M/U: %+v", req)
+		}
+	}
+	if _, err := tool.ApprovalRequest(json.RawMessage(`{bad json`)); err == nil {
+		t.Fatal("expected invalid arguments error")
+	}
+}
+
+func TestMemoryAddDeniedBeforeWrite(t *testing.T) {
+	store := newTestMemoryStore(t)
+	provider := &scriptedProvider{responses: []agent.AssistantMessage{
+		{Message: agent.Message{Role: agent.RoleAssistant, ToolCalls: []agent.ToolCall{{ID: "c1", Name: "memory_add", Arguments: json.RawMessage(`{"content":"must not persist"}`)}}}, StopReason: agent.StopReasonToolUse},
+		{Message: agent.Message{Role: agent.RoleAssistant, Content: "done"}, StopReason: agent.StopReasonEndTurn},
+	}}
+	approver := &recordingApprover{allow: false}
+	runner := agent.NewRunnerWithOptions(provider, []agent.Tool{NewMemoryAddTool(store)}, agent.RunnerOptions{Approver: approver})
+	if _, err := runner.Run(context.Background(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(approver.requests) != 1 {
+		t.Fatalf("approval requests = %d, want 1", len(approver.requests))
+	}
+	data, err := os.ReadFile(store.CuratedPath())
+	if err != nil || len(data) != 0 {
+		t.Fatalf("denied write changed memory: %q, %v", data, err)
 	}
 }
 
