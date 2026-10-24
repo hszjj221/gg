@@ -327,6 +327,7 @@ var approvalClassification = map[string]bool{
 	"calendar_create": true,
 	"process_kill":    true,
 	"open":            true,
+	"notify":          true,
 	"clipboard_read":  true,
 	"clipboard_write": true,
 	"memory_add":      true,
@@ -346,7 +347,6 @@ var approvalClassification = map[string]bool{
 	"browser_screenshot": false,
 	"computer_info":      false,
 	"process_list":       false,
-	"notify":             false,
 }
 
 // assertApprovalClassified checks one tool against the explicit
@@ -705,6 +705,8 @@ func preApprovalProbeArgs(t *testing.T, name, cwd string) json.RawMessage {
 		return json.RawMessage(`{"artifact_id":"probe","content":"probe"}`)
 	case "open":
 		return json.RawMessage(`{"target":".gg/agent/probe.txt"}`)
+	case "notify":
+		return json.RawMessage(`{"title":"probe","body":"probe"}`)
 	case "browser_navigate":
 		return json.RawMessage(`{"url":"https://example.com/"}`)
 	case "image_generate":

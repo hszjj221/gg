@@ -53,7 +53,7 @@ Defaults and precedence:
 - Coding (including an unset profile) returns Quiet/disabled. Unknown profiles and scenarios also stay quiet.
 - Personal email/calendar digests may Summarize locally. Quiet hours are disabled by default; `QuietHours="22:00-07:00"` uses the supplied time's location, includes the start, excludes the end, and supports overnight windows. Equal endpoints or malformed windows are rejected; invalid policy input stays Quiet.
 - An explicit remember-later request selects Note-only, including during quiet hours. It never changes authorization for a proposed tool or notification.
-- OS `notify` is off, with a fixed maximum of **zero notifications per run** and no opt-in in this slice. A proposed notification returns Quiet; OS notifications count as E. The existing `notify` tool still lacks `ApprovalDescriber` (the P0 inventory/P1 coverage gap below); this policy does not change its availability in ordinary turns.
+- OS `notify` is off, with a fixed maximum of **zero notifications per run** and no opt-in in this slice. A proposed notification returns Quiet; OS notifications count as E. The `notify` tool now implements `ApprovalDescriber` with E=true and uses the shared approval gate when available. C2 still disables computer tools in personal; this policy does not enable them.
 - A proposed tool action returns Quiet and must use the existing Approver/standing-auth path. In particular, asserted E/M/U always requires human confirmation or a matching standing grant. `gmail_send`, including a real Gmail draft, and `calendar_create` retain P1–P3 gates. Neither Summarize nor Note-only authorizes any tool, and unknown tool metadata is not permission.
 
 ## Run the fake dogfood path
@@ -92,7 +92,7 @@ This uses the normal personal-profile agent path, not the fake demo or automatic
 | Plan item | Landed in this slice | Deferred |
 | --- | --- | --- |
 | Proactive trigger policy | Deterministic Summarize/Quiet/Note-only decisions, personal-only defaults, quiet hours, notification suppression, and consequence boundary. | Automatic trigger discovery and always-on digest scheduling. |
-| First-user dogfood | Fake email digest, calendar reminder, and standing-auth denial scene through the discoverable CLI, with tests and optional live read-only instructions. | Daemon/Telegram proactive delivery and making `notify` implement `ApprovalDescriber`. |
+| First-user dogfood | Fake email digest, calendar reminder, and standing-auth denial scene through the discoverable CLI, with tests and optional live read-only instructions. | Daemon/Telegram proactive delivery. |
 | Stop-condition pointer | Keep coding-first defaults and the shared runtime. | Physical repository split. |
 
 **Plan stop condition:** only consider a physical repository split if personal defaults **systematically hurt coding**, evidenced by approval noise, tool loops, or README persona drift. This slice does not split the repository, rewrite the agent loop, add a second runtime, or broaden MCP/bash consequence classification. Existing `gg job`/`internal/scheduler` remain the scheduling mechanism; no new scheduler is introduced or wired to this demo.
@@ -136,6 +136,8 @@ These rules remain the fallback when no standing grant matches.
 P1 populates `gmail_send` and `calendar_create` with E/U=true, M=false, R=false, and `browser_navigate` with E=true, R=false. `memory_add` carries E/M/U=false and R=unknown: it is a durable local write, and removing an entry cannot undo later use. Other tools can leave dimensions unknown; media endpoint locality/billing classification and bash consequence classification are not added here.
 
 `memory_add` implements `ApprovalDescriber` in both profiles. Its approval preview shows content, scope, and requested workspace/global target (all writes use global memory without a workspace context). `memory_search` remains ungated and read-only.
+
+`notify` now implements `ApprovalDescriber` on the shared runtime, with E=true because OS notifications surface content and may interrupt the user. Its preview shows truncated title/body; M/U remain unknown. This closes the notify approval gap without changing C2: personal still disables computer tools.
 
 `gmail_send` accepts optional `as_draft` (default `false` in coding, `true` in personal). With `true`, it creates a real Gmail draft, returns the **draft ID**, and does not send; an API failure never falls back to sending. The preview and result say “not sent.” A draft still has E/U=true because Google sees it and it is created in the user's mailbox as them. Its content can be deleted, but the whole effect remains R=false because provider-visible traces cannot be undone locally. Both modes require human confirmation or a matching explicit standing grant.
 
@@ -226,6 +228,7 @@ The tables use R/E/M/U as shorthand for the dimensions above. They describe effe
 | [`stt`](../internal/tools/media.go) | Yes | R: no for remote disclosure or incurred cost; E if remote, M if billed. | Uploads local audio for transcription; it is not merely a local file read. |
 | [`process_kill`](../internal/tools/computer.go) | Yes | R: generally no for lost process state; E possible for a connected service. | Sends SIGTERM or SIGKILL. Restarting a process does not necessarily recover its state or undo interruption. |
 | [`open`](../internal/tools/computer.go) | Yes | R: depends; E for third-party URLs; other dimensions depend on the target/application. | Hands a file or URL to the default application. Assess the resulting effects, not just the local launch. |
+| [`notify`](../internal/tools/computer.go) | Yes | R: no once seen/interrupted; E (OS notification). | Approval gap addressed by D3: previews title/body and asserts E=true; M/U remain unknown. C2 still disables computer tools in personal. |
 | [`clipboard_read`](../internal/tools/computer.go) | Yes | R: local read; no direct E/M/U. | Deliberately gated because clipboard contents may be sensitive. Later disclosure is not undone by clearing the clipboard. |
 | [`clipboard_write`](../internal/tools/computer.go) | Yes | R: depends on recovering the replaced clipboard; E possible with sync or external consumption. | Replaces system clipboard text. A local write can affect other applications or devices. |
 | [`mcp_<server>_<tool>`](../internal/mcp/tool.go) | Yes, all MCP tools | R/E/M/U: depend on the server, operation, and arguments. | Every bridged MCP call is approval-gated, including remote tools advertised as reads. Coverage is universal; consequence classification is not yet supplied by this bridge. |
@@ -245,7 +248,6 @@ The tables use R/E/M/U as shorthand for the dimensions above. They describe effe
 | [`calendar_agenda`](../internal/tools/connectors.go) | No | R: no for provider request traces; E. | Reads upcoming events through the Calendar API; creates no event. |
 | [`computer_info`](../internal/tools/computer.go) | No | R: local read; no direct E/M/U. | Reads OS, host, CPU, memory, and disk information. |
 | [`process_list`](../internal/tools/computer.go) | No | R: local read; no direct E/M/U. | Inspects running processes; does not terminate them. |
-| [`notify`](../internal/tools/computer.go) | No | R: no once seen/interrupted; E (OS notification). | **Potential personal-mode gap.** Currently treated as harmless and ungated; content can be visible or interruptive on the OS surface. This gap remains outside P1’s minimal coverage. |
 | [`subagent`](../internal/tools/subagent.go) | No | R: depends on provider trace; E if the chat provider is remote. | Child tools are restricted to `read`/`list`/`grep`. Uses additional normal chat calls; ordinary chat cost alone is not M. Read-only child tools do not imply entirely local processing. |
 | [`kb_search`](../internal/tools/kb_search.go) | No | R: depends; E if embeddings endpoint is remote, M if billed. | Read-only over the local index, but embeds the query through the configured API. Additional personal-mode review point for disclosure/cost; “search” does not guarantee no external consequence. |
 

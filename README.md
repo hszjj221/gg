@@ -113,7 +113,7 @@ These sit behind the terminal agent. Each one is real code in this repo; the lin
 | Knowledge base | Local RAG index and a `kb_search` tool. | [RAG](docs/rag.md) |
 | Artifacts and library | Versioned documents and a personal file library. | [Usage](docs/usage.md#artifacts-and-library) |
 | MCP | External tools declared in `~/.gg/mcp.json`. | [Architecture](docs/architecture.md#mcp-servers) |
-| Computer tools | OS info, processes, clipboard, and notifications on Linux and macOS. | [Usage](docs/usage.md#computer-tools) |
+| Computer tools | OS info, processes, clipboard, and approval-gated OS notifications on Linux and macOS. | [Usage](docs/usage.md#computer-tools) |
 | Diagnostics | JSON logs on stderr and how to follow a run. | [Diagnostics](docs/diagnostics.md) |
 
 Package boundaries and the JSON-RPC surface: [architecture](docs/architecture.md).

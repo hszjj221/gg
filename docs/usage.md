@@ -333,6 +333,8 @@ Declare servers in `~/.gg/mcp.json` (`command` and `args` for stdio, `url` for s
 
 On Linux and macOS the agent can call `computer_info`, `process_list`, `process_kill`, `open`, `notify`, `clipboard_read`, and `clipboard_write`. The capability is not advertised on other platforms. `process_kill`, `open`, `clipboard_read`, and `clipboard_write` need approval. Unattended runs deny them unless `--allow-all` is set.
 
+`notify` also needs approval and asserts E=true because OS notifications surface content and may interrupt the user. It requires human confirmation or a matching standing grant; `--allow-all` does not bypass this consequence gate. C2 still disables computer tools in personal. See [Personal Agent](personal-agent.md#p1-runtime-behavior).
+
 <a id="development"></a>
 
 ## Development

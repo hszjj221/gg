@@ -321,6 +321,8 @@ gg connect remove google
 
 在 Linux 和 macOS 上，agent 可以调用 `computer_info`、`process_list`、`process_kill`、`open`、`notify`、`clipboard_read` 和 `clipboard_write`。其他平台不广告这个能力。`process_kill`、`open`、`clipboard_read` 和 `clipboard_write` 需要审批。无人值守运行会拒绝它们，除非设置了 `--allow-all`。
 
+`notify` 同样需要审批，并设置 E=true，因为 OS 通知会展示内容且可能打扰用户。它需要人工确认或匹配的常驻授权；`--allow-all` 不能绕过此后果门禁。C2 仍在 personal 中禁用 computer 工具。参见 [Personal Agent](personal-agent.zh-CN.md#p1-运行时行为)。
+
 <a id="development"></a>
 
 ## 开发
