@@ -157,6 +157,30 @@ type ApprovalRequest struct {
 	Risk string `json:"risk,omitempty"`
 	// RiskReason explains Risk. Approvers show it with the request.
 	RiskReason string `json:"riskReason,omitempty"`
+	// Consequence pointers distinguish unknown (nil/omitted) from an explicit
+	// false. Unknown is not evidence of safety or authorization; requests
+	// without asserted E/M/U retain the existing Risk-based policy.
+	// Reversible (JSON "reversible", R) means the whole effect can be undone
+	// cheaply and locally, without external parties noticing.
+	Reversible *bool `json:"reversible,omitempty"`
+	// ExternallyVisible (JSON "externallyVisible", E) includes traces visible
+	// to service operators, even when nothing is public.
+	ExternallyVisible *bool `json:"externallyVisible,omitempty"`
+	// SpendsMoneyOrChangesPermissions (JSON "spendsMoneyOrChangesPermissions",
+	// M) marks cost beyond normal chat or a change in authority/access.
+	SpendsMoneyOrChangesPermissions *bool `json:"spendsMoneyOrChangesPermissions,omitempty"`
+	// ActsInUserName (JSON "actsInUserName", U) marks creating or sending
+	// something attributable to the user, including in a private account.
+	ActsInUserName *bool `json:"actsInUserName,omitempty"`
+}
+
+// RequiresHumanConfirm reports asserted E/M/U consequences, independently
+// of Risk. False does not grant permission; the existing risk and approval
+// mode rules still apply, including when consequences are unknown.
+func (r ApprovalRequest) RequiresHumanConfirm() bool {
+	return (r.ExternallyVisible != nil && *r.ExternallyVisible) ||
+		(r.SpendsMoneyOrChangesPermissions != nil && *r.SpendsMoneyOrChangesPermissions) ||
+		(r.ActsInUserName != nil && *r.ActsInUserName)
 }
 
 const (
@@ -184,13 +208,16 @@ type Approver interface {
 }
 
 // DefaultApprover is the policy used when a caller supplies no approver.
-// It never auto-approves a call that needs a human: dangerous and confirm
-// risks are denied, ordinary risk-free and read-only calls keep running,
+// It denies asserted E/M/U consequences and dangerous/confirm risks;
+// ordinary risk-free and read-only calls keep running,
 // and an unrecognized risk is denied rather than assumed safe.
 // A nil approver must therefore not mean "allow everything".
 type DefaultApprover struct{}
 
 func (DefaultApprover) Approve(_ context.Context, req ApprovalRequest) (ApprovalDecision, error) {
+	if req.RequiresHumanConfirm() {
+		return ApprovalDecision{Reason: fmt.Sprintf("tool call %q needs human confirmation for external visibility, spending/permission changes, or acting in the user's name, but no approver is configured", req.ToolName)}, nil
+	}
 	switch req.Risk {
 	case "", ApprovalRiskReadOnly:
 		return ApprovalDecision{Allow: true}, nil
@@ -206,15 +233,19 @@ func (DefaultApprover) Approve(_ context.Context, req ApprovalRequest) (Approval
 // UnattendedApprover is the approval policy for runs where no human is
 // present to answer prompts: scheduled jobs, daemon jobs, and chat bots. It
 // allows clearly read-only calls, denies ordinary calls unless AllowAll was
-// opted into, and always denies dangerous/confirm calls — even with AllowAll.
+// opted into, and always denies asserted E/M/U and dangerous/confirm calls —
+// even with AllowAll.
 type UnattendedApprover struct {
 	AllowAll bool
 }
 
-// Approve implements Approver. Dangerous commands (see the bash classifier)
-// and commands the risk check refused to auto-run are denied even when the
-// run opted into --allow-all, because nothing is present to approve them.
+// Approve implements Approver. Asserted E/M/U consequences, dangerous
+// commands, and risk-check confirmations are denied even with --allow-all,
+// because nobody is present to approve them.
 func (a UnattendedApprover) Approve(_ context.Context, req ApprovalRequest) (ApprovalDecision, error) {
+	if req.RequiresHumanConfirm() {
+		return ApprovalDecision{Reason: fmt.Sprintf("tool call %q needs human confirmation for external visibility, spending/permission changes, or acting in the user's name; denied unattended, including with --allow-all", req.ToolName)}, nil
+	}
 	if req.Risk == ApprovalRiskReadOnly {
 		return ApprovalDecision{Allow: true}, nil
 	}

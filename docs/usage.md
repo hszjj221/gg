@@ -173,7 +173,7 @@ Before every model request, including requests between tool batches, gg estimate
 
 `memory.dir` accepts a `~/` prefix. A broken profile or an undeletable daily log prints a warning and does not block startup.
 
-When memory is enabled, the model can call `memory_add` (`general`, `daily`, `person:<name>`, `group:<name>`) and `memory_search`. `memory_add` writes immediately and does not ask for approval. `/memory`, `/memory add`, `/memory show [daily]`, and `/memory search` work in the interactive session. `gg memory search <query>` and `gg memory show [daily]` work without starting one.
+When memory is enabled, the model can call `memory_add` (`general`, `daily`, `person:<name>`, `group:<name>`) and `memory_search`. `memory_add` now follows the ordinary approval policy for durable local writes; `memory_search` remains read-only and ungated. See [Personal Agent P1](personal-agent.md#p1-runtime-behavior). `/memory`, `/memory add`, `/memory show [daily]`, and `/memory search` work in the interactive session. `gg memory search <query>` and `gg memory show [daily]` work without starting one.
 
 `memory.maxPromptTokens` limits how much curated memory is injected (default 1200). The file itself is left intact. `memory.dailyLogTailTokens` defaults to 500. `memory.dailyLogRetentionDays` defaults to 90; `0` keeps daily logs. `--no-memory` or `memory.enabled=false` hides the memory tools for that run.
 

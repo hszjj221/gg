@@ -17,13 +17,15 @@ import (
 const Name = "google"
 
 const (
-	ScopeGmailRead = "https://www.googleapis.com/auth/gmail.readonly"
-	ScopeGmailSend = "https://www.googleapis.com/auth/gmail.send"
-	ScopeCalendar  = "https://www.googleapis.com/auth/calendar.events"
+	ScopeGmailRead    = "https://www.googleapis.com/auth/gmail.readonly"
+	ScopeGmailSend    = "https://www.googleapis.com/auth/gmail.send"
+	ScopeGmailCompose = "https://www.googleapis.com/auth/gmail.compose"
+	ScopeCalendar     = "https://www.googleapis.com/auth/calendar.events"
 )
 
-// Scopes is the minimal set covering Gmail read/send and Calendar events.
-var Scopes = []string{ScopeGmailRead, ScopeGmailSend, ScopeCalendar}
+// Scopes covers Gmail read/send/drafts and Calendar events. Existing
+// connections need `gg connect google --force` to grant gmail.compose.
+var Scopes = []string{ScopeGmailRead, ScopeGmailSend, ScopeGmailCompose, ScopeCalendar}
 
 const (
 	AuthURL  = "https://accounts.google.com/o/oauth2/v2/auth"

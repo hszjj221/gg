@@ -279,11 +279,10 @@ var approvalClassification = map[string]bool{
 	"open":            true,
 	"clipboard_read":  true,
 	"clipboard_write": true,
+	"memory_add":      true,
 	// Read-only by design: no approval.
-	// memory_add writes to the agent's own memory store; it is deliberately
-	// not approval-gated (high frequency, user-scoped, no external effect).
 	"read": false, "list": false, "grep": false, "subagent": false,
-	"memory_add": false, "memory_search": false,
+	"memory_search":   false,
 	"kb_search":       false,
 	"gmail_read":      false,
 	"gmail_search":    false,
@@ -668,6 +667,8 @@ func preApprovalProbeArgs(t *testing.T, name, cwd string) json.RawMessage {
 		return json.RawMessage(`{"to":"probe@example.com","subject":"probe","body":"probe"}`)
 	case "calendar_create":
 		return json.RawMessage(`{"title":"probe","start":"2030-01-01T10:00:00+08:00","end":"2030-01-01T11:00:00+08:00"}`)
+	case "memory_add":
+		return json.RawMessage(`{"content":"probe"}`)
 	case "process_kill":
 		return json.RawMessage(`{"pid":987654321}`)
 	case "clipboard_read":

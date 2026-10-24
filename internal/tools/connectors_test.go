@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/connector"
 	"github.com/hszjj221/gg/internal/connector/google"
 )
@@ -102,6 +103,69 @@ func TestGmailSendToolApproval(t *testing.T) {
 	if !strings.Contains(req.Details, "Hello") {
 		t.Fatalf("details = %q", req.Details)
 	}
+	assertGoogleWriteConsequences(t, req)
+}
+
+func assertGoogleWriteConsequences(t *testing.T, req agent.ApprovalRequest) {
+	t.Helper()
+	if req.Reversible == nil || *req.Reversible || req.ExternallyVisible == nil || !*req.ExternallyVisible ||
+		req.SpendsMoneyOrChangesPermissions == nil || *req.SpendsMoneyOrChangesPermissions ||
+		req.ActsInUserName == nil || !*req.ActsInUserName || !req.RequiresHumanConfirm() {
+		t.Fatalf("expected irreversible E/U without M: %+v", req)
+	}
+}
+
+func TestGmailSendOrDraft(t *testing.T) {
+	for _, tc := range []struct{ name, option, path, summary, result string }{
+		{"default sends", "", "/gmail/v1/users/me/messages/send", "send email", "sent (id sent1)"},
+		{"explicit send", `,"as_draft":false`, "/gmail/v1/users/me/messages/send", "send email", "sent (id sent1)"},
+		{"draft only", `,"as_draft":true`, "/gmail/v1/users/me/drafts", "save Gmail draft (not sent)", "draft created (id draft1; not sent)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			mux := http.NewServeMux()
+			mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if r.Method != http.MethodPost || r.URL.Path != tc.path {
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				}
+				if r.URL.Path == "/gmail/v1/users/me/drafts" {
+					w.Write([]byte(`{"id":"draft1","message":{"id":"message1"}}`))
+				} else {
+					w.Write([]byte(`{"id":"sent1"}`))
+				}
+			})
+			tool := NewGmailSendTool(mockGoogleClient(t, mux))
+			raw := json.RawMessage(`{"to":"x@y.z","subject":"Hello","body":"world"` + tc.option + `}`)
+			req, err := tool.ApprovalRequest(raw)
+			if err != nil || !strings.Contains(req.Summary, tc.summary) || string(req.Arguments) != string(raw) {
+				t.Fatalf("approval = %+v, %v", req, err)
+			}
+			assertGoogleWriteConsequences(t, req)
+			res := tool.Execute(context.Background(), raw)
+			if res.IsError || res.Content[0].Text != tc.result || calls != 1 {
+				t.Fatalf("result = %+v, calls = %d", res, calls)
+			}
+		})
+	}
+}
+
+func TestGmailDraftFailureNeverSends(t *testing.T) {
+	calls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Path != "/gmail/v1/users/me/drafts" {
+			t.Errorf("draft failure must not fall back to send: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"error":{"code":403,"message":"insufficient scopes"}}`))
+	})
+	tool := NewGmailSendTool(mockGoogleClient(t, mux))
+	res := tool.Execute(context.Background(), json.RawMessage(`{"to":"x@y.z","subject":"Hello","body":"world","as_draft":true}`))
+	if !res.IsError || calls != 1 || !strings.Contains(res.Content[0].Text, "not sent") || !strings.Contains(res.Content[0].Text, "gg connect google --force") {
+		t.Fatalf("result = %+v, calls = %d", res, calls)
+	}
 }
 
 func TestCalendarAgendaTool(t *testing.T) {
@@ -150,6 +214,7 @@ func TestCalendarCreateToolValidation(t *testing.T) {
 	if !strings.Contains(req.Summary, "1:1") || !strings.Contains(req.Summary, "2026-09-28 15:00") {
 		t.Fatalf("approval = %+v", req)
 	}
+	assertGoogleWriteConsequences(t, req)
 }
 
 func TestConnectorToolsNotConnected(t *testing.T) {

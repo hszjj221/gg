@@ -79,6 +79,9 @@ func TestBrowserNavigateApprovalRequest(t *testing.T) {
 	if req.ToolName != "browser_navigate" || !strings.Contains(req.Summary, "https://example.com/docs") {
 		t.Fatalf("unexpected approval request: %+v", req)
 	}
+	if req.Reversible == nil || *req.Reversible || req.ExternallyVisible == nil || !*req.ExternallyVisible || !req.RequiresHumanConfirm() {
+		t.Fatalf("expected irreversible external navigation: %+v", req)
+	}
 	if _, err := tool.ApprovalRequest(json.RawMessage(`{bad json`)); err == nil {
 		t.Fatal("expected error for invalid arguments")
 	}

@@ -24,7 +24,7 @@ func (t MemoryAddTool) Name() string { return "memory_add" }
 func (t MemoryAddTool) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "memory_add",
-		Description: "Append a concise memory to the user's structured memory. Scope selects the destination: general (MEMORY.md, stable preferences and durable facts), daily (today's log, things that happened today), person:<name> (facts about a person), group:<name> (facts about a group). Target selects the layer: workspace (default) — this project's memory, searched first and shadowing the global layer on conflicts; global — the cross-project store, for explicitly cross-project memory. Layer guidance: project-specific facts, preferences and people go to workspace; cross-project identity, long-term preferences and people relevant everywhere go to global. When unsure, keep the default workspace: a misplaced workspace entry is easy to correct, while a misplaced global entry affects every project. Without a workspace context, target is ignored and everything lands in the global store. Use only for stable user preferences, durable facts, or repeated rules. Do not save temporary tasks, guesses, API keys, tokens, passwords, or sensitive personal data.",
+		Description: "Append a concise memory to the user's structured memory. Requires approval. Scope selects the destination: general (MEMORY.md, stable preferences and durable facts), daily (today's log, things that happened today), person:<name> (facts about a person), group:<name> (facts about a group). Target selects the layer: workspace (default) — this project's memory, searched first and shadowing the global layer on conflicts; global — the cross-project store, for explicitly cross-project memory. Layer guidance: project-specific facts, preferences and people go to workspace; cross-project identity, long-term preferences and people relevant everywhere go to global. When unsure, keep the default workspace: a misplaced workspace entry is easy to correct, while a misplaced global entry affects every project. Without a workspace context, target is ignored and everything lands in the global store. Use only for stable user preferences, durable facts, or repeated rules. Do not save temporary tasks, guesses, API keys, tokens, passwords, or sensitive personal data.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -37,12 +37,41 @@ func (t MemoryAddTool) Definition() agent.ToolDefinition {
 	}
 }
 
-func (t MemoryAddTool) Execute(_ context.Context, raw json.RawMessage) ToolResult {
-	var input struct {
-		Content string `json:"content"`
-		Scope   string `json:"scope"`
-		Target  string `json:"target"`
+type memoryAddInput struct {
+	Content string `json:"content"`
+	Scope   string `json:"scope"`
+	Target  string `json:"target"`
+}
+
+// ApprovalRequest gates durable memory writes on the shared runtime. There
+// is no separate personal profile switch yet. Reversibility stays unknown:
+// removing an entry cannot undo any later turn that already used it.
+func (t MemoryAddTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, error) {
+	var input memoryAddInput
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return agent.ApprovalRequest{}, fmt.Errorf("invalid memory_add arguments: %w", err)
 	}
+	scope := strings.TrimSpace(input.Scope)
+	if scope == "" {
+		scope = "general"
+	}
+	target := strings.ToLower(strings.TrimSpace(input.Target))
+	if target == "" {
+		target = "workspace"
+	}
+	return agent.ApprovalRequest{
+		ToolName:                        "memory_add",
+		Summary:                         fmt.Sprintf("remember in %s memory [%s]: %q", target, scope, truncateRunes(input.Content, 80)),
+		Details:                         fmt.Sprintf("target: %s (global when no workspace context)\nscope: %s\nDurable local write; may influence later turns.\ncontent: %s", target, scope, input.Content),
+		Arguments:                       raw,
+		ExternallyVisible:               new(false),
+		SpendsMoneyOrChangesPermissions: new(false),
+		ActsInUserName:                  new(false),
+	}, nil
+}
+
+func (t MemoryAddTool) Execute(_ context.Context, raw json.RawMessage) ToolResult {
+	var input memoryAddInput
 	if err := json.Unmarshal(raw, &input); err != nil {
 		return errorResult(fmt.Errorf("invalid memory_add arguments: %w", err))
 	}

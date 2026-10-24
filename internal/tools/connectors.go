@@ -92,7 +92,7 @@ func (t GmailReadTool) Execute(ctx context.Context, raw json.RawMessage) ToolRes
 	return textResult(b.String())
 }
 
-// GmailSendTool lets the agent send an email. Requires approval.
+// GmailSendTool lets the agent send an email or save a draft. Requires approval.
 type GmailSendTool struct{ client *google.Client }
 
 func NewGmailSendTool(client *google.Client) GmailSendTool { return GmailSendTool{client} }
@@ -102,13 +102,14 @@ func (t GmailSendTool) Name() string { return "gmail_send" }
 func (t GmailSendTool) Definition() agent.ToolDefinition {
 	return agent.ToolDefinition{
 		Name:        "gmail_send",
-		Description: "Send a plain-text email from the user's Gmail account. Requires user approval.",
+		Description: "Send a plain-text email from the user's Gmail account, or set as_draft to save a draft without sending. Defaults to sending. Requires user approval.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"to":      map[string]any{"type": "string", "description": "Recipient email address."},
-				"subject": map[string]any{"type": "string", "description": "Email subject."},
-				"body":    map[string]any{"type": "string", "description": "Plain-text body."},
+				"to":       map[string]any{"type": "string", "description": "Recipient email address."},
+				"subject":  map[string]any{"type": "string", "description": "Email subject."},
+				"body":     map[string]any{"type": "string", "description": "Plain-text body."},
+				"as_draft": map[string]any{"type": "boolean", "default": false, "description": "Save a Gmail draft without sending (requires gmail.compose scope)."},
 			},
 			"required": []string{"to", "subject", "body"},
 		},
@@ -119,6 +120,7 @@ type gmailSendInput struct {
 	To      string `json:"to"`
 	Subject string `json:"subject"`
 	Body    string `json:"body"`
+	AsDraft bool   `json:"as_draft"`
 }
 
 func (t GmailSendTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, error) {
@@ -126,11 +128,21 @@ func (t GmailSendTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalReque
 	if err := json.Unmarshal(raw, &input); err != nil {
 		return agent.ApprovalRequest{}, fmt.Errorf("invalid gmail_send arguments: %w", err)
 	}
+	action := "send email"
+	if input.AsDraft {
+		action = "save Gmail draft (not sent)"
+	}
 	return agent.ApprovalRequest{
 		ToolName:  "gmail_send",
-		Summary:   fmt.Sprintf("send email to %s: %q", input.To, input.Subject),
+		Summary:   fmt.Sprintf("%s to %s: %q", action, input.To, input.Subject),
 		Details:   fmt.Sprintf("to: %s\nsubject: %s\n\n%s", input.To, input.Subject, truncateRunes(input.Body, 1000)),
 		Arguments: raw,
+		// Deleting a draft can undo the mailbox content, but not the
+		// provider-visible trace. Both modes create content as the user.
+		Reversible:                      new(false),
+		ExternallyVisible:               new(true),
+		SpendsMoneyOrChangesPermissions: new(false),
+		ActsInUserName:                  new(true),
 	}, nil
 }
 
@@ -141,6 +153,13 @@ func (t GmailSendTool) Execute(ctx context.Context, raw json.RawMessage) ToolRes
 	}
 	if input.To == "" || input.Subject == "" {
 		return errorResult(fmt.Errorf("to and subject are required"))
+	}
+	if input.AsDraft {
+		id, err := t.client.CreateDraft(ctx, input.To, input.Subject, input.Body)
+		if err != nil {
+			return errorResult(fmt.Errorf("create Gmail draft failed (not sent; draft mode requires gmail.compose; re-authorize with gg connect google --force): %w", err))
+		}
+		return textResult("draft created (id " + id + "; not sent)")
 	}
 	id, err := t.client.Send(ctx, input.To, input.Subject, input.Body)
 	if err != nil {
@@ -269,10 +288,14 @@ func (t CalendarCreateTool) ApprovalRequest(raw json.RawMessage) (agent.Approval
 		return agent.ApprovalRequest{}, fmt.Errorf("invalid calendar_create arguments: %w", err)
 	}
 	return agent.ApprovalRequest{
-		ToolName:  "calendar_create",
-		Summary:   fmt.Sprintf("create calendar event %q (%s – %s)", input.Title, input.Start, input.End),
-		Details:   fmt.Sprintf("title: %s\nstart: %s\nend: %s\nlocation: %s\ndescription: %s", input.Title, input.Start, input.End, input.Location, input.Description),
-		Arguments: raw,
+		ToolName:                        "calendar_create",
+		Summary:                         fmt.Sprintf("create calendar event %q (%s – %s)", input.Title, input.Start, input.End),
+		Details:                         fmt.Sprintf("title: %s\nstart: %s\nend: %s\nlocation: %s\ndescription: %s", input.Title, input.Start, input.End, input.Location, input.Description),
+		Arguments:                       raw,
+		Reversible:                      new(false),
+		ExternallyVisible:               new(true),
+		SpendsMoneyOrChangesPermissions: new(false),
+		ActsInUserName:                  new(true),
 	}, nil
 }
 

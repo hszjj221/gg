@@ -150,6 +150,16 @@ func truncateBody(s string) string {
 
 // Send sends a plain-text email.
 func (c *Client) Send(ctx context.Context, to, subject, body string) (string, error) {
+	return c.writeMessage(ctx, to, subject, body, false)
+}
+
+// CreateDraft saves a plain-text email in Gmail without sending it. It
+// returns the draft ID, not the nested message ID, and needs gmail.compose.
+func (c *Client) CreateDraft(ctx context.Context, to, subject, body string) (string, error) {
+	return c.writeMessage(ctx, to, subject, body, true)
+}
+
+func (c *Client) writeMessage(ctx context.Context, to, subject, body string, draft bool) (string, error) {
 	if strings.ContainsAny(to, "\r\n") || strings.ContainsAny(subject, "\r\n") {
 		return "", fmt.Errorf("to/subject must not contain line breaks")
 	}
@@ -159,9 +169,16 @@ func (c *Client) Send(ctx context.Context, to, subject, body string) (string, er
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "To: %s\r\nSubject: %s\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n%s", to, subject, body)
 	rawMsg := base64.RawURLEncoding.EncodeToString(buf.Bytes())
-	payload, _ := json.Marshal(map[string]string{"raw": rawMsg})
+	message := map[string]string{"raw": rawMsg}
+	var input any = message
+	path := "/gmail/v1/users/me/messages/send"
+	if draft {
+		path = "/gmail/v1/users/me/drafts"
+		input = map[string]any{"message": message}
+	}
+	payload, _ := json.Marshal(input)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		APIBase+"/gmail/v1/users/me/messages/send", bytes.NewReader(payload))
+		APIBase+path, bytes.NewReader(payload))
 	if err != nil {
 		return "", err
 	}

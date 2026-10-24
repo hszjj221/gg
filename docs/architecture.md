@@ -72,7 +72,7 @@ CLI and Runtime publish artifacts through `app.PublishArtifact`, which owns the 
 
 System prompt assembly order (after the coding instructions): user profile, curated memory (`MEMORY.md`), today's daily-log tail (`YYYY-MM-DD.md`), then project instructions (AGENTS.md) and skills. Tool surface: `memory_add` accepts `scope=general|daily|person:<name>|group:<name>` (default general); `memory_search` does case-insensitive keyword search across scopes and returns up to 10 `path:line: snippet` hits. Both are hidden when memory is disabled.
 
-For Personal Agent target boundaries and the approval coverage baseline, see [Personal Agent (P0)](personal-agent.md).
+For consequence routing (asserted E/M/U require a human, including under `--yolo` / `--allow-all`), memory-write gates, and approval coverage, see [Personal Agent (P1)](personal-agent.md).
 
 ## Scheduler (cron / once jobs)
 

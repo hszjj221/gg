@@ -440,7 +440,9 @@ func TestRunMemoryAddToolWritesMemoryFileAndSessionMessages(t *testing.T) {
 	var stdout, stderr strings.Builder
 	provider := &appMemoryToolProvider{content: "User prefers concise Go code reviews."}
 
-	code := Run(context.Background(), []string{"-p", "--session", sessionPath, "remember my preference"}, Options{
+	// Durable memory writes now use the ordinary approval policy; this
+	// non-interactive persistence test explicitly opts into ordinary writes.
+	code := Run(context.Background(), []string{"-p", "--yolo", "--session", sessionPath, "remember my preference"}, Options{
 		CWD:     dir,
 		HomeDir: home,
 		Stdout:  &stdout,

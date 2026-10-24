@@ -11,9 +11,7 @@ import (
 	"github.com/hszjj221/gg/internal/cli"
 )
 
-// policyApprover is the CLI approval policy. A nil approver would let every
-// approval-gated tool run, so auto outside a terminal returns this denier
-// instead of nil.
+// policyApprover is the CLI approval policy, including terminal availability.
 type policyApprover struct {
 	mode     string
 	terminal bool
@@ -69,7 +67,8 @@ const (
 
 // approvalActionFor decides one request.
 //
-// Read-only shell commands run without a prompt in every mode.
+// Asserted E/M/U consequences require a human, including under yolo.
+// Otherwise, read-only shell commands run without a prompt in every mode.
 // Dangerous shell commands, and commands the risk check refused to
 // auto-run, are prompted when a terminal can ask and the mode is not
 // "never"; otherwise they are denied, including under yolo.
@@ -77,6 +76,12 @@ const (
 // on-request, allowed without a prompt for yolo and never, and denied
 // when auto has no terminal.
 func approvalActionFor(mode string, terminal bool, req agent.ApprovalRequest) (approvalAction, string) {
+	if req.RequiresHumanConfirm() {
+		if terminal && mode != "never" {
+			return approvalPrompt, ""
+		}
+		return approvalDeny, fmt.Sprintf("tool call %q denied: external visibility, spending/permission changes, or acting in the user's name requires human confirmation. Run in a terminal without --approval never and approve the prompt to allow this once.", req.ToolName)
+	}
 	if req.Risk == agent.ApprovalRiskReadOnly {
 		return approvalAllow, ""
 	}

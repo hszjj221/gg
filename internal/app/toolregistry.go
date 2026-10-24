@@ -280,7 +280,7 @@ func buildConnectorTools(ctx context.Context, tc ToolContext) ([]agent.Tool, err
 			tools.NewGmailReadTool(gclient),
 		)
 	}
-	if hasScope(tok.Scopes, google.ScopeGmailSend) {
+	if hasScope(tok.Scopes, google.ScopeGmailSend) || hasScope(tok.Scopes, google.ScopeGmailCompose) {
 		out = append(out, tools.NewGmailSendTool(gclient))
 	}
 	if hasScope(tok.Scopes, google.ScopeCalendar) {

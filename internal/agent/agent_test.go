@@ -48,6 +48,7 @@ type fakeApprovalTool struct {
 	name        string
 	runs        int
 	risk        string
+	request     ApprovalRequest
 	approvalErr error
 }
 
@@ -63,7 +64,9 @@ func (t *fakeApprovalTool) ApprovalRequest(args json.RawMessage) (ApprovalReques
 	if t.approvalErr != nil {
 		return ApprovalRequest{}, t.approvalErr
 	}
-	return ApprovalRequest{ToolName: t.name, Summary: "run " + t.name, Details: string(args), Arguments: args, Risk: t.risk}, nil
+	req := t.request
+	req.ToolName, req.Summary, req.Details, req.Arguments, req.Risk = t.name, "run "+t.name, string(args), args, t.risk
+	return req, nil
 }
 
 type fakeApprover struct {

@@ -161,7 +161,7 @@ Base URL：`--base-url`，然后是 provider 的 `baseURL`，然后是按名字�
 
 `memory.dir` 接受 `~/` 前缀。画像损坏或日常日志删不掉时只打印警告，不阻止启动。
 
-启用 memory 时，模型可以调用 `memory_add`（`general`、`daily`、`person:<name>`、`group:<name>`）和 `memory_search`。`memory_add` 立即写入，不询问审批。交互会话里有 `/memory`、`/memory add`、`/memory show [daily]` 和 `/memory search`。`gg memory search <query>` 和 `gg memory show [daily]` 不用开会话也能用。
+启用 memory 时，模型可以调用 `memory_add`（`general`、`daily`、`person:<name>`、`group:<name>`）和 `memory_search`。`memory_add` 现在按持久本地写入的普通审批策略处理；`memory_search` 保持只读且不加审批。参见 [Personal Agent P1](personal-agent.zh-CN.md#p1-运行时行为)。交互会话里有 `/memory`、`/memory add`、`/memory show [daily]` 和 `/memory search`。`gg memory search <query>` 和 `gg memory show [daily]` 不用开会话也能用。
 
 `memory.maxPromptTokens` 限制注入的精选记忆量（默认 1200）。文件本身不截断。`memory.dailyLogTailTokens` 默认 500。`memory.dailyLogRetentionDays` 默认 90；`0` 表示保留日常日志。`--no-memory` 或 `memory.enabled=false` 会在该次运行隐藏 memory 工具。
 
