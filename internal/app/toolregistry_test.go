@@ -24,6 +24,41 @@ import (
 
 var errTestProvider = errors.New("test provider failure")
 
+func TestConnectorProfileDraftDefault(t *testing.T) {
+	for _, profile := range []string{"", config.ProfileCoding, config.ProfilePersonal} {
+		t.Run(profile, func(t *testing.T) {
+			cfg := config.Config{Profile: profile, Connectors: config.ConnectorConfig{Dir: t.TempDir()}}
+			store, err := connector.Open(cfg.Connectors.Dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Save(google.Name, connector.Token{AccessToken: "fake", RefreshToken: "fake-refresh", Scopes: google.Scopes}); err != nil {
+				t.Fatal(err)
+			}
+			built, err := buildConnectorTools(context.Background(), ToolContext{Config: cfg})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tool := range built {
+				if tool.Name() != "gmail_send" {
+					continue
+				}
+				wantDraft := profile == config.ProfilePersonal
+				props := tool.Definition().Parameters["properties"].(map[string]any)
+				if props["as_draft"].(map[string]any)["default"] != wantDraft {
+					t.Fatalf("profile=%q schema=%+v", profile, props["as_draft"])
+				}
+				req, err := tool.(agent.ApprovalDescriber).ApprovalRequest([]byte(`{"to":"bob@example.com","subject":"hi","body":"hello"}`))
+				if err != nil || strings.Contains(req.Summary, "not sent") != wantDraft {
+					t.Fatalf("profile=%q approval=%+v err=%v", profile, req, err)
+				}
+				return
+			}
+			t.Fatal("gmail_send not registered")
+		})
+	}
+}
+
 func TestToolCapabilitiesDerivedFromRegistry(t *testing.T) {
 	got := ToolCapabilities()
 	// The computer capability is only advertised where it has a backend.

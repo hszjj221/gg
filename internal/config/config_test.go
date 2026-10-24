@@ -37,6 +37,27 @@ func TestResolveMissingConfigUsesLegacyOpenAIProvider(t *testing.T) {
 	}
 }
 
+func TestResolveProfiles(t *testing.T) {
+	for _, profile := range []string{"", ProfileCoding, ProfilePersonal, "other"} {
+		t.Run(profile, func(t *testing.T) {
+			cfg, err := Resolve(Options{HomeDir: t.TempDir(), Profile: profile})
+			if profile == "other" {
+				if err == nil || !strings.Contains(err.Error(), "profile must be coding or personal") {
+					t.Fatalf("invalid profile error = %v", err)
+				}
+				return
+			}
+			want := profile
+			if want == "" {
+				want = ProfileCoding
+			}
+			if err != nil || cfg.Profile != want {
+				t.Fatalf("profile=%q err=%v, want %q", cfg.Profile, err, want)
+			}
+		})
+	}
+}
+
 func TestResolveReadsProviderConfigAndCLIModelOverride(t *testing.T) {
 	home := t.TempDir()
 	writeConfig(t, home, `{

@@ -94,6 +94,8 @@ gg -p "List the files in this project"
 
 会话、provider 配置、`AGENTS.md`、skills、memory 和上下文预算见[使用说明](docs/usage.zh-CN.md)。
 
+独立的个人助理面使用 `gg --profile personal`：在共享运行时上采用更严格的审批默认值和 Gmail 草稿偏好。默认仍为 coding。参见 [Personal Agent（P3）](docs/personal-agent.zh-CN.md)。
+
 ## 扩展
 
 这些能力在终端 agent 之外，都是这个仓库里的真实代码。链接是对应的说明。

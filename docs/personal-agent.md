@@ -1,16 +1,40 @@
-# Personal Agent: consequence routing and standing authorization (P2)
+# Personal Agent: personal profile and defaults (P3)
 
 English | [简体中文](personal-agent.zh-CN.md)
 
-P0 defined the consequence language and approval baseline. P1 added consequence metadata and routing to the shared runtime, gated durable memory writes, and offered an optional Gmail draft path. P2 adds durable, explicit standing grants, CLI management, and audited matching before the existing approval policy. Separate personal identity/defaults (P3) remain future work.
+P0 defined the consequence language and approval baseline. P1 added consequence routing, memory-write approval, and Gmail drafts. P2 added explicit standing grants and audited matching. P3 adds a personal profile with its own base identity and stricter defaults, while the default `gg` CLI remains coding-first.
 
 ## Personal and coding agents
 
-Today gg is primarily a terminal **coding** agent, as the [README](../README.md) describes. The [personal layer](architecture.md#personal-layer-profile--memory) is already wired into the shared runtime: `USER.md` supplies the user profile, and memory supplies durable context. Having that context does not establish a separate personal identity or stricter default policy today.
+gg is primarily a terminal **coding** agent, as the [README](../README.md) describes. Both profiles use the [personal layer](architecture.md#personal-layer-profile--memory): `USER.md` supplies the user profile, and memory supplies durable context. The runtime profile selects the assistant's identity and defaults; it is separate from that user context.
 
-The target keeps the shared runtime for sessions, providers, tools, and approvals. P3 will separate **identity and default policy**: coding defaults stay coding-friendly, while personal defaults become stricter about consequences outside private, reversible work. This is a policy and identity split, not a second runtime.
+P3 shares sessions, providers, tools, approvals, and standing authorization while separating **identity and default policy**. The personal face is the user's personal assistant, preferring private, reversible work and drafts. Project `AGENTS.md` still applies in a repository; `USER.md`, memory, project instructions, and skills keep their existing assembly order after the selected base instructions.
 
 P1 extends the existing `ApprovalDescriber` → `ApprovalRequest` → `Approver` path. It preserves `Risk` / `RiskReason`, approval modes for ordinary calls, and the bash classifier. Routing uses consequence attributes, not a list of tool names.
+
+## Selecting a profile (P3)
+
+```sh
+gg                              # coding, unchanged
+gg --profile coding             # explicit coding profile
+gg --profile personal           # personal assistant face
+gg --profile personal -p 'Prepare a reply draft'
+```
+
+`--profile` accepts only `coding` and `personal`; unset or empty means `coding`. Selection is per invocation, including resumed sessions. P3 adds no saved config default or second binary.
+
+| Default / policy | Coding | Personal |
+| --- | --- | --- |
+| Base identity | Coding agent working in the user's project | User's personal assistant |
+| Approval mode | `auto` | `on-request` |
+| `--yolo` / `--approval yolo` | Existing behavior | Rejected, with a standing-auth hint |
+| Omitted Gmail `as_draft` | `false`: send | `true`: create a draft, not sent |
+
+Personal's default `on-request` requires stdin and stderr to be terminals; without them the CLI exits before calling the model. In a terminal, ordinary gated calls prompt; existing read-only and agent-area exemptions remain. Explicit `--approval auto`, `on-request`, or `never` overrides the default. `never` retains its historical behavior of allowing ordinary calls without prompting; it does not authorize asserted E/M/U or dangerous/confirm calls. For unattended use with standing grants, select `--approval auto` explicitly: unmatched gated calls are denied. Both profiles still require a human or matching standing grant for asserted E/M/U; grants never waive dangerous/confirm risks.
+
+Personal Gmail calls with omitted `as_draft` create real drafts. Explicit `as_draft=false` can still request sending, through the same E/U approval path. Previews and results reflect the effective action. Both draft and send remain E/U; neither is automatically authorized. A failed draft never falls back to sending. Standing-grant argument limits still match the original explicit arguments: a grant constrained to `as_draft=true` requires the call to include it, even in personal mode.
+
+The selected `Config.Profile` reaches the shared prompt and tool registry, including manual `gg --profile personal job run ...` turns. Manual jobs retain their job approval policy (`--allow-all`), rather than the interactive CLI mode. Profiles are not saved in job definitions. `ggd`, Web/Electron, Telegram, and daemon-scheduled jobs keep their existing coding profile and approval policies; adding selectors there is deferred. P4 proactivity, digests, and reminders are outside this PR.
 
 ## Four consequence dimensions
 
@@ -50,9 +74,9 @@ These rules remain the fallback when no standing grant matches.
 
 P1 populates `gmail_send` and `calendar_create` with E/U=true, M=false, R=false, and `browser_navigate` with E=true, R=false. `memory_add` carries E/M/U=false and R=unknown: it is a durable local write, and removing an entry cannot undo later use. Other tools can leave dimensions unknown; media endpoint locality/billing classification and bash consequence classification are not added here.
 
-`memory_add` now implements `ApprovalDescriber` on the shared coding runtime because `SetupPersonal` has no personal-only profile switch. Its approval preview shows content, scope, and requested workspace/global target (all writes use global memory without a workspace context). `memory_search` remains ungated and read-only. P3 may narrow the default policy to personal identity without removing the describer.
+`memory_add` implements `ApprovalDescriber` in both profiles. Its approval preview shows content, scope, and requested workspace/global target (all writes use global memory without a workspace context). `memory_search` remains ungated and read-only.
 
-`gmail_send` accepts optional `as_draft` (default `false`, preserving send behavior). With `true`, it creates a real Gmail draft, returns the **draft ID**, and does not send; an API failure never falls back to sending. The preview and result say “not sent.” A draft still has E/U=true because Google sees it and it is created in the user's mailbox as them. Its content can be deleted, but the whole effect remains R=false because provider-visible traces cannot be undone locally. Both modes require human confirmation or a matching explicit standing grant.
+`gmail_send` accepts optional `as_draft` (default `false` in coding, `true` in personal). With `true`, it creates a real Gmail draft, returns the **draft ID**, and does not send; an API failure never falls back to sending. The preview and result say “not sent.” A draft still has E/U=true because Google sees it and it is created in the user's mailbox as them. Its content can be deleted, but the whole effect remains R=false because provider-visible traces cannot be undone locally. Both modes require human confirmation or a matching explicit standing grant.
 
 Draft creation requires `gmail.compose`, now included in newly requested Google scopes alongside the existing scopes. Existing connections can still send; to use drafts, re-authorize with `gg connect google --force`. A missing draft scope produces an error with a reconnect hint. See [Connectors](connectors.md#security-boundaries).
 
@@ -105,7 +129,7 @@ Before asking or denying, the wrapper reads current grants in ID order. A match 
 
 On a hit, gg appends and syncs an audit record containing `timestamp`, `grantId`, `toolName`, `summary`, and `decision="allow-by-standing-grant"`, then allows without prompting. Storage corruption/read errors or an audit write failure fail closed. The audit records authorization, not successful execution. On a miss, the existing P1 approver runs unchanged.
 
-Grants apply across workspaces and transports using the same gg home. `subject` records the explicitly declared actor/account; it does not introduce a P3 identity selector or verify an OAuth account. Keep the configured account consistent with that declaration and revoke/recreate grants when changing it. Telegram's chat allowlist still controls who may initiate turns; Telegram remains `UnattendedApprover{}`, never AllowAll.
+Grants apply across profiles, workspaces, and transports using the same gg home. `subject` records the explicitly declared actor/account; selecting a profile does not scope a grant or verify an OAuth account. Keep the configured account consistent with that declaration and revoke/recreate grants when changing it. Telegram's chat allowlist still controls who may initiate turns; Telegram remains `UnattendedApprover{}`, never AllowAll.
 
 Scheduled `--allow-all` is retained for backward compatibility: it still permits ordinary tools under P1 rules, but cannot waive asserted E/M/U or dangerous/confirm risks. Matching standing grants are the only unattended authorization path for asserted E/M/U in these approval-gated calls; no `--allow-all` is needed for a hit.
 
@@ -113,7 +137,7 @@ Scheduled `--allow-all` is retained for backward compatibility: it still permits
 
 - Manual jobs (`internal/cliapp/job.go`) and daemon jobs (`internal/daemon/scheduler.go`) still pass `AllowAll: job.AutoApprove`. Replace that ordinary-tool compatibility path only with an explicit migration; there is no blanket removal in P2.
 - More tool consequence classification is needed before grants can match unclassified calls (including bash/MCP/media and the unknown M/U of browser navigation). Tools without `ApprovalDescriber` remain outside this gate.
-- Account/actor verification, transport-specific grant subjects, spending/usage limits, and richer destination limits remain follow-ups. P3 identity/default policy separation is outside P2.
+- Account/actor verification, transport-specific grant subjects, spending/usage limits, and richer destination limits remain follow-ups.
 
 ## Current approval inventory
 
@@ -132,7 +156,7 @@ The tables use R/E/M/U as shorthand for the dimensions above. They describe effe
 | [`bash`](../internal/tools/bash.go) | Yes | R/E/M/U: depend on command and targets. | Current classifier and optional risk check populate `risk`/`riskReason`. A shell command can have any of the four dimensions. |
 | [`memory_add`](../internal/tools/memory_add.go) | Yes | R: unknown, depends on removing the entry before reuse; E/M/U: false. | Durable workspace/global write, now approval-gated on the shared runtime. Preview shows content, scope, and target; may influence later turns. |
 | [`browser_navigate`](../internal/tools/browser.go) | Yes | R: no for a third-party request trace; E. | Initial URL is SSRF-checked; approval covers navigation. Redirect/subresource limitations remain as documented in architecture. |
-| [`gmail_send`](../internal/tools/connectors.go) | Yes | R: no once sent; E, U. | Sends by default; `as_draft=true` creates a draft without sending. Both modes assert E/U. Deleting draft content does not undo provider traces. |
+| [`gmail_send`](../internal/tools/connectors.go) | Yes | R: no for the external trace; E, U. | Coding defaults to send; personal defaults to draft. Explicit `as_draft` overrides either default. Both modes assert E/U. Deleting draft content does not undo provider traces. |
 | [`calendar_create`](../internal/tools/connectors.go) | Yes | R: no for the external trace; E, U. | Creates on the primary calendar under the user's account. Current arguments do not include attendees; invite sending is a boundary example, not a claim about this tool. |
 | [`artifact_create`](../internal/tools/artifact.go) | Yes | R: local creation can be removed; no direct E/M/U. | Writes the local artifact store outside the workspace. Does not publish to an external service. |
 | [`artifact_edit`](../internal/tools/artifact.go) | Yes | R: prior content recoverable from retained versions; no direct E/M/U. | Appends a complete local version. Library publish is a separate application/CLI operation, not this tool. |
@@ -168,4 +192,4 @@ The tables use R/E/M/U as shorthand for the dimensions above. They describe effe
 
 Current runtime policy is documented in the architecture's [Security model](architecture.md#security-model) and [Approval modes](architecture.md#approval-modes). P1 extends #53's fail-closed nil-approver handling for `dangerous`/`confirm` risks to asserted E/M/U consequences, while retaining existing Risk behavior for unclassified tools.
 
-P1 shipped the fields, routing, memory-write gate, and optional Gmail draft switch described above. P2 ships explicit standing authorization with durable storage, CLI management, shared matching, and an allow audit. P3 will separate identity and default policy while retaining the shared runtime.
+P1 shipped the fields, routing, memory-write gate, and optional Gmail draft switch described above. P2 ships explicit standing authorization with durable storage, CLI management, shared matching, and an allow audit. P3 ships the personal profile selector, personal base identity, stricter personal defaults, and Gmail draft preference while retaining the shared runtime. P4 proactivity remains future work.

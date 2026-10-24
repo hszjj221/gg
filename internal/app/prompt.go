@@ -23,7 +23,7 @@ type promptBuilder struct {
 func (s *promptBuilder) systemMessages(cfg config.Config) ([]agent.Message, error) {
 	// Prompt order: stable identity first, then memory, then project
 	// context, then skills.
-	messages := []agent.Message{s.codingInstructionMessage(cfg)}
+	messages := []agent.Message{s.baseInstructionMessage(cfg)}
 	if block := s.profile.PromptBlock(); block != "" {
 		messages = append(messages, agent.Message{Role: agent.RoleSystem, Content: block})
 	}

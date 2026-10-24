@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/hszjj221/gg/internal/agent"
+	"github.com/hszjj221/gg/internal/cli"
+	"github.com/hszjj221/gg/internal/tools"
 )
 
 func TestApprovalActionFor(t *testing.T) {
@@ -47,6 +49,28 @@ func TestApprovalActionFor(t *testing.T) {
 				t.Fatalf("reason %q does not contain %q", reason, tc.reason)
 			}
 		})
+	}
+}
+
+func TestPersonalExplicitSendNeedsApproval(t *testing.T) {
+	mail := tools.NewGmailSendTool(nil)
+	mail.DraftByDefault = true
+	req, err := mail.ApprovalRequest([]byte(`{"to":"bob@example.com","subject":"hi","body":"hello","as_draft":false}`))
+	if err != nil || !req.RequiresHumanConfirm() || !strings.Contains(req.Summary, "send email") {
+		t.Fatalf("explicit send approval=%+v, err=%v", req, err)
+	}
+	for _, mode := range []string{"auto", "on-request", "never"} {
+		for _, terminal := range []bool{false, true} {
+			var output strings.Builder
+			a := newPolicyApprover(cli.Args{Profile: "personal", Approval: mode}, bufio.NewReader(strings.NewReader("no\n")), &output, terminal)
+			decision, err := a.Approve(context.Background(), req)
+			if err != nil || decision.Allow {
+				t.Fatalf("mode=%s terminal=%v decision=%+v err=%v", mode, terminal, decision, err)
+			}
+			if prompted := strings.Contains(output.String(), "Approve? [y/N]"); prompted != (terminal && mode != "never") {
+				t.Fatalf("mode=%s terminal=%v output=%s", mode, terminal, output.String())
+			}
+		}
 	}
 }
 

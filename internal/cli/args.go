@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"strings"
+
+	"github.com/hszjj221/gg/internal/config"
 )
 
 type Args struct {
@@ -20,6 +22,7 @@ type Args struct {
 	NoMemory       bool
 	NoContextFiles bool
 	Approval       string
+	Profile        string
 	Yolo           bool
 	Sandbox        bool
 	APIKey         string
@@ -98,6 +101,7 @@ func Parse(argv []string) (Args, error) {
 	fs.BoolVar(&args.NoMemory, "no-memory", false, "disable memory (~/.gg/memory/)")
 	fs.BoolVar(&args.NoContextFiles, "no-context-files", false, "disable AGENTS.md discovery")
 	fs.StringVar(&args.Approval, "approval", "auto", "tool approval mode: auto, never, on-request, or yolo")
+	fs.StringVar(&args.Profile, "profile", config.ProfileCoding, "profile: coding or personal (personal defaults to on-request approval and Gmail drafts)")
 	fs.BoolVar(&args.Yolo, "yolo", false, "allow approval-gated tools without prompting (dangerous shell commands still need a terminal)")
 	fs.BoolVar(&args.Sandbox, "sandbox", false, "run bash inside an OS sandbox when a helper is available")
 	fs.StringVar(&args.APIKey, "api-key", "", "API key")
@@ -116,6 +120,25 @@ func Parse(argv []string) (Args, error) {
 	}
 	if err := parseCommand(&args, fs.Args()); err != nil {
 		return Args{}, err
+	}
+	profile, err := config.ParseProfile(args.Profile)
+	if err != nil {
+		return Args{}, err
+	}
+	args.Profile = profile
+	if profile == config.ProfilePersonal {
+		if args.Yolo || args.Approval == "yolo" {
+			return Args{}, fmt.Errorf("personal profile rejects --yolo and --approval yolo; use gg standing-auth for scoped unattended E/M/U authorization")
+		}
+		approvalSet := false
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "approval" {
+				approvalSet = true
+			}
+		})
+		if !approvalSet {
+			args.Approval = "on-request"
+		}
 	}
 	if err := validateApproval(args.Approval); err != nil {
 		return Args{}, err
@@ -423,6 +446,7 @@ Running gg without a prompt starts the interactive line-based mode (Ctrl+D to ex
 Options:
   -p, --print              run once and print the final assistant text
   --model <provider:model> model selection (default: ~/.gg/config.json or openai:gpt-4.1)
+  --profile <profile>      coding (default) or personal (on-request approval, Gmail drafts)
   --base-url <url>         OpenAI-compatible base URL
   --api-key <key>          API key (default: OPENAI_API_KEY)
   --session <path>         use a specific JSONL session file
@@ -436,8 +460,8 @@ Options:
   --no-skills              disable .agents/skills discovery
   --no-memory              disable memory (~/.gg/memory/)
   --no-context-files       disable AGENTS.md discovery
-  --approval <mode>        tool approval mode: auto, never, on-request, or yolo (default: auto)
-  --yolo                   allow approval-gated tools without prompting (same as --approval yolo)
+  --approval <mode>        auto, never, on-request, or yolo (default: auto; personal: on-request)
+  --yolo                   allow approval-gated tools without prompting (personal rejects yolo)
   --sandbox                run bash in an OS sandbox when bubblewrap or sandbox-exec is available
   -h, --help               show help
   -v, --version            show version

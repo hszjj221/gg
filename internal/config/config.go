@@ -32,9 +32,13 @@ const (
 	DefaultDailyLogRetentionDays = 90
 
 	ProviderTypeOpenAICompatible = "openai-compatible"
+
+	ProfileCoding   = "coding"
+	ProfilePersonal = "personal"
 )
 
 type Options struct {
+	Profile        string
 	APIKey         string
 	BaseURL        string
 	Model          string
@@ -129,6 +133,8 @@ type GoogleConnectorConfig struct {
 }
 
 type Config struct {
+	// Profile selects base identity and tool defaults; empty retains coding behavior.
+	Profile string
 	APIKey  string
 	BaseURL string
 	Model   string
@@ -267,6 +273,10 @@ type dirFileConfig struct {
 }
 
 func Resolve(options Options) (Config, error) {
+	profile, err := ParseProfile(options.Profile)
+	if err != nil {
+		return Config{}, err
+	}
 	cwd := first(options.CWD, mustGetwd())
 	home := resolveHomeDir(options.HomeDir)
 	defaultSessionDir := filepath.Join(home, ".gg", "sessions")
@@ -300,6 +310,7 @@ func Resolve(options Options) (Config, error) {
 	}
 
 	cfg := Config{
+		Profile:            profile,
 		Providers:          cfgFile.Providers,
 		BashRisk:           bashRisk,
 		Context:            contextConfig,
@@ -328,6 +339,18 @@ func Resolve(options Options) (Config, error) {
 		baseURLOverride:    options.BaseURL,
 	}
 	return cfg.WithSelection(first(options.Model, cfgFile.Default))
+}
+
+// ParseProfile validates the runtime profile, defaulting an empty value to coding.
+func ParseProfile(profile string) (string, error) {
+	switch profile {
+	case "", ProfileCoding:
+		return ProfileCoding, nil
+	case ProfilePersonal:
+		return ProfilePersonal, nil
+	default:
+		return "", fmt.Errorf("unknown profile %q: profile must be coding or personal", profile)
+	}
 }
 
 func (c Config) WithSelection(selection string) (Config, error) {

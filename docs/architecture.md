@@ -70,9 +70,9 @@ CLI and Runtime publish artifacts through `app.PublishArtifact`, which owns the 
 1. `internal/userprofile`: loads `~/.gg/USER.md` (created by `gg init`; missing file is fine, failures never block startup) and renders a compact "who you are" block: name/call name, timezone, language, notes.
 2. `internal/memory`: ensures `~/.gg/memory/`, migrates a legacy `~/.gg/memory.md` into `memory/MEMORY.md` (legacy file renamed to `memory.md.bak`, never overwritten when curated content already exists), prunes expired daily logs, and snapshots prompt content.
 
-System prompt assembly order (after the coding instructions): user profile, curated memory (`MEMORY.md`), today's daily-log tail (`YYYY-MM-DD.md`), then project instructions (AGENTS.md) and skills. Tool surface: `memory_add` accepts `scope=general|daily|person:<name>|group:<name>` (default general); `memory_search` does case-insensitive keyword search across scopes and returns up to 10 `path:line: snippet` hits. Both are hidden when memory is disabled.
+System prompt assembly order (after the selected profile's base instructions): user profile, curated memory (`MEMORY.md`), today's daily-log tail (`YYYY-MM-DD.md`), then project instructions (AGENTS.md) and skills. Tool surface: `memory_add` accepts `scope=general|daily|person:<name>|group:<name>` (default general); `memory_search` does case-insensitive keyword search across scopes and returns up to 10 `path:line: snippet` hits. Both are hidden when memory is disabled.
 
-For consequence routing (asserted E/M/U require a human, including under `--yolo` / `--allow-all`), memory-write gates, and approval coverage, see [Personal Agent (P1)](personal-agent.md).
+CLI `--profile personal` sets `Config.Profile`, selecting a personal identity, `on-request` approval by default, rejection of yolo, and Gmail drafts by default. Unset/empty selects coding; daemon transports keep coding defaults. Both profiles share consequence routing, memory-write gates, and standing grants: asserted E/M/U require a human or matching grant, including under coding `--yolo` / scheduled `--allow-all`. See [Personal Agent (P3)](personal-agent.md).
 
 ## Scheduler (cron / once jobs)
 

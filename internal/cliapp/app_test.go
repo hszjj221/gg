@@ -1018,6 +1018,55 @@ func TestRunApprovalOnRequestRequiresTerminal(t *testing.T) {
 	}
 }
 
+func TestRunProfiles(t *testing.T) {
+	for _, tc := range []struct {
+		name, profile string
+		flags         []string
+		terminal      bool
+		code          int
+	}{
+		{name: "default coding", profile: "coding"},
+		{name: "personal requires terminal", flags: []string{"--profile", "personal"}, code: 2},
+		{name: "personal terminal", profile: "personal", flags: []string{"--profile", "personal"}, terminal: true},
+		{name: "personal auto override", profile: "personal", flags: []string{"--profile", "personal", "--approval", "auto"}},
+		{name: "personal never override", profile: "personal", flags: []string{"--profile", "personal", "--approval", "never"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			var stdout, stderr strings.Builder
+			provider := &appFakeProvider{}
+			argv := append([]string{"-p", "--no-session", "--no-skills"}, tc.flags...)
+			code := Run(context.Background(), append(argv, "hello"), Options{
+				CWD: dir, HomeDir: filepath.Join(dir, "home"),
+				Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: &stderr,
+				IsTerminal: func(any) bool { return tc.terminal },
+				ProviderFactory: func(cfg config.Config) agent.Provider {
+					if cfg.Profile != tc.profile {
+						t.Fatalf("runtime profile=%q, want %q", cfg.Profile, tc.profile)
+					}
+					return provider
+				},
+			})
+			if code != tc.code {
+				t.Fatalf("code=%d, want %d; stderr=%s", code, tc.code, stderr.String())
+			}
+			if tc.code != 0 {
+				if len(provider.requests) != 0 || !strings.Contains(stderr.String(), "on-request requires a terminal") {
+					t.Fatalf("must fail before provider request: %s", stderr.String())
+				}
+				return
+			}
+			identity := "You are gg, a coding agent"
+			if tc.profile == "personal" {
+				identity = "You are gg, the user's personal assistant"
+			}
+			if len(provider.requests) != 1 || !strings.Contains(provider.requests[0].Messages[0].Content, identity) {
+				t.Fatalf("wrong base identity in provider requests: %+v", provider.requests)
+			}
+		})
+	}
+}
+
 func TestRunApprovalOnRequestAllowsToolInPromptMode(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "marker.txt")

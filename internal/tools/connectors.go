@@ -93,23 +93,31 @@ func (t GmailReadTool) Execute(ctx context.Context, raw json.RawMessage) ToolRes
 }
 
 // GmailSendTool lets the agent send an email or save a draft. Requires approval.
-type GmailSendTool struct{ client *google.Client }
+type GmailSendTool struct {
+	client *google.Client
+	// DraftByDefault makes omitted as_draft create a draft. Explicit false still sends.
+	DraftByDefault bool
+}
 
-func NewGmailSendTool(client *google.Client) GmailSendTool { return GmailSendTool{client} }
+func NewGmailSendTool(client *google.Client) GmailSendTool { return GmailSendTool{client: client} }
 
 func (t GmailSendTool) Name() string { return "gmail_send" }
 
 func (t GmailSendTool) Definition() agent.ToolDefinition {
+	preference := "Defaults to sending."
+	if t.DraftByDefault {
+		preference = "Defaults to saving a draft without sending; set as_draft=false explicitly to request sending."
+	}
 	return agent.ToolDefinition{
 		Name:        "gmail_send",
-		Description: "Send a plain-text email from the user's Gmail account, or set as_draft to save a draft without sending. Defaults to sending. Requires user approval.",
+		Description: "Send a plain-text email from the user's Gmail account, or set as_draft to save a draft without sending. " + preference + " Requires user approval or a matching standing grant for either mode.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"to":       map[string]any{"type": "string", "description": "Recipient email address."},
 				"subject":  map[string]any{"type": "string", "description": "Email subject."},
 				"body":     map[string]any{"type": "string", "description": "Plain-text body."},
-				"as_draft": map[string]any{"type": "boolean", "default": false, "description": "Save a Gmail draft without sending (requires gmail.compose scope)."},
+				"as_draft": map[string]any{"type": "boolean", "default": t.DraftByDefault, "description": "Save a Gmail draft without sending (requires gmail.compose scope)."},
 			},
 			"required": []string{"to", "subject", "body"},
 		},
@@ -123,10 +131,18 @@ type gmailSendInput struct {
 	AsDraft bool   `json:"as_draft"`
 }
 
-func (t GmailSendTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, error) {
-	var input gmailSendInput
+func (t GmailSendTool) parseInput(raw json.RawMessage) (gmailSendInput, error) {
+	input := gmailSendInput{AsDraft: t.DraftByDefault}
 	if err := json.Unmarshal(raw, &input); err != nil {
-		return agent.ApprovalRequest{}, fmt.Errorf("invalid gmail_send arguments: %w", err)
+		return input, fmt.Errorf("invalid gmail_send arguments: %w", err)
+	}
+	return input, nil
+}
+
+func (t GmailSendTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, error) {
+	input, err := t.parseInput(raw)
+	if err != nil {
+		return agent.ApprovalRequest{}, err
 	}
 	action := "send email"
 	if input.AsDraft {
@@ -147,9 +163,9 @@ func (t GmailSendTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalReque
 }
 
 func (t GmailSendTool) Execute(ctx context.Context, raw json.RawMessage) ToolResult {
-	var input gmailSendInput
-	if err := json.Unmarshal(raw, &input); err != nil {
-		return errorResult(fmt.Errorf("invalid gmail_send arguments: %w", err))
+	input, err := t.parseInput(raw)
+	if err != nil {
+		return errorResult(err)
 	}
 	if input.To == "" || input.Subject == "" {
 		return errorResult(fmt.Errorf("to and subject are required"))
