@@ -192,4 +192,4 @@ The tables use R/E/M/U as shorthand for the dimensions above. They describe effe
 
 Current runtime policy is documented in the architecture's [Security model](architecture.md#security-model) and [Approval modes](architecture.md#approval-modes). P1 extends #53's fail-closed nil-approver handling for `dangerous`/`confirm` risks to asserted E/M/U consequences, while retaining existing Risk behavior for unclassified tools.
 
-P1 shipped the fields, routing, memory-write gate, and optional Gmail draft switch described above. P2 ships explicit standing authorization with durable storage, CLI management, shared matching, and an allow audit. P3 will separate identity and default policy while retaining the shared runtime.
+P1 shipped the fields, routing, memory-write gate, and optional Gmail draft switch described above. P2 ships explicit standing authorization with durable storage, CLI management, shared matching, and an allow audit. P3 ships the personal profile selector, personal base identity, stricter personal defaults, and Gmail draft preference while retaining the shared runtime. P4 proactivity remains future work.
