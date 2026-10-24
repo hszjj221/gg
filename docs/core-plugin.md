@@ -2,7 +2,7 @@
 
 [中文](core-plugin.zh-CN.md)
 
-This is the C0 architecture decision for the approved Core+plugin plan, based on `main@932e14e`. C0 changes documentation only: it introduces no registry or SPI implementation, moves no packages, and changes no tool set, profile default, approval policy, or runtime behavior. The [architecture overview](architecture.md) describes the running system; the phases below describe future work.
+This records the approved Core+plugin plan: the C0 architecture decision (based on `main@932e14e`) and C1 implementation (based on `main@e77769a`). C0 changed documentation only. C1 adds the in-tree Registry and Tool/Connector SPI with Google as the statically linked pilot, preserving tool sets, profile defaults, approval policy, and runtime behavior. The [architecture overview](architecture.md) describes the running system; C2 and later phases below remain future work.
 
 ## Goal and boundaries
 
@@ -10,14 +10,14 @@ Keep one Go Core with a stable service provider interface (SPI). First-party plu
 
 The purpose is to make capability ownership and assembly explicit without weakening the coding product. A plugin boundary does not require a separate process, a separately installed package, or a smaller binary. Static linking gives first-party capabilities the same build, review, and release lifecycle as Core; profile filtering later reduces the enabled capability surface, not the linked binary size.
 
-First-party candidates for later phases are:
+First-party implementation status and later candidates are:
 
-- **Connectors**, with `internal/connector/google` preferred as the C1 pilot.
+- **Connectors**: Google is the C1 pilot, registered through the SPI; OAuth/API code remains in `internal/connector/google`.
 - **Browser** and **media** capability implementations.
 - **Telegram channel** and **proactive delivery policy** implementations.
 - **Artifact/library**, optionally later if reducing binary size becomes a concrete requirement. An enable list alone cannot remove their linked code.
 
-C0 lists candidates; it does not authorize a bulk directory move or define the final SPI types.
+C0 listed candidates; C1 keeps the SPI in `app` to avoid moving shared host dependencies. Neither phase authorizes a bulk directory move.
 
 ## Core invariants
 
@@ -62,11 +62,11 @@ This table records the comparison used in the approved plan. It guides gg's owne
 
 **dsh lesson:** a profile is an ordered composition of capability layers, expressed as enable lists and defaults. It is not a second runtime. Core still resolves the composition, runs the agent, and enforces authorization.
 
-## SPI and package lifecycle direction
+## SPI and package lifecycle
 
-The current seam is [`app.ToolProvider`](../internal/app/toolregistry.go): a named tool builder, an optional platform availability check, deterministic registration order, and host/test injection through `Options.ToolProviders`. [`conversationTools`](../internal/app/toolset.go) owns per-conversation resources and cleanup; definitions and execution already share this construction path. This is an implementation seam, not yet the stable plugin SPI.
+C1 defines the source-level SPI in [`app/plugin.go`](../internal/app/plugin.go), retaining `ToolProvider` and `ToolContext` under `app` as the smaller boundary. `NewRegistry` snapshots providers in registration order; `Registry.Build` and `Registry.Capabilities` share the existing `Available` platform gates. Empty names remain unadvertised core providers, and the advertised capability names and order are unchanged. `Options.ToolProviders` still supports host/test injection: nil selects the built-ins, while a non-nil empty slice disables all tools, including in forked conversations.
 
-C1 should derive a Registry and Tool/Connector SPI from that behavior. Exact package paths, exported Go types, and any version-negotiation mechanism belong to the C1 design and implementation review. The intended ownership contract is:
+`ConnectorProvider` names a token-backed connector and builds its tools from the host context, existing store, and current token. `ConnectorTools` registers these providers under the existing `connector` capability. Missing tokens remain expected absence; store/token failures propagate to the existing degradation reporting. Tool provider failures still discard that provider's tools for the turn, while successful builds clear previous failures. [`conversationTools`](../internal/app/toolset.go) retains logging, sanitized degradation reporting, and per-conversation cleanup; discovery and execution use the same Registry. Registration remains trusted Go composition, with no new metadata validation or version-negotiation protocol. The ownership contract is:
 
 | Lifecycle area | Core / host | First-party implementation |
 | --- | --- | --- |
@@ -77,17 +77,17 @@ C1 should derive a Registry and Tool/Connector SPI from that behavior. Exact pac
 | Resource lifetime | Own session/daemon lifetimes and call cleanup on shutdown or retirement. | Release owned clients, connections, and other resources through the host lifecycle. |
 | Persistence and migration | Retain shared storage contracts and coordinate compatible startup/migrations. | Own capability-specific data and migration logic within that lifecycle; preserve existing paths and permissions during migration. |
 
-For the preferred Google pilot, connector API operations and their tool wrappers are the candidate implementation. Core retains the Connector SPI, config/profile selection, authorization, and common lifecycle rules. OAuth scopes and tokens do not substitute for gg approval or standing grants. C1 must preserve tool names, schemas, order, defaults, token paths, refresh behavior, and error/cleanup semantics; extracting an interface alone is not permission to change behavior.
+The [`Google pilot registration`](../internal/app/googleplugin.go) now uses this Connector SPI. It preserves scope-based tool selection and the existing `gmail_search`, `gmail_read`, `gmail_send`, `calendar_agenda`, `calendar_create` order. API/OAuth and tool wrappers stay in their existing packages, preserving `~/.gg/connectors/google.json`, permissions, refresh behavior, schemas, approval descriptions, coding send defaults, and personal draft defaults. No new background resource or cleanup hook is introduced; browser/MCP resources retain the host's existing cleanup. Core retains config/profile selection, authorization, and common lifecycle rules. OAuth scopes and tokens do not substitute for gg approval or standing grants.
 
 First-party packages ship and migrate with a gg release. There is no separate installer, npm dependency resolver, dynamic Go plugin loader, or hot-reload lifecycle in this plan. The stable SPI is a maintained source-level contract, not a promised binary ABI or third-party in-process loading API.
 
 ## Profiles and coding compatibility
 
-At `932e14e`, [`config.ParseProfile`](../internal/config/config.go) accepts `coding` and `personal`; unset or empty selects coding. The [existing personal profile](personal-agent.md#selecting-a-profile-p3) changes CLI identity and defaults, including approval mode and Gmail draft preference. It does **not** yet implement profile enable-list filtering of the tool/connector registry. Daemon, Web/Electron, Telegram, and daemon-scheduled turns retain their documented coding profile behavior.
+Through C1, [`config.ParseProfile`](../internal/config/config.go) accepts `coding` and `personal`; unset or empty selects coding. The [existing personal profile](personal-agent.md#selecting-a-profile-p3) changes CLI identity and defaults, including approval mode and Gmail draft preference. It does **not** yet implement profile enable-list filtering of the tool/connector registry. Daemon, Web/Electron, Telegram, and daemon-scheduled turns retain their documented coding profile behavior.
 
 C2 will make `--profile` select the enabled tool/connector set as well as defaults. Core will resolve an ordered capability list, apply prerequisites/platform checks, and use the resulting set consistently for definitions, execution, and capability reporting. Disabled providers should not be built or open their resources. Composition order must be deterministic; a profile cannot install code, create authorization, override a Core invariant, or introduce its own agent loop.
 
-The unset/empty and explicit `coding` paths must preserve the existing coding tools, order, defaults, and approval behavior. Personal filtering and any additional selector surfaces require explicit C2 scope and checks; C0 promises no new CLI flags, config syntax, or daemon selector. Personal's existing stricter defaults remain in place. Profile enablement never implies authorization to use an enabled tool.
+The unset/empty and explicit `coding` paths must preserve the existing coding tools, order, defaults, and approval behavior. Personal filtering and any additional selector surfaces require explicit C2 scope and checks; C1 adds no CLI flags, config syntax, or daemon selector. Personal's existing stricter defaults remain in place. Profile enablement never implies authorization to use an enabled tool.
 
 ## Package ownership inventory at `main@932e14e`
 
@@ -129,15 +129,15 @@ The following inventory covers all **29 top-level directories** under `internal/
 | `internal/userprofile` | Core | `USER.md` parsing, rendering, and storage contract. |
 | `internal/workspace` | Core | Workspace identity, roots, registry, and project instruction lookup. |
 
-The baseline is deliberately preserved: `app` and `tools` currently import several candidate implementations directly. The inventory assigns future ownership; it does not claim those dependencies have already been inverted.
+This is the C0 baseline inventory, not a directory-move checklist. In C1, the Google registration adapter uses the Connector SPI within `app`; `app` and `tools` still import candidate implementations directly. Other candidate dependencies have not been inverted.
 
 ## Phased delivery and acceptance
 
 | Phase | Scope | Acceptance boundary |
 | --- | --- | --- |
-| **C0 — documentation** | This decision, Chinese mirror, and links from both architecture overviews. | Documentation only; all 29 packages classified; no runtime/SPI code or coding-default changes. Run `go vet ./...` and `go test ./...` and verify the diff contains only the four intended docs. |
-| **C1 — Registry + Tool/Connector SPI** | Introduce the shared contracts and migrate existing registration with zero behavior change. Include one first-party example, preferably Google, still statically linked. | Preserve tool names/schemas/order, discovery, defaults, prerequisite/degradation behavior, approval/standing-auth/E/M/U/R, storage paths, and resource cleanup. Existing tests and focused SPI/pilot checks pass. |
-| **C2 — profile enable lists** | Make `--profile` actually trim enabled tools/connectors through Core composition. | Definitions, execution, and advertised capabilities agree; disabled providers are not built. Unset/explicit coding retains its existing surface and defaults. Verify profile filtering and unchanged authorization. |
+| **C0 — documentation (landed)** | This decision, Chinese mirror, and links from both architecture overviews. | Documentation only; all 29 packages classified; no runtime/SPI code or coding-default changes. Run `go vet ./...` and `go test ./...` and verify the diff contains only the four intended docs. |
+| **C1 — Registry + Tool/Connector SPI (landed)** | `app.Registry`, Tool/Connector contracts, shared build/discovery assembly, and the statically linked Google registration pilot. No profile enable-list filtering. | Preserve tool names/schemas/order, discovery, defaults, prerequisite/degradation behavior, approval/standing-auth/E/M/U/R, storage paths, and resource cleanup. Existing tests and focused SPI/pilot checks pass. |
+| **C2 — profile enable lists (deferred)** | Make `--profile` actually trim enabled tools/connectors through Core composition. | Definitions, execution, and advertised capabilities agree; disabled providers are not built. Unset/explicit coding retains its existing surface and defaults. Verify profile filtering and unchanged authorization. |
 | **C3 — expand in-tree splits** | Extend the proven seam to browser/media and channel/policy implementations such as Telegram/proactive. Artifact/library remain optional later work. | Incremental migrations, green tests, stable Core ownership, and preserved channel supervision, approvals, and coding behavior. No big-bang `internal/` move. |
 | **C4 — later external ecosystem** | Third-party remains MCP-first. Reassess distribution/market needs only against a concrete requirement. | No Bun host, npm market, hot reload, or new in-process third-party runtime is authorized here; any such proposal requires a new project decision. |
 
@@ -149,6 +149,6 @@ C1 establishes behavior-preserving boundaries before C2 changes selection. C3 ex
 - No rewrite of Core in Node, Bun plugin host, npm market, or hot reload.
 - No big-bang relocation of `internal/`, runtime extraction in C0, or premature binary-size claim.
 - No weakening of coding defaults, approval, standing-auth, or consequence semantics. Plugins cannot bypass these gates.
-- No force-push. C0 is committed on `feat/core-plugin-c0`; the coordinator handles pushing and PR creation.
+- No force-push or self-push. C1 is committed on `feat/core-plugin-c1`; the coordinator handles pushing and PR creation.
 
-For C0, the review evidence is the four-file documentation diff plus `go vet ./...` and `go test ./...`. Those Go checks catch accidental build/test drift; they do not validate an unimplemented SPI. The PR body records what changed, why, tradeoffs, and the actual verification results.
+For C1, review evidence includes Registry/host injection checks, coding tool order and definition parity, Google scope changes/disconnect behavior, and the existing approval, connector refresh, and cleanup tests, plus `go vet ./...` and `go test ./...`. The PR body records what changed, why, tradeoffs, and the actual verification results. Profile enable-list filtering is not implemented; it remains C2.

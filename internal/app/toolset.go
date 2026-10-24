@@ -16,7 +16,7 @@ import (
 // conversationTools owns capability construction and all per-conversation
 // execution resources. Metadata discovery shares this owner and its cleanup.
 type conversationTools struct {
-	providers   []ToolProvider
+	registry    Registry
 	profile     userprofile.Profile
 	skillSet    skills.Set
 	memStore    memory.StoreAPI
@@ -39,13 +39,13 @@ func newConversationTools(options Options) *conversationTools {
 	if degraded == nil {
 		degraded = &DegradedRegistry{}
 	}
-	providers := options.ToolProviders
-	if providers == nil {
-		providers = toolProviders
+	registry := toolRegistry
+	if options.ToolProviders != nil {
+		registry = NewRegistry(options.ToolProviders...)
 	}
 	return &conversationTools{
-		providers: append([]ToolProvider{}, providers...),
-		profile:   options.Profile, skillSet: options.Skills, memStore: memStore,
+		registry: registry,
+		profile:  options.Profile, skillSet: options.Skills, memStore: memStore,
 		logger: logger, degraded: degraded,
 		browserPool: tools.NewBrowserSessionPool(), toolMemo: &ToolMemo{},
 	}
@@ -78,33 +78,17 @@ func (s *conversationTools) Build(ctx context.Context, cfg config.Config, provid
 		Memoized:    s.toolMemo,
 		Log:         logger,
 	}
-	var out []agent.Tool
-	for _, p := range s.providers {
-		if p.Available != nil && !p.Available() {
-			continue
-		}
-		built, err := p.Build(ctx, tc)
-		name := p.Name
-		if name == "" {
-			name = "core"
-		}
+	return s.registry.Build(ctx, tc, func(name string, err error) {
 		if err != nil {
-			// A failing provider degrades to absent for this turn; the
-			// rest of the toolset keeps working. The failure is logged
-			// in full and recorded (sanitized) so a silently missing
-			// capability is always explainable (daemon log + system.info
-			// degradedProviders).
+			// Keep full errors in the log and sanitized reasons in system.info.
 			logger.Warn("tool provider build failed; capability degraded to absent",
 				"provider", name, "error", err)
 			s.degraded.Report(name, sanitizeProviderReason(cfg.HomeDir, err.Error()), err)
-			continue
+			return
 		}
-		// A successful build clears a previous failure, even one recorded
-		// by another session sharing the registry.
+		// Success clears failures recorded by this or another session.
 		s.degraded.Report(name, "", nil)
-		out = append(out, built...)
-	}
-	return out
+	})
 }
 
 // Close releases resources held by the Service, including its shared
