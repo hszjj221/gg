@@ -221,6 +221,9 @@ func (w *Runtime) workspaceForSession(store *session.Store, loaded session.Loade
 // (Telegram chat mapping, scheduler jobs).
 func (w *Runtime) WorkspaceRegistry() *workspace.Registry { return w.registry }
 
+// ToolCapabilities reports the same profile selection used by conversation tools.
+func (w *Runtime) ToolCapabilities() []string { return ToolCapabilities(w.cfg.Profile) }
+
 // DefaultWorkspace returns the workspace sessions land in when no
 // workspace is specified.
 func (w *Runtime) DefaultWorkspace() workspace.Workspace { return w.defaultWorkspace }

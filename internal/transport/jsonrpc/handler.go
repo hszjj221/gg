@@ -26,10 +26,9 @@ const Version = "2.0"
 // default policy when no approver is available.
 const ProtocolVersion = "1.4"
 
-// capabilities lists transport-level features. Tool capabilities are
-// derived from app.ToolCapabilities so the advertised set cannot drift
-// from the tools actually registered.
-var capabilities = append([]string{
+// capabilities lists transport-level features. system.info appends the runtime's
+// profile-filtered tool capabilities without building providers.
+var capabilities = []string{
 	"run.approval",
 	"run.event-replay",
 	"run.reattach",
@@ -37,7 +36,7 @@ var capabilities = append([]string{
 	"session.clone",
 	"session.fork",
 	"session.tree",
-}, app.ToolCapabilities()...)
+}
 
 type Request struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -116,7 +115,7 @@ func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) 
 	case "system.info":
 		return SystemInfo{
 			ProtocolVersion:   ProtocolVersion,
-			Capabilities:      append([]string(nil), capabilities...),
+			Capabilities:      append(append([]string(nil), capabilities...), h.rt.ToolCapabilities()...),
 			DegradedProviders: h.rt.DegradedProviders(),
 		}, nil
 	case "session.list":

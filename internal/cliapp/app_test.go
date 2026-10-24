@@ -1063,6 +1063,17 @@ func TestRunProfiles(t *testing.T) {
 			if len(provider.requests) != 1 || !strings.Contains(provider.requests[0].Messages[0].Content, identity) {
 				t.Fatalf("wrong base identity in provider requests: %+v", provider.requests)
 			}
+			if tc.profile == config.ProfilePersonal {
+				for _, def := range provider.requests[0].Tools {
+					switch def.Name {
+					case "image_generate", "tts", "stt", "computer_info", "process_list", "process_kill", "open", "notify", "clipboard_read", "clipboard_write":
+						t.Errorf("personal CLI advertised disabled tool %q", def.Name)
+					}
+					if strings.HasPrefix(def.Name, "mcp_") {
+						t.Errorf("personal CLI advertised disabled MCP tool %q", def.Name)
+					}
+				}
+			}
 		})
 	}
 }

@@ -133,7 +133,8 @@ type GoogleConnectorConfig struct {
 }
 
 type Config struct {
-	// Profile selects base identity and tool defaults; empty retains coding behavior.
+	// Profile selects base identity, enabled capabilities, and tool defaults;
+	// empty retains coding behavior.
 	Profile string
 	APIKey  string
 	BaseURL string

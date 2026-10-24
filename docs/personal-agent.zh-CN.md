@@ -23,6 +23,8 @@ gg --profile personal -p '准备一封回复草稿'
 
 `--profile` 仅接受 `coding` 和 `personal`；未设置或空值均为 `coding`。选择仅作用于本次调用，包括恢复会话。P3 不增加持久化配置默认值或第二个二进制。
 
+C2 还会过滤启用能力：personal 保留 core 工具、memory、KB、artifact、Google connector 和 browser，不启用 media、computer 与 MCP provider。Coding 保留既有完整集合。前置条件与宿主注入行为见[有序 profile 启用列表](core-plugin.zh-CN.md#profile-与-coding-兼容性)。下方草稿与审批默认值不变；启用能力不会授予授权。
+
 | 默认值／策略 | Coding | Personal |
 | --- | --- | --- |
 | 基础身份 | 在用户项目中工作的编码代理 | 用户的个人助理 |

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -70,6 +71,23 @@ func TestHandlerReportsProtocolCapabilities(t *testing.T) {
 	info, ok := response.Result.(SystemInfo)
 	if !ok || info.ProtocolVersion != ProtocolVersion || len(info.Capabilities) == 0 {
 		t.Fatalf("unexpected system info: %#v", response.Result)
+	}
+}
+
+func TestHandlerReportsProfileToolCapabilities(t *testing.T) {
+	for _, profile := range []string{"", config.ProfileCoding, config.ProfilePersonal} {
+		t.Run(profile, func(t *testing.T) {
+			rt := testWorkspaceWithProfile(t, fakeProvider{}, profile)
+			response := NewHandler(rt).Handle(context.Background(), Request{Method: "system.info"})
+			if response.Error != nil {
+				t.Fatal(response.Error)
+			}
+			info := response.Result.(SystemInfo)
+			want := append(append([]string(nil), capabilities...), app.ToolCapabilities(profile)...)
+			if !reflect.DeepEqual(info.Capabilities, want) {
+				t.Fatalf("capabilities=%v, want %v", info.Capabilities, want)
+			}
+		})
 	}
 }
 
@@ -157,8 +175,13 @@ func testWorkspace(t *testing.T) *app.Runtime {
 
 func testWorkspaceWithProvider(t *testing.T, provider agent.Provider) *app.Runtime {
 	t.Helper()
+	return testWorkspaceWithProfile(t, provider, "")
+}
+
+func testWorkspaceWithProfile(t *testing.T, provider agent.Provider, profile string) *app.Runtime {
+	t.Helper()
 	root := t.TempDir()
-	cfg := config.Config{CWD: testWorkspaceDir(t, root, "project"), Selection: "test:model"}
+	cfg := config.Config{Profile: profile, CWD: testWorkspaceDir(t, root, "project"), Selection: "test:model"}
 	rt, err := app.NewRuntime(app.RuntimeOptions{
 		Config:            cfg,
 		ProviderFactory:   func(config.Config) agent.Provider { return provider },

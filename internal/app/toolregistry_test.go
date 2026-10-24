@@ -35,10 +35,7 @@ func TestConnectorProfileDraftDefault(t *testing.T) {
 			if err := store.Save(google.Name, connector.Token{AccessToken: "fake", RefreshToken: "fake-refresh", Scopes: google.Scopes}); err != nil {
 				t.Fatal(err)
 			}
-			built, err := ConnectorTools(googleConnector()).Build(context.Background(), ToolContext{Config: cfg})
-			if err != nil {
-				t.Fatal(err)
-			}
+			built := NewRegistry(ConnectorTools(googleConnector())).Build(context.Background(), ToolContext{Config: cfg}, nil)
 			for _, tool := range built {
 				if tool.Name() != "gmail_send" {
 					continue
@@ -52,6 +49,10 @@ func TestConnectorProfileDraftDefault(t *testing.T) {
 				if err != nil || strings.Contains(req.Summary, "not sent") != wantDraft {
 					t.Fatalf("profile=%q approval=%+v err=%v", profile, req, err)
 				}
+				decision, err := (agent.DefaultApprover{}).Approve(context.Background(), req)
+				if err != nil || decision.Allow || !req.RequiresHumanConfirm() {
+					t.Fatalf("profile=%q bypassed approval: %+v, %v", profile, decision, err)
+				}
 				return
 			}
 			t.Fatal("gmail_send not registered")
@@ -60,7 +61,7 @@ func TestConnectorProfileDraftDefault(t *testing.T) {
 }
 
 func TestToolCapabilitiesDerivedFromRegistry(t *testing.T) {
-	got := ToolCapabilities()
+	got := ToolCapabilities("")
 	// The computer capability is only advertised where it has a backend.
 	want := []string{"memory", "kb", "artifact", "connector", "media", "browser", "computer", "mcp"}
 	if !computerToolsSupported() {
@@ -68,6 +69,12 @@ func TestToolCapabilitiesDerivedFromRegistry(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ToolCapabilities() = %v, want %v", got, want)
+	}
+	if got := ToolCapabilities(config.ProfileCoding); !reflect.DeepEqual(got, want) {
+		t.Fatalf("explicit coding capabilities=%v, want %v", got, want)
+	}
+	if got, want := ToolCapabilities(config.ProfilePersonal), []string{"memory", "kb", "artifact", "connector", "browser"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("personal capabilities=%v, want %v", got, want)
 	}
 	// Every named provider must appear exactly once.
 	seen := map[string]int{}
