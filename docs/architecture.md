@@ -2,7 +2,7 @@
 
 `gg` keeps product behavior in a reusable Go core and treats every interface as an adapter. The CLI, Web app, and Electron client therefore share session semantics, concurrency rules, approval handling, and tool execution.
 
-The [Core + first-party plugin plan](core-plugin.md) records the C0 ownership decision: retain Go Core and its approval/storage/protocol invariants, introduce a stable SPI in later phases, keep first-party plugins statically linked, and use profiles for capability enable lists. C0 is documentation only; the runtime and coding defaults described here remain unchanged, and third-party capabilities remain MCP-first.
+The [Core + first-party plugin plan](core-plugin.md) records the landed C0–C3 phases: ownership documentation (C0), Registry and Tool/Connector SPI with the Google pilot (C1), profile enable lists (C2), and in-tree browser/media adapters plus Telegram/proactive factories (C3). Go Core retains its approval/storage/protocol invariants and coding defaults; first-party plugins remain statically linked, and third-party capabilities remain MCP-first. Generalized Channel/Policy SPI and the C4 external ecosystem remain deferred and require a new project decision.
 
 ```mermaid
 flowchart LR

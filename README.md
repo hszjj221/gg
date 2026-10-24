@@ -120,7 +120,7 @@ Package boundaries and the JSON-RPC surface: [architecture](docs/architecture.md
 
 ## Security
 
-Run `gg` only in workspaces where you are willing to grant the model those tools. `~/.gg/config.json` may contain API keys. When memory is enabled, profile and memory files are sent to the selected provider, and `memory_add` writes without an approval prompt.
+Run `gg` only in workspaces where you are willing to grant the model those tools. `~/.gg/config.json` may contain API keys. When memory is enabled, profile and memory files are sent to the selected provider. `memory_add` goes through the normal approval gate; `--yolo` or approval mode `never` skips the prompt.
 
 Report vulnerabilities privately. See [SECURITY.md](SECURITY.md).
 
