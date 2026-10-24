@@ -105,6 +105,9 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	if parsed.Command == cli.CommandMemory {
 		return runMemoryCommand(cfg, parsed.MemoryArgs, stdout, stderr)
 	}
+	if parsed.Command == cli.CommandStandingAuth {
+		return runStandingAuthCommand(cfg, parsed.StandingAuthArgs, stdout, stderr)
+	}
 	if parsed.Command == cli.CommandJob {
 		options.NoSkills = parsed.NoSkills
 		return runJobCommand(ctx, cfg, options, parsed.JobArgs, stdout, stderr)

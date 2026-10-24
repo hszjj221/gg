@@ -45,6 +45,8 @@ type Args struct {
 	MemoryArgs []string
 	// JobArgs carries the subcommand for `gg job ...`.
 	JobArgs []string
+	// StandingAuthArgs carries `gg standing-auth list|add|revoke`.
+	StandingAuthArgs []string
 	// ArtifactArgs carries the subcommand for `gg artifact ...`.
 	ArtifactArgs []string
 	// LibraryArgs carries the subcommand for `gg library ...`.
@@ -67,6 +69,7 @@ const (
 	CommandInit         Command = "init"
 	CommandMemory       Command = "memory"
 	CommandJob          Command = "job"
+	CommandStandingAuth Command = "standing-auth"
 	CommandArtifact     Command = "artifact"
 	CommandLibrary      Command = "library"
 	CommandConnect      Command = "connect"
@@ -187,6 +190,13 @@ func parseCommand(args *Args, rest []string) error {
 			}
 			args.Command = CommandMemory
 			args.MemoryArgs = rest[1:]
+		} else {
+			args.Prompt = strings.Join(rest, " ")
+		}
+	case "standing-auth":
+		if len(rest) == 1 || rest[1] == "list" || rest[1] == "add" || rest[1] == "revoke" {
+			args.Command = CommandStandingAuth
+			args.StandingAuthArgs = rest[1:]
 		} else {
 			args.Prompt = strings.Join(rest, " ")
 		}
@@ -393,6 +403,7 @@ Usage:
   gg init
   gg memory search <query>
   gg memory show [daily]
+  gg standing-auth list|add|revoke   manage explicit standing grants
   gg job add --cron "0 9 * * *" --name NAME PROMPT
   gg job list [--all]
   gg artifact list
@@ -440,6 +451,14 @@ Knowledge base (RAG):
   --embed-model <m>        embedding model (default: text-embedding-3-small)
   --embed-base-url <url>   embeddings base URL (default: GG_EMBED_BASE_URL or --base-url)
   --embed-api-key <key>    embeddings API key (default: GG_EMBED_API_KEY or --api-key)
+
+Standing authorization (~/.gg/standing-auth):
+  gg standing-auth list
+  gg standing-auth add --subject "gg on behalf of ACCOUNT" --tools TOOL --consequences E,U --arguments '{"to":"recipient@example.com"}' --ttl 24h --source-quote "EXPLICIT USER AUTHORIZATION"
+  gg standing-auth revoke <id>  revoke a grant (safe to repeat)
+  add also accepts --expires RFC3339 instead of --ttl, and optional --notes.
+  Exact argument limits and explicit effects (E,M,U or none) are required.
+  Standing grants never waive dangerous/confirm risks.
 
 Scheduled jobs (fire while the ggd daemon is alive):
   gg job add --cron "0 9 * * *" --name NAME [--timezone TZ] [--allow-all] [--timeout 10m] PROMPT

@@ -1,8 +1,8 @@
-# Personal Agent：后果属性路由（P1）
+# Personal Agent：后果属性路由与常驻授权（P2）
 
 [English](personal-agent.md) | 简体中文
 
-P0 定义了后果语言与审批基线。P1 在共享运行时增加后果元数据和路由，拦截持久记忆写入，并提供可选的 Gmail 草稿路径。常驻授权（P2）及独立个人身份／默认策略（P3）仍属于后续工作。
+P0 定义了后果语言与审批基线。P1 在共享运行时增加后果元数据和路由，拦截持久记忆写入，并提供可选的 Gmail 草稿路径。P2 增加持久、显式的常驻授权、CLI 管理及现有审批策略之前的审计匹配。独立个人身份／默认策略（P3）仍属于后续工作。
 
 ## 个人代理与编码代理
 
@@ -31,6 +31,8 @@ P1 扩展现有的 `ApprovalDescriber` → `ApprovalRequest` → `Approver` 路�
 
 ## P1 运行时行为
 
+这些规则仍是常驻授权未匹配时的回退策略。
+
 [`agent.ApprovalRequest`](../internal/agent/types.go) 在 `Risk` / `RiskReason` 旁增加四个可选 `*bool` 字段：
 
 | 维度 | Go 字段 | JSON 键 |
@@ -50,7 +52,7 @@ P1 为 `gmail_send` 和 `calendar_create` 填写 E/U=true、M=false、R=false，
 
 `memory_add` 现在在共享 coding 运行时实现 `ApprovalDescriber`，因为 `SetupPersonal` 尚无个人专用 profile 开关。审批预览展示内容、scope 及请求的 workspace/global target（没有工作区上下文时均写入全局记忆）。`memory_search` 保持只读且不加审批。P3 可以将默认策略收窄到个人身份，而不移除 describer。
 
-`gmail_send` 接受可选 `as_draft`（默认 `false`，保留发送行为）。为 `true` 时创建真实 Gmail 草稿，返回**草稿 ID**，不发送；API 失败绝不回退到发送。预览和结果明确标注 “not sent”。草稿仍为 E/U=true，因为 Google 可见，且内容以用户身份创建在其邮箱内。草稿内容可以删除，但整个效果仍为 R=false，因为服务方痕迹无法在本地撤销。两种模式都必须人工确认。
+`gmail_send` 接受可选 `as_draft`（默认 `false`，保留发送行为）。为 `true` 时创建真实 Gmail 草稿，返回**草稿 ID**，不发送；API 失败绝不回退到发送。预览和结果明确标注 “not sent”。草稿仍为 E/U=true，因为 Google 可见，且内容以用户身份创建在其邮箱内。草稿内容可以删除，但整个效果仍为 R=false，因为服务方痕迹无法在本地撤销。两种模式都必须人工确认，或匹配显式常驻授权。
 
 创建草稿需要 `gmail.compose`，现已在原有 scope 之外加入新连接的授权请求。已有连接仍可发送；使用草稿前需通过 `gg connect google --force` 重新授权。缺少草稿 scope 会返回错误并提示重新连接。参见[连接器](connectors.zh-CN.md#安全边界)。
 
@@ -64,7 +66,54 @@ P1 为 `gmail_send` 和 `calendar_create` 填写 E/U=true、M=false、R=false，
 | **范围（Scope）** | 允许涉及哪些资源、目的地和效果，以及收件人、花费或允许的权限变更等限制。宽泛目标本身不是授权范围。 |
 | **有效期（TTL）** | 明确的有效时间窗口或到期时间。不能推导无限期授权，也不能复用已过期授权。 |
 
-`USER.md` 中的偏好、记忆中的习惯、OAuth 连接或上一次批准，本身都不构成常驻授权。P2 再实现常驻授权；P1 不创建常驻授权。
+`USER.md` 中的偏好、记忆中的习惯、OAuth 连接或上一次批准，本身都不构成常驻授权。P2 除上述三部分外，还要求用户授权的**明文原话**。“你看着办”“随便”“you figure it out”“do what you think is best”“whatever”“as you like”均被拒绝，包括出现在更长引文中的情况。缺少结构化字段，或只有目标、没有工具／资源／效果限制，都会在存储前报错。原话仅供记录，绝不由模型解释成许可。
+
+### 存储与 CLI
+
+[`internal/standingauth`](../internal/standingauth/) 将每条授权保存到 `~/.gg/standing-auth/<id>.json`，与其他 gg 状态一样通过 `Config.HomeDir` 定位。目录权限为 0700；授权文件及 `audit.jsonl` 为 0600。文件原子发布，CLI 与运行中的 daemon 无需重启即可共享授权。记录包含：
+
+| 字段 | 含义 |
+| --- | --- |
+| `id`、`createdAt` | 自动生成的稳定 ID 和 UTC 创建时间（有效期从此开始）。 |
+| `subject` | 由用户显式提供的字符串，说明 gg 是行动者，以及代表哪个用户／账户。 |
+| `scope.tools` | 非空、精确的工具名称白名单，不支持通配符。 |
+| `scope.consequences` | 显式允许的 E/M/U 效果；`[]` 表示均不允许。R 本身不授予权限。 |
+| `scope.arguments` | 非空 JSON 对象，精确限制顶层参数值，例如收件人与草稿模式。未列出的参数不受限制。 |
+| `expiresAt` | 必须提供未来的 RFC3339 到期时间，由 `--ttl` 计算或通过 `--expires` 指定。不默认无限期。 |
+| `sourceQuote`、`notes` | 必填的用户授权明文原话，以及可选备注。 |
+
+```sh
+gg standing-auth add \
+  --subject 'gg on behalf of alice@example.com' \
+  --tools gmail_send --consequences E,U \
+  --arguments '{"to":"bob@example.com","as_draft":true}' \
+  --ttl 24h \
+  --source-quote '在 24 小时内，允许 gg 代表 alice@example.com 创建仅发给 bob@example.com 的 Gmail 草稿，不得发送。'
+gg standing-auth list
+gg standing-auth revoke <id>
+```
+
+新增后输出 ID。绝对到期时间可用 `--expires '2026-12-01T09:00:00+08:00'` 替代 `--ttl`；`--notes` 可选。明确无 E/M/U 效果时使用 `--consequences none`。列表显示主体、结构化范围、到期时间／状态及原话，也保留已过期授权。撤销可以重复执行；阻止后续匹配，但不能撤销已经批准的调用。
+
+此例允许向精确收件人创建任意标题／正文的草稿，且**必须显式传入 `as_draft=true`**。缺少 `as_draft`、改为发送、换收件人或额外断言 M 后果，均不能匹配。可进一步精确限制内容参数。P2 不支持收件人模式、花费计数或自由文本范围解释。
+
+### 共享匹配与审计
+
+共享 turn executor 用 `standingauth.Approver` 包装调用方的审批器，覆盖交互 CLI、`--approval never`、`--yolo`、nil／默认审批器、手动／daemon 定时任务和 Telegram。只有走审批接口的工具参与；现有本地预批准豁免保持不变。未解析 `Config.HomeDir` 的嵌入方保留 P1 行为，不会从当前工作目录加载授权。
+
+包装器在询问或拒绝之前，按 ID 顺序读取当前授权。匹配要求仍在有效期内、工具名精确命中、E/M/U 元数据全部已知、每个明确后果都在范围内、每个受限参数均存在且 JSON 值精确相等。未知后果不匹配；不同授权的范围不会合并。`dangerous`、`confirm` 和未知 Risk 类别**始终不匹配**，即使存在 E/M/U 授权。P2 不提供豁免这些类别的开关，继续交由现有人工审批／拒绝路径处理。
+
+命中后先追加并同步审计记录，包含 `timestamp`、`grantId`、`toolName`、`summary` 和 `decision="allow-by-standing-grant"`，再无提示放行。存储损坏／读取失败或审计写入失败时，均失败关闭。审计记录的是授权决定，不代表执行成功。未命中时，原有 P1 审批器保持不变。
+
+授权适用于使用同一 gg home 的所有工作区和传输入口。`subject` 记录显式声明的行动者／账户，不引入 P3 身份选择器，也不验证 OAuth 账户。实际配置账户应与声明一致，切换时应撤销并重新授权。Telegram 的聊天白名单仍控制谁可以发起轮次；Telegram 保持 `UnattendedApprover{}`，不会变为 AllowAll。
+
+定时任务的 `--allow-all` 为兼容保留：仍按 P1 规则放行普通工具，但不能豁免明确的 E/M/U 或 dangerous/confirm 风险。在这些走审批接口的调用中，匹配常驻授权是无人值守时允许明确 E/M/U 的唯一授权路径；命中不需要 `--allow-all`。
+
+### TODO／后续工作
+
+- 手动任务（`internal/cliapp/job.go`）和 daemon 任务（`internal/daemon/scheduler.go`）仍传入 `AllowAll: job.AutoApprove`。替换普通工具的兼容路径需要明确迁移方案；P2 不做整体删除。
+- 未分类调用还需补齐后果元数据，授权才能匹配，包括 bash／MCP／媒体工具及浏览器导航中未知的 M/U。未实现 `ApprovalDescriber` 的工具仍在此拦截范围之外。
+- 账户／行动者验证、按传输入口划分授权主体、花费／使用量限制及更丰富的目的地限制留待后续。P3 身份与默认策略分离不在 P2 范围内。
 
 ## 当前审批清单
 
@@ -119,4 +168,4 @@ P0（#54）之后的 P1 清单，对照了[内置工具实现](../internal/tools
 
 当前运行时策略见架构文档的[安全模型](architecture.zh-CN.md#安全模型)和[审批模式](architecture.zh-CN.md#审批模式)。P1 将 #53 对 `dangerous`/`confirm` 风险的 nil approver 失败关闭处理扩展到明确的 E/M/U 后果，同时保留未分类工具现有的 Risk 行为。
 
-P1 已交付上述字段、路由、记忆写入审批和可选 Gmail 草稿开关。P2 增加显式常驻授权。P3 在共享运行时之上分叉身份与默认策略。
+P1 已交付上述字段、路由、记忆写入审批和可选 Gmail 草稿开关。P2 交付显式常驻授权的持久存储、CLI 管理、共享匹配与放行审计。P3 在共享运行时之上分叉身份与默认策略。
