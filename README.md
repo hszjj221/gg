@@ -96,7 +96,7 @@ gg -p "List the files in this project"
 
 Sessions, provider config, `AGENTS.md`, skills, memory, and the context budget are in the [usage reference](docs/usage.md).
 
-For a separate personal assistant face, use `gg --profile personal`: stricter approval defaults and Gmail drafts on the shared runtime. Try `gg --profile personal proactive demo` for fake local digests and approval checks without credentials. The default remains coding. See [Personal Agent (P4 first slice)](docs/personal-agent.md).
+For a separate personal assistant face, use `gg --profile personal`: stricter approval defaults, Gmail drafts, and a smaller [capability enable list](docs/core-plugin.md#profiles-and-coding-compatibility) on the shared runtime (media, computer, and MCP providers are disabled). Try `gg --profile personal proactive demo` for fake local digests and approval checks without credentials. The default remains coding. See [Personal Agent (P4 first slice)](docs/personal-agent.md).
 
 ## Extensions
 

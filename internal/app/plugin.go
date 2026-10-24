@@ -50,7 +50,8 @@ type ToolContext struct {
 
 // Registry is an ordered snapshot of Tool SPI registrations. Construct it at
 // the host's composition boundary; it has no process-global registration hooks.
-// The zero value is an empty registry. Build and Capabilities share platform gates.
+// The zero value is an empty registry. Build and Capabilities share platform gates;
+// ForProfile selects the same providers for construction and capability reporting.
 type Registry struct {
 	providers []ToolProvider
 }
@@ -68,6 +69,24 @@ func (r Registry) Providers() []ToolProvider {
 	return append([]ToolProvider{}, r.providers...)
 }
 
+// ForProfile resolves Core's enable list in registration order. Coding (including
+// an empty profile) retains every registration, including host extensions. Personal
+// keeps unnamed core providers and an explicit subset of named capabilities.
+// Config resolution validates profiles before assembly; this adds no config syntax.
+func (r Registry) ForProfile(profile string) Registry {
+	if profile != config.ProfilePersonal {
+		return r
+	}
+	var enabled []ToolProvider
+	for _, p := range r.providers {
+		switch p.Name {
+		case "", "memory", "kb", "artifact", "connector", "browser":
+			enabled = append(enabled, p)
+		}
+	}
+	return NewRegistry(enabled...)
+}
+
 // Capabilities returns named, platform-available providers in registration order.
 // A missing runtime prerequisite can still make Build return no tools.
 func (r Registry) Capabilities() []string {
@@ -80,13 +99,14 @@ func (r Registry) Capabilities() []string {
 	return names
 }
 
-// Build assembles tools in registration order. An unavailable provider is skipped;
-// a failed provider contributes no tools. report, when non-nil, receives every
-// attempted provider's outcome (including success), leaving logging and degradation
-// policy with the host. No tool is executed and no authorization is granted here.
+// Build assembles the profile's tools in registration order. Disabled and
+// unavailable providers are skipped; a failed provider contributes no tools.
+// report, when non-nil, receives every attempted provider's outcome (including
+// success), leaving logging and degradation policy with the host. No tool is
+// executed and no authorization is granted here.
 func (r Registry) Build(ctx context.Context, tc ToolContext, report func(name string, err error)) []agent.Tool {
 	var out []agent.Tool
-	for _, p := range r.providers {
+	for _, p := range r.ForProfile(tc.Config.Profile).providers {
 		if p.Available != nil && !p.Available() {
 			continue
 		}
@@ -123,14 +143,19 @@ type ConnectorProvider struct {
 func ConnectorTools(providers ...ConnectorProvider) ToolProvider {
 	providers = append([]ConnectorProvider(nil), providers...)
 	return ToolProvider{Name: "connector", Build: func(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
-		store, err := connector.Open(tc.Config.Connectors.Dir)
-		if err != nil {
-			return nil, err
-		}
+		var store *connector.Store
 		var out []agent.Tool
 		for _, p := range providers {
 			if p.Available != nil && !p.Available() {
 				continue
+			}
+			// Do not open the token store when every connector is unavailable.
+			if store == nil {
+				var err error
+				store, err = connector.Open(tc.Config.Connectors.Dir)
+				if err != nil {
+					return nil, err
+				}
 			}
 			tok, err := store.Load(p.Name)
 			if errors.Is(err, connector.ErrNotConnected) {

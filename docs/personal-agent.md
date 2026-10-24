@@ -23,6 +23,8 @@ gg --profile personal -p 'Prepare a reply draft'
 
 `--profile` accepts only `coding` and `personal`; unset or empty means `coding`. Selection is per invocation, including resumed sessions. P3 adds no saved config default or second binary.
 
+C2 also filters enabled capabilities: personal keeps core tools, memory, KB, artifacts, Google connectors, and browser, while omitting media, computer, and MCP providers. Coding retains the full existing set. See the [ordered profile enable list](core-plugin.md#profiles-and-coding-compatibility) for prerequisites and host-injection behavior. The draft and approval defaults below remain unchanged; enabling a capability grants no authorization.
+
 | Default / policy | Coding | Personal |
 | --- | --- | --- |
 | Base identity | Coding agent working in the user's project | User's personal assistant |

@@ -22,6 +22,7 @@ type Options struct {
 	ModelRecorded   bool
 	// ToolProviders overrides the built-in registry for an embedding host.
 	// Nil uses the default providers; an empty slice disables tools.
+	// Config.Profile filters named providers in either case; unnamed core stays on.
 	ToolProviders []ToolProvider
 	// Profile and MemoryStore carry the personal layer. MemoryStore may be
 	// nil; NewService then falls back to a store rooted at Config.Memory.Dir.

@@ -110,11 +110,11 @@ var toolRegistry = NewRegistry(
 	ToolProvider{Name: "mcp", Build: buildMCPTools},
 )
 
-// ToolCapabilities returns the capability identifiers the registry can
-// provide on this platform. Transports derive their advertised capabilities
-// from this so the list cannot drift from the tools actually registered.
-func ToolCapabilities() []string {
-	return toolRegistry.Capabilities()
+// ToolCapabilities returns the profile's platform-available capability identifiers
+// without building tools or opening resources. Runtime prerequisites (tokens,
+// Chromium, configuration) can still make an enabled provider build no tools.
+func ToolCapabilities(profile string) []string {
+	return toolRegistry.ForProfile(profile).Capabilities()
 }
 
 // RegistryToolDefinitions builds the full turn toolset for cfg and returns
