@@ -35,7 +35,7 @@ func TestConnectorProfileDraftDefault(t *testing.T) {
 			if err := store.Save(google.Name, connector.Token{AccessToken: "fake", RefreshToken: "fake-refresh", Scopes: google.Scopes}); err != nil {
 				t.Fatal(err)
 			}
-			built, err := buildConnectorTools(context.Background(), ToolContext{Config: cfg})
+			built, err := ConnectorTools(googleConnector()).Build(context.Background(), ToolContext{Config: cfg})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -71,7 +71,7 @@ func TestToolCapabilitiesDerivedFromRegistry(t *testing.T) {
 	}
 	// Every named provider must appear exactly once.
 	seen := map[string]int{}
-	for _, p := range toolProviders {
+	for _, p := range toolRegistry.Providers() {
 		if p.Name == "" {
 			continue
 		}
@@ -87,7 +87,7 @@ func TestToolCapabilitiesDerivedFromRegistry(t *testing.T) {
 func TestComputerCapabilityAbsentOffSupportedPlatforms(t *testing.T) {
 	// The registry must not advertise computer tools where they cannot run:
 	// ToolCapabilities is what transports (e.g. system.info) show clients.
-	for _, p := range toolProviders {
+	for _, p := range toolRegistry.Providers() {
 		if p.Name != "computer" {
 			continue
 		}
@@ -174,7 +174,7 @@ func TestProviderDegradeLogic(t *testing.T) {
 	t.Run("connector not connected", func(t *testing.T) {
 		cfg := config.Config{}
 		cfg.Connectors.Dir = t.TempDir()
-		if got := buildForTest(t, buildConnectorTools, testToolContext(t, cfg)); got != nil {
+		if got := buildForTest(t, ConnectorTools(googleConnector()).Build, testToolContext(t, cfg)); got != nil {
 			t.Fatalf("expected nil tools when Google not connected, got %d", len(got))
 		}
 	})
@@ -378,7 +378,7 @@ func TestApprovalInvariantSweep(t *testing.T) {
 	tc := testToolContext(t, cfg)
 
 	var tools []agent.Tool
-	for _, p := range toolProviders {
+	for _, p := range toolRegistry.Providers() {
 		if p.Available != nil && !p.Available() {
 			continue
 		}
@@ -603,7 +603,7 @@ func TestBuildConnectorToolsDistinguishesNotConnected(t *testing.T) {
 	tc := testToolContext(t, config.Config{HomeDir: t.TempDir(), CWD: t.TempDir()})
 	tc.Config.Connectors.Dir = t.TempDir()
 	// No token file: expected "not connected" state, silent degrade.
-	if got, err := buildConnectorTools(context.Background(), tc); err != nil || got != nil {
+	if got, err := ConnectorTools(googleConnector()).Build(context.Background(), tc); err != nil || got != nil {
 		t.Fatalf("not-connected should degrade silently, got tools=%v err=%v", got, err)
 	}
 	// Corrupted token file: operational failure, must propagate.
@@ -611,7 +611,7 @@ func TestBuildConnectorToolsDistinguishesNotConnected(t *testing.T) {
 	if err := os.WriteFile(tokPath, []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := buildConnectorTools(context.Background(), tc); err == nil {
+	if _, err := ConnectorTools(googleConnector()).Build(context.Background(), tc); err == nil {
 		t.Fatal("expected corrupted token file to propagate an error")
 	}
 }
@@ -743,7 +743,7 @@ func TestPreApprovalExemptionInvariant(t *testing.T) {
 	tc := testToolContext(t, cfg)
 
 	var all []agent.Tool
-	for _, p := range toolProviders {
+	for _, p := range toolRegistry.Providers() {
 		if p.Available != nil && !p.Available() {
 			continue
 		}

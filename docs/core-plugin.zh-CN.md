@@ -2,7 +2,7 @@
 
 [English](core-plugin.md)
 
-本文是已批准 Core+plugin 方案的 C0 架构决策，以 `main@932e14e` 为基线。C0 只修改文档：不实现 Registry 或 SPI，不移动包，不改变工具集合、profile 默认值、审批策略或运行时行为。[架构总览](architecture.zh-CN.md)描述当前系统；下文各阶段描述后续工作。
+本文记录已批准的 Core+plugin 方案：C0 架构决策（基于 `main@932e14e`）和 C1 实现（基于 `main@e77769a`）。C0 仅修改文档；C1 增加仓库内 Registry 和 Tool/Connector SPI，以静态链接的 Google 为试点，保留工具集合、profile 默认值、审批策略与运行时行为。[架构总览](architecture.zh-CN.md)描述当前系统；下文 C2 及后续阶段尚待实现。
 
 ## 目标与边界
 
@@ -10,14 +10,14 @@
 
 目标是明确能力归属与组装方式，同时保持 coding 产品体验。插件边界不要求独立进程、独立安装包或更小的二进制。静态链接让第一方能力与 Core 共用构建、审查和发布生命周期；后续 profile 过滤缩小的是启用的能力面，不是链接后的二进制体积。
 
-后续阶段的第一方候选包括：
+第一方实现进度与后续候选包括：
 
-- **Connectors**：优先用 `internal/connector/google` 作为 C1 试点。
+- **Connectors**：Google 已作为 C1 试点通过 SPI 注册；OAuth/API 代码仍在 `internal/connector/google`。
 - **Browser** 与 **media** 能力实现。
 - **Telegram channel** 与 **proactive 投递策略**实现。
 - **Artifact/library**：仅在缩小二进制成为具体需求后，作为更后期的可选拆分。单靠启用列表无法移除已链接的代码。
 
-C0 只列出候选，不授权批量移动目录，也不定义最终 SPI 类型。
+C0 列出候选；C1 将 SPI 保留在 `app`，避免搬迁共享宿主依赖。两个阶段都不授权批量移动目录。
 
 ## Core 不变量
 
@@ -62,11 +62,11 @@ C0 只列出候选，不授权批量移动目录，也不定义最终 SPI 类型
 
 **dsh 启示：**profile 是能力层的有序组合，以启用列表和默认值表达，不是第二套运行时。Core 仍负责组合求值、运行 agent 和强制授权。
 
-## SPI 与包生命周期方向
+## SPI 与包生命周期
 
-当前切入点是 [`app.ToolProvider`](../internal/app/toolregistry.go)：具名工具 builder、可选的平台可用性检查、确定的注册顺序，以及通过 `Options.ToolProviders` 供宿主/测试注入的机制。[`conversationTools`](../internal/app/toolset.go) 管理每个会话的资源和清理；工具定义与执行已共用这条构建路径。这是现有实现的切入点，还不是稳定的插件 SPI。
+C1 在 [`app/plugin.go`](../internal/app/plugin.go) 定义源码级 SPI，将 `ToolProvider` 和 `ToolContext` 保留在 `app`，采用更小的边界。`NewRegistry` 按注册顺序保存 provider 快照；`Registry.Build` 和 `Registry.Capabilities` 共用现有 `Available` 平台门禁。空名称仍表示不对外展示的 core provider，对外能力名与顺序不变。`Options.ToolProviders` 继续支持宿主/测试注入：nil 使用内置注册，非 nil 空切片禁用全部工具，fork 会话也保留此选择。
 
-C1 应从这些行为提炼 Registry 和 Tool/Connector SPI。准确的包路径、导出的 Go 类型和版本协商机制，留给 C1 设计与实现审查。预期归属契约如下：
+`ConnectorProvider` 以既有 token 标识命名 connector，接收宿主上下文、现有 store 与当前 token 来构建工具。`ConnectorTools` 将这些 provider 注册到既有 `connector` 能力下。缺失 token 仍是预期的未连接状态；store/token 故障继续交给现有降级报告。Tool provider 失败时丢弃该 provider 本轮工具，构建成功则清除旧故障。[`conversationTools`](../internal/app/toolset.go) 继续负责日志、脱敏降级报告和会话资源清理；发现与执行共用同一个 Registry。注册仍是受信任的 Go 代码组装，不新增元数据校验或版本协商协议。归属契约如下：
 
 | 生命周期领域 | Core / 宿主 | 第一方实现 |
 | --- | --- | --- |
@@ -77,17 +77,17 @@ C1 应从这些行为提炼 Registry 和 Tool/Connector SPI。准确的包路径
 | 资源生命周期 | 拥有 session/daemon 生命周期，在关闭或淘汰时调用清理。 | 通过宿主生命周期释放所拥有的客户端、连接和其他资源。 |
 | 持久化与迁移 | 保留共享存储契约，协调兼容的启动/迁移。 | 在该生命周期内负责能力专属数据及迁移逻辑；迁移时保持既有路径和权限。 |
 
-优先选择 Google 试点时，connector API 操作及其工具包装属于候选实现。Core 保留 Connector SPI、config/profile 选择、授权和公共生命周期规则。OAuth scopes 和 token 不能替代 gg 审批或 standing grant。C1 必须保留工具名、schema、顺序、默认值、token 路径、刷新行为、错误与清理语义；抽出接口本身不代表可以改变行为。
+[`Google 试点注册`](../internal/app/googleplugin.go) 已使用 Connector SPI，保留按 scope 选择工具，以及 `gmail_search`、`gmail_read`、`gmail_send`、`calendar_agenda`、`calendar_create` 的既有顺序。API/OAuth 和工具包装继续位于原包，保留 `~/.gg/connectors/google.json`、权限、刷新行为、schema、审批描述、coding 默认发送和 personal 默认草稿行为。不引入后台资源或新的清理钩子；browser/MCP 资源沿用宿主清理。Core 保留 config/profile 选择、授权和公共生命周期规则。OAuth scopes 和 token 不能替代 gg 审批或 standing grant。
 
 第一方包随 gg release 发布与迁移。本方案不引入独立安装器、npm 依赖解析器、动态 Go 插件加载器或热重载生命周期。稳定 SPI 是持续维护的源码级契约，不承诺二进制 ABI，也不提供第三方进程内加载 API。
 
 ## Profile 与 coding 兼容性
 
-在 `932e14e`，[`config.ParseProfile`](../internal/config/config.go) 接受 `coding` 和 `personal`；未设置或空值选择 coding。[现有 personal profile](personal-agent.zh-CN.md#选择-profilep3) 改变 CLI 身份与默认值，包括审批模式和 Gmail 草稿偏好，但**尚未**对工具/connector Registry 实现 profile 启用列表过滤。Daemon、Web/Electron、Telegram 和 daemon 定时轮次继续保持已记录的 coding profile 行为。
+截至 C1，[`config.ParseProfile`](../internal/config/config.go) 接受 `coding` 和 `personal`；未设置或空值选择 coding。[现有 personal profile](personal-agent.zh-CN.md#选择-profilep3) 改变 CLI 身份与默认值，包括审批模式和 Gmail 草稿偏好，但**尚未**对工具/connector Registry 实现 profile 启用列表过滤。Daemon、Web/Electron、Telegram 和 daemon 定时轮次继续保持已记录的 coding profile 行为。
 
 C2 将让 `--profile` 同时选择启用的工具/connector 集合与默认值。Core 求值有序能力列表，应用前置条件/平台检查，并让工具定义、执行与能力报告统一使用结果集合。禁用的 provider 不应被构建或打开资源。组合顺序必须确定；profile 不能安装代码、创建授权、覆盖 Core 不变量或引入自己的 agent loop。
 
-未设置/空值和显式 `coding` 路径必须保留现有 coding 工具、顺序、默认值和审批行为。Personal 过滤和其他选择入口需要明确的 C2 范围及检查；C0 不承诺新 CLI flag、配置语法或 daemon selector。Personal 现有的更严格默认值继续保留。Profile 启用能力永远不代表已获准使用相应工具。
+未设置/空值和显式 `coding` 路径必须保留现有 coding 工具、顺序、默认值和审批行为。Personal 过滤和其他选择入口需要明确的 C2 范围及检查；C1 不新增 CLI flag、配置语法或 daemon selector。Personal 现有的更严格默认值继续保留。Profile 启用能力永远不代表已获准使用相应工具。
 
 ## `main@932e14e` 包归属清单
 
@@ -129,15 +129,15 @@ C2 将让 `--profile` 同时选择启用的工具/connector 集合与默认值�
 | `internal/userprofile` | Core | `USER.md` 解析、渲染与存储契约。 |
 | `internal/workspace` | Core | Workspace 身份、根目录、Registry 与项目指令查找。 |
 
-明确保留基线现状：`app` 和 `tools` 目前直接 import 多个候选实现。清单分配未来归属，不表示这些依赖已经完成倒置。
+此表保留 C0 基线清单，不是目录搬迁列表。C1 的 Google 注册适配器在 `app` 内使用 Connector SPI；`app` 和 `tools` 仍直接 import 候选实现，其他候选依赖尚未倒置。
 
 ## 分阶段交付与验收
 
 | 阶段 | 范围 | 验收边界 |
 | --- | --- | --- |
-| **C0 — 文档** | 本决策、中文镜像，以及两份架构总览中的链接。 | 仅文档；分类全部 29 个包；无运行时/SPI 代码或 coding 默认值变化。运行 `go vet ./...` 与 `go test ./...`，确认 diff 仅包含预期四份文档。 |
-| **C1 — Registry + Tool/Connector SPI** | 引入共享契约，零行为变化迁移现有注册。包含一个第一方示例，优先 Google，仍静态链接。 | 保留工具名/schema/顺序、发现、默认值、前置条件/降级、approval/standing-auth/E/M/U/R、存储路径和资源清理。现有测试及针对 SPI/试点的检查通过。 |
-| **C2 — profile 启用列表** | 让 `--profile` 通过 Core 组装真正裁剪启用的工具/connector。 | 定义、执行与对外能力一致；不构建禁用 provider。未设置/显式 coding 保留既有能力面与默认值。验证 profile 过滤及授权不变。 |
+| **C0 — 文档（已落地）** | 本决策、中文镜像，以及两份架构总览中的链接。 | 仅文档；分类全部 29 个包；无运行时/SPI 代码或 coding 默认值变化。运行 `go vet ./...` 与 `go test ./...`，确认 diff 仅包含预期四份文档。 |
+| **C1 — Registry + Tool/Connector SPI（已落地）** | `app.Registry`、Tool/Connector 契约、共用的构建/发现组装，以及静态链接的 Google 注册试点。不做 profile 启用列表过滤。 | 保留工具名/schema/顺序、发现、默认值、前置条件/降级、approval/standing-auth/E/M/U/R、存储路径和资源清理。现有测试及针对 SPI/试点的检查通过。 |
+| **C2 — profile 启用列表（待实现）** | 让 `--profile` 通过 Core 组装真正裁剪启用的工具/connector。 | 定义、执行与对外能力一致；不构建禁用 provider。未设置/显式 coding 保留既有能力面与默认值。验证 profile 过滤及授权不变。 |
 | **C3 — 扩大仓库内拆分** | 将已验证的接口扩展到 browser/media，以及 Telegram/proactive 等 channel/策略实现。Artifact/library 仍为后期可选项。 | 增量迁移、测试全绿、Core 归属稳定，保留 channel 监督、审批与 coding 行为。不对 `internal/` 做大爆炸搬迁。 |
 | **C4 — 更后期外部生态** | 第三方继续 MCP-first。仅针对具体需求重新评估分发/市场。 | 此处不授权 Bun host、npm market、热重载或新的第三方进程内运行时；任何此类提议都需要新的项目决策。 |
 
@@ -149,6 +149,6 @@ C1 先建立保持行为的边界，C2 再改变选择逻辑；只有接口得�
 - 不用 Node 重写 Core，不做 Bun 插件宿主、npm 市场或热重载。
 - 不整体搬迁 `internal/`，不在 C0 提取运行时代码，不提前声称二进制体积缩小。
 - 不削弱 coding 默认值、审批、standing-auth 或后果语义。插件不能绕过这些门禁。
-- 不 force-push。C0 提交到 `feat/core-plugin-c0`，由协调者负责 push 与创建 PR。
+- 不 force-push，不自行 push。C1 提交到 `feat/core-plugin-c1`，由协调者负责 push 与创建 PR。
 
-C0 的审查证据是四文件文档 diff，以及 `go vet ./...` 和 `go test ./...`。Go 检查用于发现意外的构建/测试漂移，不能验证尚未实现的 SPI。PR 正文记录改动内容、动机、取舍和实际验证结果。
+C1 的审查证据包括 Registry/宿主注入检查、coding 工具顺序与定义一致性、Google scope 变化和断开连接行为、现有审批/connector 刷新/清理测试，以及 `go vet ./...` 和 `go test ./...`。PR 正文记录改动内容、动机、取舍和实际验证结果。Profile 启用列表过滤尚未实现，仍属于 C2。

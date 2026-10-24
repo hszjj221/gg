@@ -146,7 +146,7 @@ func (s *Service) childServiceLocked(store *session.Store) (*Service, error) {
 	return NewSessionService(Options{
 		Config: s.cfg, ProviderFactory: s.providerFactory,
 		Skills: s.skillSet, Profile: s.profile, MemoryStore: s.memStore,
-		Log: s.tools.logger, Degraded: s.tools.degraded, ToolProviders: s.tools.providers,
+		Log: s.tools.logger, Degraded: s.tools.degraded, ToolProviders: s.tools.registry.Providers(),
 	}, store, store.State(), s.cfg.Selection)
 }
 

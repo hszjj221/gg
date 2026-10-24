@@ -2,62 +2,21 @@ package app
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/artifact"
 	"github.com/hszjj221/gg/internal/browser"
 	"github.com/hszjj221/gg/internal/config"
-	"github.com/hszjj221/gg/internal/connector"
-	"github.com/hszjj221/gg/internal/connector/google"
 	"github.com/hszjj221/gg/internal/kb"
 	"github.com/hszjj221/gg/internal/mcp"
 	"github.com/hszjj221/gg/internal/media"
-	"github.com/hszjj221/gg/internal/memory"
 	"github.com/hszjj221/gg/internal/tools"
 )
-
-// ToolProvider contributes one capability's agent tools. Adding a tool means
-// adding (or extending) a provider — the central factory below never needs
-// to change.
-type ToolProvider struct {
-	// Name is the capability identifier advertised to clients. Empty means
-	// the provider is always on and not advertised (core tools).
-	Name string
-	// Build returns the capability's tools. A nil slice (or an error) means
-	// the capability degrades to absent for this turn — Chromium not
-	// installed, Google not connected, MCP server unreachable, ...
-	Build func(ctx context.Context, tc ToolContext) ([]agent.Tool, error)
-	// Available reports whether the capability can be provided on this
-	// platform at all. Nil means always available. A provider that is not
-	// available is neither built nor advertised (e.g. computer tools off
-	// Linux/macOS).
-	Available func() bool
-}
-
-// ToolContext carries everything a provider needs to build its tools.
-type ToolContext struct {
-	Config      config.Config
-	Provider    agent.Provider // nil when only definitions are needed (/context)
-	ReadRoots   []string
-	MemStore    memory.ToolStore
-	Location    *time.Location
-	LocationErr error
-	BrowserPool *tools.BrowserSessionPool
-	// Log receives provider-local operational warnings (e.g. one MCP
-	// server failing while others work). Never nil in buildTools; tests
-	// that build a ToolContext by hand should treat nil as slog.Default().
-	Log *slog.Logger
-	// Memoized holds per-Service resources so providers don't redo static
-	// probes or discard reusable clients every turn.
-	Memoized *ToolMemo
-}
 
 // ToolMemo caches per-Service tool resources across turns. It is safe for
 // concurrent use; callers do not need to hold the owning Service's mutex.
@@ -138,34 +97,24 @@ func (m *ToolMemo) Close() error {
 	return m.mcpConnector.Close()
 }
 
-// toolProviders is the registry. Order determines tool definition order.
-var toolProviders = []ToolProvider{
-	{Name: "", Build: buildCoreTools},
-	{Name: "memory", Build: buildMemoryTools},
-	{Name: "kb", Build: buildKBTools},
-	{Name: "artifact", Build: buildArtifactTools},
-	{Name: "connector", Build: buildConnectorTools},
-	{Name: "media", Build: buildMediaTools},
-	{Name: "browser", Build: buildBrowserTools},
-	{Name: "computer", Build: buildComputerTools, Available: computerToolsSupported},
-	{Name: "mcp", Build: buildMCPTools},
-}
+// toolRegistry registers the built-in providers in tool definition order.
+var toolRegistry = NewRegistry(
+	ToolProvider{Name: "", Build: buildCoreTools},
+	ToolProvider{Name: "memory", Build: buildMemoryTools},
+	ToolProvider{Name: "kb", Build: buildKBTools},
+	ToolProvider{Name: "artifact", Build: buildArtifactTools},
+	ConnectorTools(googleConnector()),
+	ToolProvider{Name: "media", Build: buildMediaTools},
+	ToolProvider{Name: "browser", Build: buildBrowserTools},
+	ToolProvider{Name: "computer", Build: buildComputerTools, Available: computerToolsSupported},
+	ToolProvider{Name: "mcp", Build: buildMCPTools},
+)
 
 // ToolCapabilities returns the capability identifiers the registry can
 // provide on this platform. Transports derive their advertised capabilities
 // from this so the list cannot drift from the tools actually registered.
 func ToolCapabilities() []string {
-	names := make([]string, 0, len(toolProviders))
-	for _, p := range toolProviders {
-		if p.Name == "" {
-			continue
-		}
-		if p.Available != nil && !p.Available() {
-			continue
-		}
-		names = append(names, p.Name)
-	}
-	return names
+	return toolRegistry.Capabilities()
 }
 
 // RegistryToolDefinitions builds the full turn toolset for cfg and returns
@@ -247,60 +196,6 @@ func buildArtifactTools(ctx context.Context, tc ToolContext) ([]agent.Tool, erro
 		tools.NewArtifactCreateTool(astore),
 		tools.NewArtifactEditTool(astore),
 	}, nil
-}
-
-func buildConnectorTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
-	// A connector dir that cannot be opened is an operational failure and
-	// is propagated; a missing token is the expected "not connected"
-	// state and degrades silently.
-	cstore, err := connector.Open(tc.Config.Connectors.Dir)
-	if err != nil {
-		return nil, err
-	}
-	tok, err := cstore.Load(google.Name)
-	if err != nil {
-		if errors.Is(err, connector.ErrNotConnected) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	gclient, err := google.NewClient(cstore, google.Config{
-		ClientID:     tc.Config.Connectors.Google.ClientID,
-		ClientSecret: tc.Config.Connectors.Google.ClientSecret,
-	})
-	if err != nil {
-		return nil, nil
-	}
-	// Register only the tools the user actually granted: a partial
-	// (granular-consent) grant must not advertise tools that would just 403.
-	var out []agent.Tool
-	if hasScope(tok.Scopes, google.ScopeGmailRead) {
-		out = append(out,
-			tools.NewGmailSearchTool(gclient),
-			tools.NewGmailReadTool(gclient),
-		)
-	}
-	if hasScope(tok.Scopes, google.ScopeGmailSend) || hasScope(tok.Scopes, google.ScopeGmailCompose) {
-		mail := tools.NewGmailSendTool(gclient)
-		mail.DraftByDefault = tc.Config.Profile == config.ProfilePersonal
-		out = append(out, mail)
-	}
-	if hasScope(tok.Scopes, google.ScopeCalendar) {
-		out = append(out,
-			tools.NewCalendarAgendaTool(gclient, tc.Location, tc.LocationErr),
-			tools.NewCalendarCreateTool(gclient, tc.Location, tc.LocationErr),
-		)
-	}
-	return out, nil
-}
-
-func hasScope(scopes []string, want string) bool {
-	for _, s := range scopes {
-		if s == want {
-			return true
-		}
-	}
-	return false
 }
 
 func buildMediaTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
