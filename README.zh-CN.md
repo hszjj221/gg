@@ -118,7 +118,7 @@ gg -p "List the files in this project"
 
 ## 安全
 
-只在你愿意把这些工具交给模型的工作区里运行 `gg`。`~/.gg/config.json` 里可能有 API key。启用 memory 时，画像和记忆文件会发给当前选中的 provider，而且 `memory_add` 写入时不走审批提示。
+只在你愿意把这些工具交给模型的工作区里运行 `gg`。`~/.gg/config.json` 里可能有 API key。启用 memory 时，画像和记忆文件会发给当前选中的 provider。`memory_add` 走正常审批门禁；`--yolo` 或审批模式 `never` 会跳过提示。
 
 请私下报告漏洞。参见 [SECURITY.md](SECURITY.md)。
 

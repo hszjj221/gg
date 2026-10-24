@@ -2,7 +2,7 @@
 
 `gg` 把产品行为收敛到可复用的 Go 核心里，每个界面都只是适配器。CLI、Web、Electron 客户端因此共享会话语义、并发规则、审批处理和工具执行。
 
-[Core + 第一方插件方案](core-plugin.zh-CN.md)记录 C0 归属决策：保留 Go Core 及其审批/存储/协议不变量，后续阶段引入稳定 SPI，第一方插件继续静态链接，profile 用于能力启用列表。C0 仅修改文档；本文描述的运行时与 coding 默认值保持不变，第三方能力继续 MCP-first。
+[Core + 第一方插件方案](core-plugin.zh-CN.md)记录已落地的 C0–C3 阶段：归属文档（C0）、Registry 与 Tool/Connector SPI 及 Google 试点（C1）、profile 启用列表（C2），以及仓库内 browser/media 适配器与 Telegram/proactive 工厂（C3）。Go Core 保留审批/存储/协议不变量与 coding 默认值；第一方插件继续静态链接，第三方能力继续 MCP-first。通用 Channel/Policy SPI 与 C4 外部生态仍延后，需要新的项目决策。
 
 ```mermaid
 flowchart LR
