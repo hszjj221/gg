@@ -67,6 +67,7 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	}
 
 	cfg, err := config.Resolve(config.Options{
+		Profile:        parsed.Profile,
 		APIKey:         parsed.APIKey,
 		BaseURL:        parsed.BaseURL,
 		Model:          parsed.Model,

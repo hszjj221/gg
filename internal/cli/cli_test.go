@@ -154,6 +154,37 @@ func TestParseRejectsInvalidApprovalFlag(t *testing.T) {
 	}
 }
 
+func TestParseProfiles(t *testing.T) {
+	for _, tc := range []struct {
+		name, profile, approval, errorText string
+		argv                               []string
+	}{
+		{name: "default", profile: "coding", approval: "auto"},
+		{name: "empty", argv: []string{"--profile="}, profile: "coding", approval: "auto"},
+		{name: "coding", argv: []string{"--profile", "coding"}, profile: "coding", approval: "auto"},
+		{name: "personal", argv: []string{"--profile", "personal"}, profile: "personal", approval: "on-request"},
+		{name: "personal auto override", argv: []string{"--profile", "personal", "--approval", "auto"}, profile: "personal", approval: "auto"},
+		{name: "personal never override", argv: []string{"--approval", "never", "--profile", "personal"}, profile: "personal", approval: "never"},
+		{name: "coding yolo", argv: []string{"--profile", "coding", "--yolo"}, profile: "coding", approval: "yolo"},
+		{name: "invalid", argv: []string{"--profile", "other"}, errorText: "profile must be coding or personal"},
+		{name: "personal yolo flag", argv: []string{"--profile", "personal", "--yolo"}, errorText: "standing-auth"},
+		{name: "personal yolo mode", argv: []string{"--profile", "personal", "--approval", "yolo"}, errorText: "standing-auth"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args, err := Parse(tc.argv)
+			if tc.errorText != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.errorText) {
+					t.Fatalf("error = %v, want %q", err, tc.errorText)
+				}
+				return
+			}
+			if err != nil || args.Profile != tc.profile || args.Approval != tc.approval {
+				t.Fatalf("profile=%q approval=%q err=%v", args.Profile, args.Approval, err)
+			}
+		})
+	}
+}
+
 func TestHelpTextMentionsInteractiveMode(t *testing.T) {
 	help := HelpText()
 

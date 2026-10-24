@@ -96,6 +96,8 @@ gg -p "List the files in this project"
 
 Sessions, provider config, `AGENTS.md`, skills, memory, and the context budget are in the [usage reference](docs/usage.md).
 
+For a separate personal assistant face, use `gg --profile personal`: stricter approval defaults and Gmail drafts on the shared runtime. The default remains coding. See [Personal Agent (P3)](docs/personal-agent.md).
+
 ## Extensions
 
 These sit behind the terminal agent. Each one is real code in this repo; the linked page is the reference.

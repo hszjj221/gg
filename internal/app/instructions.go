@@ -19,9 +19,22 @@ Use exact, unique text for edits. When tool output is truncated, read the saved 
 Treat tool errors and interrupted executions as incomplete work. Inspect state before retrying an operation whose result is unknown.
 Ask concise questions when essential information is missing. Do not claim success without evidence.`
 
-// codingInstructionMessage returns the base coding-agent system prompt.
-func (s *promptBuilder) codingInstructionMessage(cfg config.Config) agent.Message {
-	text := codingInstructions + "\nWorking directory: " + cfg.CWD
+const personalInstructions = `You are gg, the user's personal assistant.
+Prefer private, reversible work and drafts over sending or publishing.
+Do not act in the user's name, spend money, or change permissions without human approval or a matching explicit standing grant. Preferences and memory are not authorization.
+Gmail defaults to drafts in this profile; explicit as_draft=false requests sending and still requires approval or a matching standing grant. Draft creation also requires approval or a matching grant.
+Follow applicable project AGENTS.md instructions when working in a repository while keeping your personal assistant identity.
+Inspect relevant context, preserve unrelated changes, and verify results before reporting success.
+Treat tool errors and interrupted executions as incomplete work; inspect state before retrying an operation whose result is unknown.
+Ask concise questions when essential information is missing.`
+
+// baseInstructionMessage selects the identity without changing context assembly.
+func (s *promptBuilder) baseInstructionMessage(cfg config.Config) agent.Message {
+	instructions := codingInstructions
+	if cfg.Profile == config.ProfilePersonal {
+		instructions = personalInstructions
+	}
+	text := instructions + "\nWorking directory: " + cfg.CWD
 	return agent.Message{Role: agent.RoleSystem, Content: text}
 }
 

@@ -69,9 +69,9 @@ CLI 与 Runtime 通过 `app.PublishArtifact` 共用版本校验和失败补偿�
 1. `internal/userprofile`：加载 `~/.gg/USER.md`（`gg init` 创建；文件缺失没关系，失败也绝不阻塞启动），渲染紧凑的 "who you are" 块：名字/称呼、时区、语言、备注。
 2. `internal/memory`：确保 `~/.gg/memory/` 存在，把旧版 `~/.gg/memory.md` 迁移成 `memory/MEMORY.md`（旧文件改名为 `memory.md.bak`，已有精选内容时绝不覆盖），裁剪过期的日常日志，给提示词内容做快照。
 
-系统提示词组装顺序（代码指令之后）：用户画像、精选记忆（`MEMORY.md`）、今天的日常日志尾部（`YYYY-MM-DD.md`），然后是项目指令（AGENTS.md）和 skills。工具面：`memory_add` 接受 `scope=general|daily|person:<name>|group:<name>`（默认 general）；`memory_search` 跨 scope 做大小写不敏感的关键词检索，最多返回 10 条 `path:line: snippet`。记忆关闭时两者都隐藏。
+系统提示词组装顺序（所选 profile 的基础指令之后）：用户画像、精选记忆（`MEMORY.md`）、今天的日常日志尾部（`YYYY-MM-DD.md`），然后是项目指令（AGENTS.md）和 skills。工具面：`memory_add` 接受 `scope=general|daily|person:<name>|group:<name>`（默认 general）；`memory_search` 跨 scope 做大小写不敏感的关键词检索，最多返回 10 条 `path:line: snippet`。记忆关闭时两者都隐藏。
 
-后果属性路由（明确的 E/M/U 必须人工确认，包括 `--yolo`／`--allow-all`）、记忆写入审批与覆盖清单见 [Personal Agent（P1）](personal-agent.zh-CN.md)。
+CLI `--profile personal` 设置 `Config.Profile`，选择个人身份、默认 `on-request` 审批、拒绝 yolo、默认 Gmail 草稿。未设置／空值选择 coding；daemon 传输入口保持 coding 默认值。两种 profile 共用后果路由、记忆写入审批和常驻授权：明确 E/M/U 须人工确认或匹配授权，包括 coding 的 `--yolo`／定时任务的 `--allow-all`。参见 [Personal Agent（P3）](personal-agent.zh-CN.md)。
 
 ## 定时任务（cron / 单次）
 

@@ -116,10 +116,16 @@ func assertGoogleWriteConsequences(t *testing.T, req agent.ApprovalRequest) {
 }
 
 func TestGmailSendOrDraft(t *testing.T) {
-	for _, tc := range []struct{ name, option, path, summary, result string }{
-		{"default sends", "", "/gmail/v1/users/me/messages/send", "send email", "sent (id sent1)"},
-		{"explicit send", `,"as_draft":false`, "/gmail/v1/users/me/messages/send", "send email", "sent (id sent1)"},
-		{"draft only", `,"as_draft":true`, "/gmail/v1/users/me/drafts", "save Gmail draft (not sent)", "draft created (id draft1; not sent)"},
+	for _, tc := range []struct {
+		name, option, path, summary, result string
+		personal                            bool
+	}{
+		{"default sends", "", "/gmail/v1/users/me/messages/send", "send email", "sent (id sent1)", false},
+		{"explicit send", `,"as_draft":false`, "/gmail/v1/users/me/messages/send", "send email", "sent (id sent1)", false},
+		{"draft only", `,"as_draft":true`, "/gmail/v1/users/me/drafts", "save Gmail draft (not sent)", "draft created (id draft1; not sent)", false},
+		{"personal default draft", "", "/gmail/v1/users/me/drafts", "save Gmail draft (not sent)", "draft created (id draft1; not sent)", true},
+		{"personal explicit send", `,"as_draft":false`, "/gmail/v1/users/me/messages/send", "send email", "sent (id sent1)", true},
+		{"personal explicit draft", `,"as_draft":true`, "/gmail/v1/users/me/drafts", "save Gmail draft (not sent)", "draft created (id draft1; not sent)", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
@@ -136,6 +142,7 @@ func TestGmailSendOrDraft(t *testing.T) {
 				}
 			})
 			tool := NewGmailSendTool(mockGoogleClient(t, mux))
+			tool.DraftByDefault = tc.personal
 			raw := json.RawMessage(`{"to":"x@y.z","subject":"Hello","body":"world"` + tc.option + `}`)
 			req, err := tool.ApprovalRequest(raw)
 			if err != nil || !strings.Contains(req.Summary, tc.summary) || string(req.Arguments) != string(raw) {

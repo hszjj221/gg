@@ -1,16 +1,40 @@
-# Personal Agent：后果属性路由与常驻授权（P2）
+# Personal Agent：个人 profile 与默认策略（P3）
 
 [English](personal-agent.md) | 简体中文
 
-P0 定义了后果语言与审批基线。P1 在共享运行时增加后果元数据和路由，拦截持久记忆写入，并提供可选的 Gmail 草稿路径。P2 增加持久、显式的常驻授权、CLI 管理及现有审批策略之前的审计匹配。独立个人身份／默认策略（P3）仍属于后续工作。
+P0 定义后果语言与审批基线。P1 增加后果路由、记忆写入审批及 Gmail 草稿。P2 增加显式常驻授权与审计匹配。P3 增加独立基础身份与更严格默认策略的个人 profile，默认 `gg` CLI 仍以编码为主。
 
 ## 个人代理与编码代理
 
-今天 gg 主要还是终端 **coding agent（编码代理）**，定位见 [README](../README.zh-CN.md)。[个人层](architecture.zh-CN.md#个人层画像--记忆)已经接入共享运行时：`USER.md` 提供用户画像，memory 提供持久上下文。有了这些上下文，并不表示当前已经有独立的个人身份或更严格的默认策略。
+gg 主要是终端 **coding agent（编码代理）**，定位见 [README](../README.zh-CN.md)。两种 profile 共用[个人层](architecture.zh-CN.md#个人层画像--记忆)：`USER.md` 提供用户画像，memory 提供持久上下文。运行时 profile 选择助手的身份与默认策略，与这些用户上下文分别处理。
 
-目标是继续共享会话、provider、工具和审批运行时。P3 再分叉**身份与默认策略**：coding 默认保持适合编码工作的体验，personal 默认对私人、可逆工作之外的后果更严格。这是身份和策略的分叉，不是再造一套运行时。
+P3 共享会话、provider、工具、审批和常驻授权，同时分离**身份与默认策略**。个人面以用户的个人助理为基础身份，优先私人、可逆工作和草稿。在仓库中仍遵循项目 `AGENTS.md`；选定基础指令后，`USER.md`、memory、项目指令及 skills 的组装顺序保持不变。
 
 P1 扩展现有的 `ApprovalDescriber` → `ApprovalRequest` → `Approver` 路径，保留 `Risk` / `RiskReason`、普通调用的审批模式及 bash 分类器。路由依据后果属性，不枚举工具名称。
+
+## 选择 profile（P3）
+
+```sh
+gg                              # coding，保持现有行为
+gg --profile coding             # 显式选择编码 profile
+gg --profile personal           # 个人助理面
+gg --profile personal -p '准备一封回复草稿'
+```
+
+`--profile` 仅接受 `coding` 和 `personal`；未设置或空值均为 `coding`。选择仅作用于本次调用，包括恢复会话。P3 不增加持久化配置默认值或第二个二进制。
+
+| 默认值／策略 | Coding | Personal |
+| --- | --- | --- |
+| 基础身份 | 在用户项目中工作的编码代理 | 用户的个人助理 |
+| 审批模式 | `auto` | `on-request` |
+| `--yolo`／`--approval yolo` | 保持现有行为 | 拒绝，并提示使用 standing-auth |
+| Gmail 省略 `as_draft` | `false`：发送 | `true`：创建草稿，不发送 |
+
+Personal 默认的 `on-request` 要求 stdin 和 stderr 都是终端，否则 CLI 在调用模型前退出。有终端时，普通需审批调用会询问；现有只读和 agent 目录豁免保留。显式 `--approval auto`、`on-request` 或 `never` 可覆盖默认值。`never` 保留普通调用不询问直接放行的历史行为，但不授权明确的 E/M/U 或 dangerous/confirm 调用。无人值守配合常驻授权时，显式选择 `--approval auto`：未匹配的需审批调用会被拒绝。两种 profile 的明确 E/M/U 仍须人工确认或匹配常驻授权；授权始终不能豁免 dangerous/confirm 风险。
+
+Personal Gmail 调用省略 `as_draft` 时创建真实草稿。显式 `as_draft=false` 仍可请求发送，经过相同的 E/U 审批路径。预览与结果反映实际动作。草稿与发送均为 E/U，不会自动获准；草稿失败绝不回退到发送。常驻授权的参数限制仍匹配原始显式参数：即使在 personal 中，限制 `as_draft=true` 的授权也要求调用明确包含它。
+
+选定的 `Config.Profile` 传入共享提示词与工具注册表，包括手动 `gg --profile personal job run ...` 轮次。手动任务保留任务审批策略（`--allow-all`），不使用交互 CLI 模式；profile 不存入任务定义。`ggd`、Web/Electron、Telegram 及 daemon 定时任务保持现有 coding profile 和审批策略，入口选择器留待后续。P4 主动性、摘要和提醒不在本 PR 范围内。
 
 ## 四个后果维度
 
@@ -50,9 +74,9 @@ P1 扩展现有的 `ApprovalDescriber` → `ApprovalRequest` → `Approver` 路�
 
 P1 为 `gmail_send` 和 `calendar_create` 填写 E/U=true、M=false、R=false，为 `browser_navigate` 填写 E=true、R=false。`memory_add` 的 E/M/U=false、R=未知：它是持久本地写入，删除条目不能撤销后续已经发生的使用。其他工具可保留未知维度；本阶段不增加媒体端点的本地性／计费分类，也不增加 bash 后果分类。
 
-`memory_add` 现在在共享 coding 运行时实现 `ApprovalDescriber`，因为 `SetupPersonal` 尚无个人专用 profile 开关。审批预览展示内容、scope 及请求的 workspace/global target（没有工作区上下文时均写入全局记忆）。`memory_search` 保持只读且不加审批。P3 可以将默认策略收窄到个人身份，而不移除 describer。
+`memory_add` 在两种 profile 中均实现 `ApprovalDescriber`。审批预览展示内容、scope 及请求的 workspace/global target（没有工作区上下文时均写入全局记忆）。`memory_search` 保持只读且不加审批。
 
-`gmail_send` 接受可选 `as_draft`（默认 `false`，保留发送行为）。为 `true` 时创建真实 Gmail 草稿，返回**草稿 ID**，不发送；API 失败绝不回退到发送。预览和结果明确标注 “not sent”。草稿仍为 E/U=true，因为 Google 可见，且内容以用户身份创建在其邮箱内。草稿内容可以删除，但整个效果仍为 R=false，因为服务方痕迹无法在本地撤销。两种模式都必须人工确认，或匹配显式常驻授权。
+`gmail_send` 接受可选 `as_draft`（coding 默认 `false`，personal 默认 `true`）。为 `true` 时创建真实 Gmail 草稿，返回**草稿 ID**，不发送；API 失败绝不回退到发送。预览和结果明确标注 “not sent”。草稿仍为 E/U=true，因为 Google 可见，且内容以用户身份创建在其邮箱内。草稿内容可以删除，但整个效果仍为 R=false，因为服务方痕迹无法在本地撤销。两种模式都必须人工确认，或匹配显式常驻授权。
 
 创建草稿需要 `gmail.compose`，现已在原有 scope 之外加入新连接的授权请求。已有连接仍可发送；使用草稿前需通过 `gg connect google --force` 重新授权。缺少草稿 scope 会返回错误并提示重新连接。参见[连接器](connectors.zh-CN.md#安全边界)。
 
@@ -105,7 +129,7 @@ gg standing-auth revoke <id>
 
 命中后先追加并同步审计记录，包含 `timestamp`、`grantId`、`toolName`、`summary` 和 `decision="allow-by-standing-grant"`，再无提示放行。存储损坏／读取失败或审计写入失败时，均失败关闭。审计记录的是授权决定，不代表执行成功。未命中时，原有 P1 审批器保持不变。
 
-授权适用于使用同一 gg home 的所有工作区和传输入口。`subject` 记录显式声明的行动者／账户，不引入 P3 身份选择器，也不验证 OAuth 账户。实际配置账户应与声明一致，切换时应撤销并重新授权。Telegram 的聊天白名单仍控制谁可以发起轮次；Telegram 保持 `UnattendedApprover{}`，不会变为 AllowAll。
+授权适用于使用同一 gg home 的所有 profile、工作区和传输入口。`subject` 记录显式声明的行动者／账户；选择 profile 不会限定授权范围或验证 OAuth 账户。实际配置账户应与声明一致，切换时应撤销并重新授权。Telegram 的聊天白名单仍控制谁可以发起轮次；Telegram 保持 `UnattendedApprover{}`，不会变为 AllowAll。
 
 定时任务的 `--allow-all` 为兼容保留：仍按 P1 规则放行普通工具，但不能豁免明确的 E/M/U 或 dangerous/confirm 风险。在这些走审批接口的调用中，匹配常驻授权是无人值守时允许明确 E/M/U 的唯一授权路径；命中不需要 `--allow-all`。
 
@@ -113,7 +137,7 @@ gg standing-auth revoke <id>
 
 - 手动任务（`internal/cliapp/job.go`）和 daemon 任务（`internal/daemon/scheduler.go`）仍传入 `AllowAll: job.AutoApprove`。替换普通工具的兼容路径需要明确迁移方案；P2 不做整体删除。
 - 未分类调用还需补齐后果元数据，授权才能匹配，包括 bash／MCP／媒体工具及浏览器导航中未知的 M/U。未实现 `ApprovalDescriber` 的工具仍在此拦截范围之外。
-- 账户／行动者验证、按传输入口划分授权主体、花费／使用量限制及更丰富的目的地限制留待后续。P3 身份与默认策略分离不在 P2 范围内。
+- 账户／行动者验证、按传输入口划分授权主体、花费／使用量限制及更丰富的目的地限制留待后续。
 
 ## 当前审批清单
 
@@ -132,7 +156,7 @@ P0（#54）之后的 P1 清单，对照了[内置工具实现](../internal/tools
 | [`bash`](../internal/tools/bash.go) | 是 | R/E/M/U：取决于命令和目标。 | 现有分类器和可选风险检查填写 `risk`/`riskReason`。shell 命令可能涉及任意维度。 |
 | [`memory_add`](../internal/tools/memory_add.go) | 是 | R：未知，取决于能否在复用前移除条目；E/M/U：false。 | 持久写入工作区／全局记忆，现已在共享运行时加审批。预览展示内容、scope 和 target；可影响后续轮次。 |
 | [`browser_navigate`](../internal/tools/browser.go) | 是 | R：第三方请求痕迹不可逆；E。 | 初始 URL 经 SSRF 检查，导航走审批。重定向和子资源限制仍见架构文档。 |
-| [`gmail_send`](../internal/tools/connectors.go) | 是 | R：发送后不可逆；E、U。 | 默认发送；`as_draft=true` 创建草稿但不发送。两种模式均断言 E/U；删除草稿内容不能撤销服务方痕迹。 |
+| [`gmail_send`](../internal/tools/connectors.go) | 是 | R：外部痕迹不可逆；E、U。 | Coding 默认发送，personal 默认草稿；显式 `as_draft` 覆盖两者默认值。两种模式均断言 E/U；删除草稿内容不能撤销服务方痕迹。 |
 | [`calendar_create`](../internal/tools/connectors.go) | 是 | R：外部痕迹不可逆；E、U。 | 以用户账户在主日历创建事件。当前参数不包含参会人；发送邀请是边界示例，不代表此工具具备该能力。 |
 | [`artifact_create`](../internal/tools/artifact.go) | 是 | R：本地创建可移除；无直接 E/M/U。 | 写入工作区之外的本地 artifact store，不会发布到外部服务。 |
 | [`artifact_edit`](../internal/tools/artifact.go) | 是 | R：保留的版本可恢复旧内容；无直接 E/M/U。 | 追加完整本地版本。发布到 library 是独立的应用／CLI 操作，不是此工具。 |
