@@ -79,6 +79,48 @@ func TestComputerToolDefinitions(t *testing.T) {
 	}
 }
 
+func TestComputerToolApprovalConsequences(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tool agent.ApprovalDescriber
+		raw  string
+		r    *bool
+		e    bool
+		risk string
+	}{
+		{"process_kill term", NewProcessKillTool(), `{"pid":4242}`, new(false), false, agent.ApprovalRiskDangerous},
+		{"process_kill kill", NewProcessKillTool(), `{"pid":4242,"signal":"kill"}`, new(false), false, agent.ApprovalRiskDangerous},
+		{"open http", NewOpenTool("/workspace"), `{"target":"http://example.com"}`, new(false), true, ""},
+		{"open https", NewOpenTool("/workspace"), `{"target":" https://example.com "}`, new(false), true, ""},
+		{"open mixed-case scheme", NewOpenTool("/workspace"), `{"target":"HTTPS://example.com"}`, new(false), true, ""},
+		{"open relative file", NewOpenTool("/workspace"), `{"target":"docs/a.md"}`, new(false), false, ""},
+		{"open absolute file", NewOpenTool("/workspace"), `{"target":"/workspace/http://notes"}`, new(false), false, ""},
+		{"open other scheme", NewOpenTool("/workspace"), `{"target":"mailto:a@b.c"}`, new(false), false, ""},
+		{"clipboard_read", NewClipboardReadTool(), `{}`, nil, false, ""},
+		{"clipboard_write", NewClipboardWriteTool(), `{"text":"hello"}`, nil, false, agent.ApprovalRiskConfirm},
+		{"notify", NewNotifyTool(), `{"title":"Reminder","body":"Meeting soon"}`, nil, true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := tc.tool.ApprovalRequest(json.RawMessage(tc.raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertToolConsequences(t, req, tc.r, new(tc.e), new(false), new(false))
+			if req.Risk != tc.risk {
+				t.Errorf("Risk = %q, want %q", req.Risk, tc.risk)
+			}
+			if tc.risk != "" || tc.e {
+				for _, approver := range []agent.Approver{agent.DefaultApprover{}, agent.UnattendedApprover{AllowAll: true}} {
+					decision, err := approver.Approve(context.Background(), req)
+					if err != nil || decision.Allow {
+						t.Errorf("%T must deny without a human: %+v, %v", approver, decision, err)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestParseProcessKillInput(t *testing.T) {
 	self := os.Getpid()
 
@@ -182,9 +224,7 @@ func TestNotifyToolApprovalRequest(t *testing.T) {
 			if req.ExternallyVisible == nil || !*req.ExternallyVisible || !req.RequiresHumanConfirm() {
 				t.Error("OS notifications must assert E and require human confirmation")
 			}
-			if req.SpendsMoneyOrChangesPermissions != nil || req.ActsInUserName != nil {
-				t.Error("M/U must remain unknown")
-			}
+			assertToolConsequences(t, req, nil, new(true), new(false), new(false))
 		})
 	}
 }

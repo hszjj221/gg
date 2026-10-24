@@ -598,14 +598,16 @@ func TestRunYoloDeniesDangerousCommand(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected exit 0, got %d: %s", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "piped download into a shell") || !strings.Contains(stderr.String(), "--yolo") {
+	// Dangerous bash now asserts E/M/U, so the consequence gate denies it
+	// before the risk-only yolo rule. The denial must still reach the model.
+	if !strings.Contains(stderr.String(), "denied") || !strings.Contains(stderr.String(), "requires human confirmation") || strings.Contains(stderr.String(), "Approve tool call") {
 		t.Fatalf("dangerous command should be denied under yolo: %q", stderr.String())
 	}
 	if len(provider.requests) < 2 {
 		t.Fatalf("model should see the denial, requests=%d", len(provider.requests))
 	}
 	last := provider.requests[1].Messages[len(provider.requests[1].Messages)-1]
-	if !strings.Contains(last.Content, "piped download into a shell") {
+	if !strings.Contains(last.Content, "denied") || !strings.Contains(last.Content, "requires human confirmation") {
 		t.Fatalf("denial not sent to model: %+v", last)
 	}
 }

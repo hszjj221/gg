@@ -82,6 +82,7 @@ func TestBrowserNavigateApprovalRequest(t *testing.T) {
 	if req.Reversible == nil || *req.Reversible || req.ExternallyVisible == nil || !*req.ExternallyVisible || !req.RequiresHumanConfirm() {
 		t.Fatalf("expected irreversible external navigation: %+v", req)
 	}
+	assertToolConsequences(t, req, new(false), new(true), new(false), new(false))
 	if _, err := tool.ApprovalRequest(json.RawMessage(`{bad json`)); err == nil {
 		t.Fatal("expected error for invalid arguments")
 	}

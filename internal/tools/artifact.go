@@ -49,10 +49,14 @@ func (t ArtifactCreateTool) ApprovalRequest(raw json.RawMessage) (agent.Approval
 		return agent.ApprovalRequest{}, fmt.Errorf("invalid artifact_create arguments: %w", err)
 	}
 	return agent.ApprovalRequest{
-		ToolName:  "artifact_create",
-		Summary:   fmt.Sprintf("create %s artifact %q (%d bytes)", input.Type, input.Title, len(input.Content)),
-		Details:   fmt.Sprintf("title: %s\ntype: %s\ncontent bytes: %d\n\n%s", input.Title, input.Type, len(input.Content), contentChangePreview("", input.Content)),
-		Arguments: raw,
+		ToolName:                        "artifact_create",
+		Summary:                         fmt.Sprintf("create %s artifact %q (%d bytes)", input.Type, input.Title, len(input.Content)),
+		Details:                         fmt.Sprintf("title: %s\ntype: %s\ncontent bytes: %d\n\n%s", input.Title, input.Type, len(input.Content), contentChangePreview("", input.Content)),
+		Arguments:                       raw,
+		Reversible:                      new(true),
+		ExternallyVisible:               new(false),
+		SpendsMoneyOrChangesPermissions: new(false),
+		ActsInUserName:                  new(false),
 	}, nil
 }
 
@@ -112,10 +116,14 @@ func (t ArtifactEditTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRe
 		before, _ = t.store.ReadVersion(a.ID, a.Version)
 	}
 	return agent.ApprovalRequest{
-		ToolName:  "artifact_edit",
-		Summary:   fmt.Sprintf("update artifact %s (%d bytes)", input.ArtifactID, len(input.Content)),
-		Details:   fmt.Sprintf("artifact: %s\ncontent bytes: %d\n\n%s", input.ArtifactID, len(input.Content), contentChangePreview(before, input.Content)),
-		Arguments: raw,
+		ToolName:                        "artifact_edit",
+		Summary:                         fmt.Sprintf("update artifact %s (%d bytes)", input.ArtifactID, len(input.Content)),
+		Details:                         fmt.Sprintf("artifact: %s\ncontent bytes: %d\n\n%s", input.ArtifactID, len(input.Content), contentChangePreview(before, input.Content)),
+		Arguments:                       raw,
+		Reversible:                      new(true),
+		ExternallyVisible:               new(false),
+		SpendsMoneyOrChangesPermissions: new(false),
+		ActsInUserName:                  new(false),
 	}, nil
 }
 

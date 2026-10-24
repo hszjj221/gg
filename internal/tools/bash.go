@@ -79,14 +79,29 @@ func (t BashTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, e
 	if reason != "" {
 		details = "risk: " + reason + "\n" + details
 	}
-	return agent.ApprovalRequest{
+	req := agent.ApprovalRequest{
 		ToolName:   "bash",
 		Summary:    "bash: " + input.Command,
 		Details:    details,
 		Arguments:  raw,
 		Risk:       risk,
 		RiskReason: reason,
-	}, nil
+	}
+	// Reuse the existing risk verdict; ordinary commands remain unknown for
+	// standing grants and keep their normal approval policy.
+	switch risk {
+	case agent.ApprovalRiskReadOnly:
+		req.ExternallyVisible = new(false)
+		req.SpendsMoneyOrChangesPermissions = new(false)
+		req.ActsInUserName = new(false)
+	case agent.ApprovalRiskDangerous, agent.ApprovalRiskConfirm:
+		// Fail closed: the command may have any external consequence.
+		req.Reversible = new(false)
+		req.ExternallyVisible = new(true)
+		req.SpendsMoneyOrChangesPermissions = new(true)
+		req.ActsInUserName = new(true)
+	}
+	return req, nil
 }
 
 func (t BashTool) approvalRisk(command string) (string, string) {
