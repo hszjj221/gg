@@ -2,6 +2,8 @@
 
 `gg` keeps product behavior in a reusable Go core and treats every interface as an adapter. The CLI, Web app, and Electron client therefore share session semantics, concurrency rules, approval handling, and tool execution.
 
+The [Core + first-party plugin plan](core-plugin.md) records the C0 ownership decision: retain Go Core and its approval/storage/protocol invariants, introduce a stable SPI in later phases, keep first-party plugins statically linked, and use profiles for capability enable lists. C0 is documentation only; the runtime and coding defaults described here remain unchanged, and third-party capabilities remain MCP-first.
+
 ```mermaid
 flowchart LR
     CLI[gg CLI: one-shot + line interactive] --> CLIAPP[internal/cliapp adapter]
