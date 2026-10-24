@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"log/slog"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -104,8 +103,8 @@ var toolRegistry = NewRegistry(
 	ToolProvider{Name: "kb", Build: buildKBTools},
 	ToolProvider{Name: "artifact", Build: buildArtifactTools},
 	ConnectorTools(googleConnector()),
-	ToolProvider{Name: "media", Build: buildMediaTools},
-	ToolProvider{Name: "browser", Build: buildBrowserTools},
+	mediaTools(),
+	browserTools(),
 	ToolProvider{Name: "computer", Build: buildComputerTools, Available: computerToolsSupported},
 	ToolProvider{Name: "mcp", Build: buildMCPTools},
 )
@@ -195,37 +194,6 @@ func buildArtifactTools(ctx context.Context, tc ToolContext) ([]agent.Tool, erro
 	return []agent.Tool{
 		tools.NewArtifactCreateTool(astore),
 		tools.NewArtifactEditTool(astore),
-	}, nil
-}
-
-func buildMediaTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
-	// Media tools degrade to absent when the provider base URL is missing.
-	mclient := tc.Memoized.MediaClient(tc.Config)
-	if mclient == nil {
-		return nil, nil
-	}
-	return []agent.Tool{
-		tools.NewImageGenerateTool(mclient),
-		tools.NewTTSTool(mclient),
-		tools.NewSTTToolWithRoots(mclient, []string{
-			tc.Config.CWD,
-			filepath.Join(tc.Config.HomeDir, ".gg", "media"),
-		}),
-	}, nil
-}
-
-func buildBrowserTools(ctx context.Context, tc ToolContext) ([]agent.Tool, error) {
-	// Browser tools need a local Chromium; they degrade to a clear error
-	// when none is installed. The pool scopes one Chromium session to this
-	// Service (one conversation) and is closed via Service.Close when the
-	// Service is retired.
-	if !tc.Memoized.ChromiumOK() {
-		return nil, nil
-	}
-	return []agent.Tool{
-		tools.NewBrowserNavigateTool(tc.BrowserPool),
-		tools.NewBrowserReadTool(tc.BrowserPool),
-		tools.NewBrowserScreenshotTool(tc.BrowserPool),
 	}, nil
 }
 

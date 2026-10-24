@@ -10,8 +10,10 @@ import (
 	"github.com/hszjj221/gg/internal/telegram"
 )
 
-// newTelegramChannel builds the Telegram bot channel. A construction error
-// is fatal to daemon startup.
+// newTelegramChannel is the statically linked Telegram registration adapter.
+// It maps host config to telegram.New without starting the bot. Core's
+// startChannels/launchChannel own startup, supervision, and cancellation;
+// a construction error remains fatal before any channel launches.
 func newTelegramChannel(cfg config.Config, rt *app.Runtime, logger *slog.Logger) (Channel, error) {
 	var mclient *media.Client
 	if mc, ok := cfg.MediaClientConfig(); ok {

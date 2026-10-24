@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/hszjj221/gg/internal/app"
 	"github.com/hszjj221/gg/internal/cli"
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/proactive"
@@ -26,8 +27,7 @@ func runProactiveCommand(ctx context.Context, cfg config.Config, args cli.Args, 
 	}
 	fs := flag.NewFlagSet("gg proactive demo", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	policy := proactive.Policy{}
-	fs.StringVar(&policy.QuietHours, "quiet-hours", "", "HH:MM-HH:MM local quiet window (default: disabled)")
+	quietHours := fs.String("quiet-hours", "", "HH:MM-HH:MM local quiet window (default: disabled)")
 	at := fs.String("at", "10:00", "fake local time HH:MM (default: 10:00)")
 	later := fs.Bool("remember-later", false, "capture fake digests as local note candidates")
 	if err := fs.Parse(args.ProactiveArgs[1:]); err != nil {
@@ -42,7 +42,8 @@ func runProactiveCommand(ctx context.Context, cfg config.Config, args cli.Args, 
 		fmt.Fprintln(stderr, "--at must be HH:MM")
 		return 2
 	}
-	if err := policy.Validate(); err != nil {
+	policy, err := app.NewProactivePolicy(*quietHours)
+	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}

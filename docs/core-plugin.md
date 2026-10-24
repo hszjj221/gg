@@ -2,7 +2,7 @@
 
 [中文](core-plugin.zh-CN.md)
 
-This records the approved Core+plugin plan: the C0 architecture decision (based on `main@932e14e`), C1 Registry and Tool/Connector SPI (based on `main@e77769a`), and C2 profile enable lists (based on `main@53fb4be`). C0 changed documentation only. C1 established the in-tree SPI with Google as the statically linked pilot. C2 filters provider construction and capability reporting by profile while preserving coding tools, defaults, and approval policy. The [architecture overview](architecture.md) describes the running system; C3 and later phases below remain future work.
+This records the approved Core+plugin plan: the C0 architecture decision (based on `main@932e14e`), C1 Registry and Tool/Connector SPI (based on `main@e77769a`), C2 profile enable lists (based on `main@53fb4be`), and C3 in-tree registration splits (based on `main@3b2ab86`). C0 changed documentation only. C1 established the in-tree SPI with Google as the statically linked pilot. C2 filters provider construction and capability reporting by profile. C3 adds browser/media registration adapters and explicit Telegram/proactive factory boundaries, preserving coding tools, defaults, and approval policy. The [architecture overview](architecture.md) describes the running system; a generalized channel/policy SPI and C4 remain deferred.
 
 ## Goal and boundaries
 
@@ -13,11 +13,11 @@ The purpose is to make capability ownership and assembly explicit without weaken
 First-party implementation status and later candidates are:
 
 - **Connectors**: Google is the C1 pilot, registered through the SPI; OAuth/API code remains in `internal/connector/google`.
-- **Browser** and **media** capability implementations.
-- **Telegram channel** and **proactive delivery policy** implementations.
+- **Browser** and **media**: C3 registers dedicated ToolProviders through `app` adapters; implementations and tool wrappers remain in their existing packages.
+- **Telegram channel** and **proactive delivery policy**: C3 reuses the daemon's Telegram factory and adds an app-side proactive policy factory. A generalized channel/policy SPI is deferred.
 - **Artifact/library**, optionally later if reducing binary size becomes a concrete requirement. An enable list alone cannot remove their linked code.
 
-C0 listed candidates; C1 keeps the SPI in `app` to avoid moving shared host dependencies. Neither phase authorizes a bulk directory move.
+C0 listed candidates; C1 keeps the SPI in `app` to avoid moving shared host dependencies. C3 extends that registration seam without relocating implementation packages. No phase authorizes a bulk directory move.
 
 ## Core invariants
 
@@ -81,6 +81,16 @@ The [`Google pilot registration`](../internal/app/googleplugin.go) now uses this
 
 First-party packages ship and migrate with a gg release. There is no separate installer, npm dependency resolver, dynamic Go plugin loader, or hot-reload lifecycle in this plan. The stable SPI is a maintained source-level contract, not a promised binary ABI or third-party in-process loading API.
 
+### C3 expands in-tree implementation splits
+
+[`browserTools`](../internal/app/browserplugin.go) and [`mediaTools`](../internal/app/mediaplugin.go) return the existing ToolProvider registrations, keeping `media` before `browser` in the registry. Their builders preserve tool order, schemas, approval descriptions, STT read roots, and prerequisite behavior. Both retain a nil `Available` gate: capabilities are advertised without probing runtime prerequisites, while missing Chromium or a media endpoint yields no tools and no operational degradation. Core's `ToolMemo` still owns the per-conversation Chromium probe and reusable media client; the browser pool remains closed by the existing host lifecycle. Implementations remain in `internal/browser`, `internal/media`, and `internal/tools`.
+
+[`newTelegramChannel`](../internal/daemon/telegram.go) already provides the smallest channel factory, so C3 retains it rather than introducing another wrapper. It maps host configuration, the shared runtime, logger, allowlist, and optional voice client into `telegram.New`, then adapts the bot to daemon `Channel`. Core still constructs every configured channel before launching any, fails startup on construction errors, supervises runtime errors/panics, and owns cancellation and worker draining. Telegram's bot, update/voice handling, storage paths, and approval path remain unchanged.
+
+[`app.NewProactivePolicy`](../internal/app/proactiveplugin.go) constructs and validates the existing concrete `proactive.Policy` for the CLI demo. Policy decisions stay in `internal/proactive`; CLI flag parsing, local output/candidate storage, and the existing approver remain host-owned. Construction adds no I/O or background work. Coding stays quiet; personal quiet hours, note candidates, zero notifications, and draft/send denial without a human or grant remain unchanged.
+
+This lands ToolProvider adapters and concrete channel/policy factory seams only. A generalized Channel/Policy SPI, broader dependency inversion, package relocation, and artifact/library extraction are deferred; they are not needed to establish ownership in this PR. There is no new profile default, live trigger, installer, or third-party channel market. C4 remains later work.
+
 ## Profiles and coding compatibility
 
 [`config.ParseProfile`](../internal/config/config.go) accepts `coding` and `personal`; unset or empty selects coding. C2 makes `--profile` / `Config.Profile` select the enabled tool/connector set as well as the [existing personal identity and defaults](personal-agent.md#selecting-a-profile-p3). No new CLI flag, saved config syntax, or daemon selector is added. Daemon, Web/Electron, Telegram, and daemon-scheduled turns retain their documented coding profile behavior; an embedding host that supplies a personal runtime config gets matching `system.info` capabilities.
@@ -103,7 +113,7 @@ Coding retains all registered providers, including host extensions, with the pre
 
 Definitions and execution both use `Registry.Build`; capability reporting uses the same `ForProfile` selection and platform gates without building providers. Disabled providers are skipped before their `Available` probes or builders, open no provider resources, and are not reported as degraded. Enabled providers still apply existing runtime prerequisites and degradation rules. Capability identifiers describe enabled, platform-supported providers, not a guarantee of connected tokens, installed Chromium, or reachable servers; missing prerequisites can yield no tools for a turn. Unavailable connectors are skipped before opening their token store.
 
-Personal's approval default remains `on-request`, yolo remains rejected, and omitted Gmail `as_draft` remains `true`; coding retains `auto` and default send behavior. Drafts and sends still require a human decision or a matching explicit standing grant for E/U. Profile selection neither creates standing grants nor bypasses approval. Composition is deterministic within the existing agent loop. C3 expands in-tree implementation splits; it does not land in C2.
+Personal's approval default remains `on-request`, yolo remains rejected, and omitted Gmail `as_draft` remains `true`; coding retains `auto` and default send behavior. Drafts and sends still require a human decision or a matching explicit standing grant for E/U. Profile selection neither creates standing grants nor bypasses approval. Composition is deterministic within the existing agent loop. C3 changes registration ownership only; `ForProfile` retains C2's exact enable list.
 
 ## Package ownership inventory at `main@932e14e`
 
@@ -116,36 +126,36 @@ The following inventory covers all **29 top-level directories** under `internal/
 | Top-level package | Classification | Ownership / later boundary |
 | --- | --- | --- |
 | `internal/agent` | Core | Agent/provider/tool contracts, loop, execution, approval requests, and consequence routing. |
-| `internal/app` | Core | Session use cases, runs, prompt assembly, registry host, resource ownership, and shared authorization integration; candidate-specific builders may later delegate through SPI. |
+| `internal/app` | Core | Session use cases, runs, prompt assembly, registry host, resource ownership, and shared authorization integration; Google/browser/media registration adapters and the proactive factory delegate to existing implementations. |
 | `internal/artifact` | First-party plugin (candidate) | Optional later extraction of versioned deliverables and publishing support if binary-size work is justified; preserve publish consistency and storage behavior. |
 | `internal/bootstrap` | Core | Shared dependency construction for CLI and daemon. |
-| `internal/browser` | First-party plugin (candidate) | Chromium/CDP capability implementation; preserve navigation approval and existing SSRF boundaries. |
+| `internal/browser` | First-party plugin (candidate) | Chromium/CDP implementation; C3 registration lives in `app/browserplugin.go`, preserving navigation approval and existing SSRF boundaries. |
 | `internal/cli` | Adapter/surface | Command/flag parsing; delegates profile validation to Core config and preserves existing defaults. |
 | `internal/cliapp` | Adapter/surface | CLI composition, management commands, approval presentation, and interaction with Core use cases. Shared approval semantics remain Core-owned. |
 | `internal/config` | Core | Configuration resolution, validation, profile parsing, and defaults. |
 | `internal/connector` | First-party plugin (candidate) | Connector implementations, with nested `google` preferred for C1. Separate the Core Connector contract/common lifecycle from provider operations; no blanket move of OAuth/token infrastructure. |
 | `internal/contextmgr` | Core | Context budgeting, compaction, and conversation projection. |
-| `internal/daemon` | Core | Composition root, channel supervision, scheduling/channel wiring, and process lifetime; later delegates candidate implementations. |
+| `internal/daemon` | Core | Composition root, channel supervision, scheduling/channel wiring, and process lifetime; retains the Telegram factory adapter to the existing implementation. |
 | `internal/filelock` | Core | Shared cross-process persistence locking. |
 | `internal/kb` | Core | Knowledge-index build/search/storage support; no extraction planned in C0–C3. |
 | `internal/library` | First-party plugin (candidate) | Optional later extraction of the curated file collection, paired with artifact/publish contracts if binary-size work is justified. |
 | `internal/mcp` | Adapter/surface | External MCP connection, schema, and tool bridge. Core approval enforcement remains mandatory. |
-| `internal/media` | First-party plugin (candidate) | Image/speech/transcription clients and capability implementation. |
+| `internal/media` | First-party plugin (candidate) | Image/speech/transcription clients and implementation; C3 registration lives in `app/mediaplugin.go`. |
 | `internal/memory` | Core | Memory storage contracts, scopes, migration, permissions, and retrieval. |
-| `internal/proactive` | First-party plugin (candidate) | Local delivery policy implementation; cannot grant authorization or replace memory-write gates. |
+| `internal/proactive` | First-party plugin (candidate) | Local delivery policy, constructed through C3's `app.NewProactivePolicy`; cannot grant authorization or replace memory-write gates. |
 | `internal/provider` | Adapter/surface | Model-provider factory and nested protocol clients; `agent.Provider` and loop semantics remain Core contracts. |
 | `internal/runlog` | Core | Shared structured logging and run context. |
 | `internal/scheduler` | Core | Job definitions, durable store, firing loop, and unattended execution/approval contract. |
 | `internal/session` | Core | Session repository, JSONL/tree contracts, leases, conflict checks, and recovery. |
 | `internal/skills` | Core | Skill discovery and prompt integration; markdown skills use existing tools and do not create another plugin runtime. |
 | `internal/standingauth` | Core | Grant persistence, matching, expiry/revocation, and allow audit. |
-| `internal/telegram` | First-party plugin (candidate) | Channel API, bot/update handling, and voice integration; daemon lifecycle and shared approval remain in Core. |
+| `internal/telegram` | First-party plugin (candidate) | Channel API, bot/update handling, and voice integration behind the daemon's concrete factory; daemon lifecycle and shared approval remain in Core. |
 | `internal/tools` | Core | Coding tools and shared approval/path/command policy; mixed browser/connector/media wrappers may later follow their capability through SPI. No wholesale tools move. |
 | `internal/transport` | Core | JSON-RPC, stdio, HTTP/SSE contracts and enforcement. These are transport adapters in implementation, but remain part of the Core protocol boundary. |
 | `internal/userprofile` | Core | `USER.md` parsing, rendering, and storage contract. |
 | `internal/workspace` | Core | Workspace identity, roots, registry, and project instruction lookup. |
 
-This is the C0 baseline inventory, not a directory-move checklist. In C1, the Google registration adapter uses the Connector SPI within `app`; `app` and `tools` still import candidate implementations directly. Other candidate dependencies have not been inverted.
+This preserves the C0 package classification with registration status updated through C3; it is not a directory-move checklist. Google uses the Connector SPI, browser/media use ToolProvider adapters, and Telegram/proactive use concrete factories. `app`, `daemon`, and `tools` still import implementations directly; C3 does not claim full dependency inversion.
 
 ## Phased delivery and acceptance
 
@@ -154,10 +164,10 @@ This is the C0 baseline inventory, not a directory-move checklist. In C1, the Go
 | **C0 — documentation (landed)** | This decision, Chinese mirror, and links from both architecture overviews. | Documentation only; all 29 packages classified; no runtime/SPI code or coding-default changes. Run `go vet ./...` and `go test ./...` and verify the diff contains only the four intended docs. |
 | **C1 — Registry + Tool/Connector SPI (landed)** | `app.Registry`, Tool/Connector contracts, shared build/discovery assembly, and the statically linked Google registration pilot. No profile enable-list filtering. | Preserve tool names/schemas/order, discovery, defaults, prerequisite/degradation behavior, approval/standing-auth/E/M/U/R, storage paths, and resource cleanup. Existing tests and focused SPI/pilot checks pass. |
 | **C2 — profile enable lists (landed)** | `Registry.ForProfile` filters construction and capability reporting; personal omits media/computer/MCP. | Definitions, execution, and advertised capabilities share selection; disabled providers are not probed or built. Unset/explicit coding retains its existing surface and defaults. Profile, platform, resource, and approval checks pass. |
-| **C3 — expand in-tree splits (deferred)** | Extend the proven seam to browser/media and channel/policy implementations such as Telegram/proactive. Artifact/library remain optional later work. | Incremental migrations, green tests, stable Core ownership, and preserved channel supervision, approvals, and coding behavior. No big-bang `internal/` move. |
-| **C4 — later external ecosystem** | Third-party remains MCP-first. Reassess distribution/market needs only against a concrete requirement. | No Bun host, npm market, hot reload, or new in-process third-party runtime is authorized here; any such proposal requires a new project decision. |
+| **C3 — expand in-tree splits (landed: adapters/factories)** | Dedicated browser/media ToolProviders; retain the daemon Telegram factory and add the app proactive policy factory. Generalized Channel/Policy SPI and broader extraction are deferred; artifact/library remain optional later work. | Registry/coding parity and prerequisite tests pass; existing Telegram supervision and proactive brakes stay green. Core lifecycle, approvals, standing-auth/E/M/U/R, coding defaults, and C2 enable lists are unchanged. No package relocation. |
+| **C4 — later external ecosystem (deferred)** | Third-party remains MCP-first. Reassess distribution/market needs only against a concrete requirement. | No Bun host, npm market, hot reload, or new in-process third-party runtime is authorized here; any such proposal requires a new project decision. |
 
-C1 establishes behavior-preserving boundaries before C2 changes selection. C3 expands only after that seam is proven. Moving code or adding an SPI does not itself justify new profile defaults, live triggers, privileges, or data migrations that change behavior.
+C1 establishes behavior-preserving boundaries before C2 changes selection. C3 expands that proven seam with thin adapters and factories. Moving code or adding an SPI does not itself justify new profile defaults, live triggers, privileges, or data migrations that change behavior.
 
 ## Non-goals and delivery rules
 
@@ -165,6 +175,6 @@ C1 establishes behavior-preserving boundaries before C2 changes selection. C3 ex
 - No rewrite of Core in Node, Bun plugin host, npm market, or hot reload.
 - No big-bang relocation of `internal/`, runtime extraction in C0, or premature binary-size claim.
 - No weakening of coding defaults, approval, standing-auth, or consequence semantics. Plugins cannot bypass these gates.
-- No force-push or self-push. C2 is committed on `feat/core-plugin-c2`; the coordinator handles pushing and PR creation.
+- No force-push or self-push. C3 is committed on `feat/core-plugin-c3`; the coordinator handles pushing and PR creation.
 
-For C2, review evidence includes pre-C2 coding registration/tool order and definition parity, personal discovery/execution selection, host extension filtering, platform gates, skipped-provider resources, profile-aware `system.info`, preserved Gmail draft/approval behavior, and the existing standing-auth, connector refresh, and cleanup tests, plus `go vet ./...` and `go test ./...`. The PR body records what changed, why, tradeoffs, and the actual verification results. Package moves and broader in-tree splits remain C3; market/Bun work remains outside this delivery.
+For C3, review evidence includes coding registration/tool order and definition parity, unchanged personal selection and platform gates, browser/media prerequisite absence and memoization, and the existing approval/standing-auth, connector refresh, browser cleanup, Telegram supervision/startup failure, and proactive demo brakes tests, plus `go vet ./...` and `go test ./...`. The PR body records what changed, why, tradeoffs, and the actual verification results. Generalized channel/policy SPI and broader extraction remain deferred; market/Bun work remains outside this delivery.

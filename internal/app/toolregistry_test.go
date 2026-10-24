@@ -186,20 +186,28 @@ func TestProviderDegradeLogic(t *testing.T) {
 		}
 	})
 	t.Run("media without base URL", func(t *testing.T) {
-		if got := buildForTest(t, buildMediaTools, testToolContext(t, config.Config{})); got != nil {
+		if got := buildForTest(t, mediaTools().Build, testToolContext(t, config.Config{})); got != nil {
 			t.Fatalf("expected nil tools without media base URL, got %d", len(got))
 		}
 	})
 	t.Run("media client shared across turns", func(t *testing.T) {
 		cfg := config.Config{BaseURL: "https://api.example.com", HomeDir: t.TempDir()}
 		tc := testToolContext(t, cfg)
-		first := buildForTest(t, buildMediaTools, tc)
-		second := buildForTest(t, buildMediaTools, tc)
+		first := buildForTest(t, mediaTools().Build, tc)
+		second := buildForTest(t, mediaTools().Build, tc)
 		if len(first) != 3 || len(second) != 3 {
 			t.Fatalf("expected 3 media tools, got %d and %d", len(first), len(second))
 		}
 		if tc.Memoized.mediaClient == nil {
 			t.Fatal("media client was not memoized")
+		}
+	})
+	t.Run("browser without Chromium", func(t *testing.T) {
+		tc := testToolContext(t, config.Config{})
+		// Keep the prerequisite deterministic regardless of the host install.
+		tc.Memoized.chromiumResolved = true
+		if got := buildForTest(t, browserTools().Build, tc); got != nil {
+			t.Fatalf("expected nil tools without Chromium, got %d", len(got))
 		}
 	})
 }
