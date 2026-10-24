@@ -95,7 +95,7 @@ gg --profile personal -p '使用 gmail_search/gmail_read 汇总最近未读邮�
 | 首位用户自用验证 | 可发现的 CLI 假邮件摘要、日历提醒与常驻授权拒绝场景，配套测试及可选真实只读操作说明。 | Daemon／Telegram 主动投递。 |
 | 停止条件指针 | 保持编码优先默认值和共享运行时。 | 物理拆分仓库。 |
 
-**计划停止条件：** 仅当 personal 默认策略**系统性损害 coding**，出现审批噪声、工具循环或 README 人设漂移的证据时，才考虑物理拆分仓库。本切片不拆仓库、不重写 agent 循环、不增加第二运行时，也不扩大 MCP／bash 后果分类。现有 `gg job`／`internal/scheduler` 继续承担调度；不新增调度器，也不将 demo 接入调度。
+**计划停止条件：** 仅当 personal 默认策略**系统性损害 coding**，出现审批噪声、工具循环或 README 人设漂移的证据时，才考虑物理拆分仓库。P4 切片不拆仓库、不重写 agent 循环、不增加第二运行时，也不扩大 MCP／bash 后果分类。现有 `gg job`／`internal/scheduler` 继续承担调度；不新增调度器，也不将 demo 接入调度。
 
 ## 四个后果维度
 
@@ -133,7 +133,9 @@ gg --profile personal -p '使用 gmail_search/gmail_read 汇总最近未读邮�
 - nil approver 使用 `DefaultApprover`，拒绝明确的 E/M/U。`UnattendedApprover` 同样拒绝，包括 `AllowAll`／定时任务的 `--allow-all`。本地写入的预批准豁免不能绕过明确的 E/M/U。
 - E/M/U 未知或为 false 的请求继续沿用现有审批模式和 Risk 规则，包括无人确认时拒绝 `dangerous` / `confirm`。不会推导常驻授权。
 
-P1 为 `gmail_send` 和 `calendar_create` 填写 E/U=true、M=false、R=false，为 `browser_navigate` 填写 E=true、R=false。`memory_add` 的 E/M/U=false、R=未知：它是持久本地写入，删除条目不能撤销后续已经发生的使用。其他工具可保留未知维度；本阶段不增加媒体端点的本地性／计费分类，也不增加 bash 后果分类。
+P1 为 `gmail_send` 和 `calendar_create` 填写 E/U=true、M=false、R=false，为 `browser_navigate` 填写 E=true、R=false。`memory_add` 的 E/M/U=false、R=未知：它是持久本地写入，删除条目不能撤销后续已经发生的使用。
+
+D1a 已完成 media 和 MCP 的后果分类。`image_generate`、`tts`、`stt` 断言 R=false、E/M=true、U=false：删除本地文件不能撤销远程披露或已产生的 API 费用，API-key 调用也不以用户的第三方身份行事。未知 MCP server 工具断言 R=false、E/M/U=true，并设置 `Risk=confirm`；常驻授权不能豁免该风险，因此仍需人工确认。C2 仍在 personal 中排除 media 和 MCP provider。
 
 `memory_add` 在两种 profile 中均实现 `ApprovalDescriber`。审批预览展示内容、scope 及请求的 workspace/global target（没有工作区上下文时均写入全局记忆）。`memory_search` 保持只读且不加审批。
 
@@ -199,12 +201,12 @@ gg standing-auth revoke <id>
 ### TODO／后续工作
 
 - 手动任务（`internal/cliapp/job.go`）和 daemon 任务（`internal/daemon/scheduler.go`）仍传入 `AllowAll: job.AutoApprove`。替换普通工具的兼容路径需要明确迁移方案；P2 不做整体删除。
-- 未分类调用还需补齐后果元数据，授权才能匹配，包括 bash／MCP／媒体工具及浏览器导航中未知的 M/U。未实现 `ApprovalDescriber` 的工具仍在此拦截范围之外。
+- D1a 已完成 media／MCP 分类；MCP 因 `confirm` 风险仍不能匹配常驻授权。后续批次还需补齐 bash／computer、浏览器导航中未知的 M/U 及 artifact 工具的后果元数据，授权才能匹配这些调用。未实现 `ApprovalDescriber` 的工具仍在此拦截范围之外。
 - 账户／行动者验证、按传输入口划分授权主体、花费／使用量限制及更丰富的目的地限制留待后续。
 
 ## 当前审批清单
 
-P0（#54）之后的 P1 清单，对照了[内置工具实现](../internal/tools/)、[工具注册表](../internal/app/toolregistry.go)和 [MCP 桥接](../internal/mcp/tool.go)。覆盖 **30 个内置工具：16 个实现、14 个未实现 `agent.ApprovalDescriber`**，另加全部动态注册的 MCP 工具。实际注册取决于配置、已授予的 scope、provider 可用性和平台支持，并非每个会话都会暴露全部工具。
+P0（#54）之后的 P1 清单，已更新至 D3 和 D1a，并对照了[内置工具实现](../internal/tools/)、[工具注册表](../internal/app/toolregistry.go)和 [MCP 桥接](../internal/mcp/tool.go)。覆盖 **30 个内置工具：16 个实现、14 个未实现 `agent.ApprovalDescriber`**，另加全部动态注册的 MCP 工具。实际注册取决于配置、已授予的 scope、provider 可用性和平台支持，并非每个会话都会暴露全部工具。
 
 [`agent.ApprovalDescriber`](../internal/agent/types.go) 是包含 `ApprovalRequest` 方法的接口。“是”表示工具向 [runner](../internal/agent/runner.go)提供审批请求，不表示每次调用都会弹出人工确认。现有策略可以允许或拒绝请求，`write`/`edit` 还有狭窄的预批准豁免。“否”表示该接口不拦截此工具，不表示工具没有后果。
 
@@ -223,15 +225,15 @@ P0（#54）之后的 P1 清单，对照了[内置工具实现](../internal/tools
 | [`calendar_create`](../internal/tools/connectors.go) | 是 | R：外部痕迹不可逆；E、U。 | 以用户账户在主日历创建事件。当前参数不包含参会人；发送邀请是边界示例，不代表此工具具备该能力。 |
 | [`artifact_create`](../internal/tools/artifact.go) | 是 | R：本地创建可移除；无直接 E/M/U。 | 写入工作区之外的本地 artifact store，不会发布到外部服务。 |
 | [`artifact_edit`](../internal/tools/artifact.go) | 是 | R：保留的版本可恢复旧内容；无直接 E/M/U。 | 追加完整本地版本。发布到 library 是独立的应用／CLI 操作，不是此工具。 |
-| [`image_generate`](../internal/tools/media.go) | 是 | R：远程披露或已产生费用不可逆；远程时 E，计费时 M。 | 向媒体端点发送 prompt，将图片保存在本地。删除输出不会撤销费用。 |
-| [`tts`](../internal/tools/media.go) | 是 | R：远程披露或已产生费用不可逆；远程时 E，计费时 M。 | 向语音端点发送文本，将音频保存在本地。 |
-| [`stt`](../internal/tools/media.go) | 是 | R：远程披露或已产生费用不可逆；远程时 E，计费时 M。 | 上传本地音频进行转写，不只是读取本地文件。 |
+| [`image_generate`](../internal/tools/media.go) | 是 | R=false；E/M=true；U=false。 | D1a 为计费的 API-key 调用填写全部四个维度。向媒体端点发送 prompt，将图片保存在本地；删除输出不能撤销披露或费用。 |
+| [`tts`](../internal/tools/media.go) | 是 | R=false；E/M=true；U=false。 | D1a 为计费的 API-key 调用填写全部四个维度。向语音端点发送文本，将音频保存在本地。 |
+| [`stt`](../internal/tools/media.go) | 是 | R=false；E/M=true；U=false。 | D1a 为计费的 API-key 调用填写全部四个维度。上传本地音频进行转写，不只是读取本地文件。 |
 | [`process_kill`](../internal/tools/computer.go) | 是 | R：丢失的进程状态通常不可逆；联网服务可能涉及 E。 | 发送 SIGTERM 或 SIGKILL。重启不一定恢复状态或撤销中断。 |
 | [`open`](../internal/tools/computer.go) | 是 | R：视情况；第三方 URL 涉及 E；其他维度取决于目标／应用。 | 将文件或 URL 交给默认应用。应判断后续效果，不能只看本地启动动作。 |
 | [`notify`](../internal/tools/computer.go) | 是 | R：已展示／打扰后不可逆；E（OS 通知）。 | 审批缺口已由 D3 解决：预览标题／正文并设置 E=true；M/U 保持未知。C2 仍在 personal 中禁用 computer 工具。 |
 | [`clipboard_read`](../internal/tools/computer.go) | 是 | R：本地读取；无直接 E/M/U。 | 剪贴板可能有敏感内容，因此有意加审批。后续披露不能靠清空剪贴板撤销。 |
 | [`clipboard_write`](../internal/tools/computer.go) | 是 | R：取决于能否恢复被替换内容；同步或外部消费时可能涉及 E。 | 替换系统剪贴板文本。本地写入可能影响其他应用或设备。 |
-| [`mcp_<server>_<tool>`](../internal/mcp/tool.go) | 是，全部 MCP 工具 | R/E/M/U：取决于 server、操作和参数。 | 每个桥接的 MCP 调用都过审批，包括自称只读的远程工具。审批覆盖完整，但桥接层目前尚未提供后果分类。 |
+| [`mcp_<server>_<tool>`](../internal/mcp/tool.go) | 是，全部 MCP 工具 | 实际效果取决于 server；D1a 以 R=false、E/M/U=true 失败关闭。 | 每个桥接的 MCP 调用都带有 `Risk=confirm`，包括自称只读的远程工具。必须人工确认；yolo、无人值守 allow-all 和常驻授权均不能绕过。C2 仍在 personal 中排除 MCP。 |
 
 ### 未实现 ApprovalDescriber 的工具
 

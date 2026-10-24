@@ -95,7 +95,7 @@ This uses the normal personal-profile agent path, not the fake demo or automatic
 | First-user dogfood | Fake email digest, calendar reminder, and standing-auth denial scene through the discoverable CLI, with tests and optional live read-only instructions. | Daemon/Telegram proactive delivery. |
 | Stop-condition pointer | Keep coding-first defaults and the shared runtime. | Physical repository split. |
 
-**Plan stop condition:** only consider a physical repository split if personal defaults **systematically hurt coding**, evidenced by approval noise, tool loops, or README persona drift. This slice does not split the repository, rewrite the agent loop, add a second runtime, or broaden MCP/bash consequence classification. Existing `gg job`/`internal/scheduler` remain the scheduling mechanism; no new scheduler is introduced or wired to this demo.
+**Plan stop condition:** only consider a physical repository split if personal defaults **systematically hurt coding**, evidenced by approval noise, tool loops, or README persona drift. The P4 slice does not split the repository, rewrite the agent loop, add a second runtime, or broaden MCP/bash consequence classification. Existing `gg job`/`internal/scheduler` remain the scheduling mechanism; no new scheduler is introduced or wired to this demo.
 
 ## Four consequence dimensions
 
@@ -133,7 +133,9 @@ These rules remain the fallback when no standing grant matches.
 - A nil approver uses `DefaultApprover`, which denies asserted E/M/U. `UnattendedApprover` also denies them, including with `AllowAll` / scheduled `--allow-all`. Pre-approved local-write exemptions cannot bypass asserted E/M/U.
 - Requests with unknown or false E/M/U keep existing approval-mode and Risk rules, including `dangerous` / `confirm` denial without a human. No standing grant is inferred.
 
-P1 populates `gmail_send` and `calendar_create` with E/U=true, M=false, R=false, and `browser_navigate` with E=true, R=false. `memory_add` carries E/M/U=false and R=unknown: it is a durable local write, and removing an entry cannot undo later use. Other tools can leave dimensions unknown; media endpoint locality/billing classification and bash consequence classification are not added here.
+P1 populates `gmail_send` and `calendar_create` with E/U=true, M=false, R=false, and `browser_navigate` with E=true, R=false. `memory_add` carries E/M/U=false and R=unknown: it is a durable local write, and removing an entry cannot undo later use.
+
+D1a has landed for media and MCP. `image_generate`, `tts`, and `stt` assert R=false, E/M=true, U=false: remote disclosure and billed API usage cannot be undone by deleting local files, and API-key calls do not act as the user on a third-party identity. Unknown MCP server tools assert R=false, E/M/U=true and `Risk=confirm`; standing grants cannot waive that risk, so human confirmation is required. C2 still omits media and MCP providers from personal.
 
 `memory_add` implements `ApprovalDescriber` in both profiles. Its approval preview shows content, scope, and requested workspace/global target (all writes use global memory without a workspace context). `memory_search` remains ungated and read-only.
 
@@ -199,12 +201,12 @@ Scheduled `--allow-all` is retained for backward compatibility: it still permits
 ### TODO / follow-ups
 
 - Manual jobs (`internal/cliapp/job.go`) and daemon jobs (`internal/daemon/scheduler.go`) still pass `AllowAll: job.AutoApprove`. Replace that ordinary-tool compatibility path only with an explicit migration; there is no blanket removal in P2.
-- More tool consequence classification is needed before grants can match unclassified calls (including bash/MCP/media and the unknown M/U of browser navigation). Tools without `ApprovalDescriber` remain outside this gate.
+- D1a media/MCP classification has landed; MCP remains ineligible for standing-grant matching because of its `confirm` risk. Later batches must classify bash/computer, browser navigation's unknown M/U, and artifact tools before grants can match those calls. Tools without `ApprovalDescriber` remain outside this gate.
 - Account/actor verification, transport-specific grant subjects, spending/usage limits, and richer destination limits remain follow-ups.
 
 ## Current approval inventory
 
-P1 inventory, following P0 (#54), checked against [built-in implementations](../internal/tools/), the [tool registry](../internal/app/toolregistry.go), and the [MCP bridge](../internal/mcp/tool.go). It covers **30 built-in tools: 16 with and 14 without `agent.ApprovalDescriber`**, plus every dynamically registered MCP tool. Registration depends on configuration, granted scopes, available providers, and platform support; not every session exposes all tools.
+P1 inventory, following P0 (#54), updated through D3 and D1a and checked against [built-in implementations](../internal/tools/), the [tool registry](../internal/app/toolregistry.go), and the [MCP bridge](../internal/mcp/tool.go). It covers **30 built-in tools: 16 with and 14 without `agent.ApprovalDescriber`**, plus every dynamically registered MCP tool. Registration depends on configuration, granted scopes, available providers, and platform support; not every session exposes all tools.
 
 [`agent.ApprovalDescriber`](../internal/agent/types.go) is the interface with the `ApprovalRequest` method. “Yes” means the tool supplies an approval request to the [runner](../internal/agent/runner.go), not that every call produces a human prompt. Existing policy can allow or deny it, and `write`/`edit` have a narrow pre-approval exemption. “No” means this interface does not gate the tool; it does not mean the tool has no consequences.
 
@@ -223,15 +225,15 @@ The tables use R/E/M/U as shorthand for the dimensions above. They describe effe
 | [`calendar_create`](../internal/tools/connectors.go) | Yes | R: no for the external trace; E, U. | Creates on the primary calendar under the user's account. Current arguments do not include attendees; invite sending is a boundary example, not a claim about this tool. |
 | [`artifact_create`](../internal/tools/artifact.go) | Yes | R: local creation can be removed; no direct E/M/U. | Writes the local artifact store outside the workspace. Does not publish to an external service. |
 | [`artifact_edit`](../internal/tools/artifact.go) | Yes | R: prior content recoverable from retained versions; no direct E/M/U. | Appends a complete local version. Library publish is a separate application/CLI operation, not this tool. |
-| [`image_generate`](../internal/tools/media.go) | Yes | R: no for remote disclosure or incurred cost; E if remote, M if billed. | Sends the prompt to the media endpoint and saves images locally. Deleting output does not undo a charge. |
-| [`tts`](../internal/tools/media.go) | Yes | R: no for remote disclosure or incurred cost; E if remote, M if billed. | Sends text to the speech endpoint and saves audio locally. |
-| [`stt`](../internal/tools/media.go) | Yes | R: no for remote disclosure or incurred cost; E if remote, M if billed. | Uploads local audio for transcription; it is not merely a local file read. |
+| [`image_generate`](../internal/tools/media.go) | Yes | R=false; E/M=true; U=false. | D1a populates all four dimensions for the billed API-key call. Sends the prompt to the media endpoint and saves images locally; deleting output does not undo disclosure or a charge. |
+| [`tts`](../internal/tools/media.go) | Yes | R=false; E/M=true; U=false. | D1a populates all four dimensions for the billed API-key call. Sends text to the speech endpoint and saves audio locally. |
+| [`stt`](../internal/tools/media.go) | Yes | R=false; E/M=true; U=false. | D1a populates all four dimensions for the billed API-key call. Uploads local audio for transcription; it is not merely a local file read. |
 | [`process_kill`](../internal/tools/computer.go) | Yes | R: generally no for lost process state; E possible for a connected service. | Sends SIGTERM or SIGKILL. Restarting a process does not necessarily recover its state or undo interruption. |
 | [`open`](../internal/tools/computer.go) | Yes | R: depends; E for third-party URLs; other dimensions depend on the target/application. | Hands a file or URL to the default application. Assess the resulting effects, not just the local launch. |
 | [`notify`](../internal/tools/computer.go) | Yes | R: no once seen/interrupted; E (OS notification). | Approval gap addressed by D3: previews title/body and asserts E=true; M/U remain unknown. C2 still disables computer tools in personal. |
 | [`clipboard_read`](../internal/tools/computer.go) | Yes | R: local read; no direct E/M/U. | Deliberately gated because clipboard contents may be sensitive. Later disclosure is not undone by clearing the clipboard. |
 | [`clipboard_write`](../internal/tools/computer.go) | Yes | R: depends on recovering the replaced clipboard; E possible with sync or external consumption. | Replaces system clipboard text. A local write can affect other applications or devices. |
-| [`mcp_<server>_<tool>`](../internal/mcp/tool.go) | Yes, all MCP tools | R/E/M/U: depend on the server, operation, and arguments. | Every bridged MCP call is approval-gated, including remote tools advertised as reads. Coverage is universal; consequence classification is not yet supplied by this bridge. |
+| [`mcp_<server>_<tool>`](../internal/mcp/tool.go) | Yes, all MCP tools | Actual effects depend on the server; D1a fails closed with R=false, E/M/U=true. | Every bridged MCP call carries `Risk=confirm`, including remote tools advertised as reads. Human confirmation is required; yolo, unattended allow-all, and standing grants cannot bypass it. C2 still omits MCP from personal. |
 
 ### Tools without ApprovalDescriber
 

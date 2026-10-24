@@ -256,16 +256,44 @@ func TestMCPToolExecuteBadArgs(t *testing.T) {
 
 func TestMCPToolApproval(t *testing.T) {
 	var _ agent.ApprovalDescriber = (*MCPTool)(nil)
-	tool := newMCPTool("fs", textTool("delete", "", nil), "mcp_fs_delete", &fakeSession{})
-	req, err := tool.ApprovalRequest(json.RawMessage(`{"path":"/x"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if req.ToolName != "mcp_fs_delete" {
-		t.Errorf("ToolName = %q", req.ToolName)
-	}
-	if !strings.Contains(req.Summary, "fs.delete") {
-		t.Errorf("Summary = %q", req.Summary)
+	// A tool's name does not establish the remote server's consequences.
+	for _, remote := range []string{"read_file", "delete"} {
+		t.Run(remote, func(t *testing.T) {
+			name := "mcp_fs_" + remote
+			tool := newMCPTool("fs", textTool(remote, "", nil), name, &fakeSession{})
+			req, err := tool.ApprovalRequest(json.RawMessage(`{"path":"/x"}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if req.ToolName != name {
+				t.Errorf("ToolName = %q, want %q", req.ToolName, name)
+			}
+			if !strings.Contains(req.Summary, "fs."+remote) {
+				t.Errorf("Summary = %q", req.Summary)
+			}
+			for _, dim := range []struct {
+				name string
+				got  *bool
+				want bool
+			}{
+				{"Reversible", req.Reversible, false},
+				{"ExternallyVisible", req.ExternallyVisible, true},
+				{"SpendsMoneyOrChangesPermissions", req.SpendsMoneyOrChangesPermissions, true},
+				{"ActsInUserName", req.ActsInUserName, true},
+			} {
+				if dim.got == nil {
+					t.Errorf("%s is unknown, want %v", dim.name, dim.want)
+				} else if *dim.got != dim.want {
+					t.Errorf("%s = %v, want %v", dim.name, *dim.got, dim.want)
+				}
+			}
+			if req.Risk != agent.ApprovalRiskConfirm {
+				t.Errorf("Risk = %q, want %q", req.Risk, agent.ApprovalRiskConfirm)
+			}
+			if !req.RequiresHumanConfirm() {
+				t.Error("unknown MCP server tools must require human confirmation")
+			}
+		})
 	}
 }
 

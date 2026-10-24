@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/media"
 )
 
@@ -20,6 +21,46 @@ func testMediaClient(t *testing.T, mux *http.ServeMux) *media.Client {
 	return media.NewClient(media.Config{
 		BaseURL: srv.URL, APIKey: "k", Dir: t.TempDir(), HTTPClient: srv.Client(),
 	})
+}
+
+func TestMediaToolApprovalConsequences(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tool agent.ApprovalDescriber
+		raw  json.RawMessage
+	}{
+		{"image_generate", NewImageGenerateTool(nil), json.RawMessage(`{"prompt":"a cat"}`)},
+		{"tts", NewTTSTool(nil), json.RawMessage(`{"text":"hello"}`)},
+		{"stt", NewSTTTool(nil), json.RawMessage(`{"audio_path":"voice.mp3"}`)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := tc.tool.ApprovalRequest(tc.raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Remote disclosure and billed API usage cannot be undone by
+			// deleting local output. API-key calls do not act as the user.
+			for _, dim := range []struct {
+				name string
+				got  *bool
+				want bool
+			}{
+				{"Reversible", req.Reversible, false},
+				{"ExternallyVisible", req.ExternallyVisible, true},
+				{"SpendsMoneyOrChangesPermissions", req.SpendsMoneyOrChangesPermissions, true},
+				{"ActsInUserName", req.ActsInUserName, false},
+			} {
+				if dim.got == nil {
+					t.Errorf("%s is unknown, want %v", dim.name, dim.want)
+				} else if *dim.got != dim.want {
+					t.Errorf("%s = %v, want %v", dim.name, *dim.got, dim.want)
+				}
+			}
+			if !req.RequiresHumanConfirm() {
+				t.Error("media API calls must require human confirmation without a matching grant")
+			}
+		})
+	}
 }
 
 func TestImageGenerateTool(t *testing.T) {

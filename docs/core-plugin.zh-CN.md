@@ -44,7 +44,7 @@ C0 列出候选；C1 将 SPI 保留在 `app`，避免搬迁共享宿主依赖。
 
 省略的后果属性表示未知，不能作为安全或已获授权的证据。已断言的 E/M/U 仍需人工决策或匹配的显式 standing grant，包括 coding `--yolo` 和定时任务 `--allow-all`。Standing grant 不能豁免 `dangerous`/`confirm` 风险；R 本身也不授权操作。C0 不扩大分类覆盖面，也不移除未分类调用现有的基于风险的兼容路径；详见[个人助手后果与审批清单](personal-agent.zh-CN.md)。
 
-第一方插件以 gg 的 OS 权限执行。静态链接和 SPI 提供归属边界，不提供沙箱。实现必须保留现有审批描述，不能绕过 approval 或 standing-auth。Proactive 决定何时展示摘要属于投递策略，不代表获准发送、通知或写入记忆。MCP 工具继续保留现有的全量审批门禁及已记录的分类局限。
+第一方插件以 gg 的 OS 权限执行。静态链接和 SPI 提供归属边界，不提供沙箱。实现必须保留现有审批描述，不能绕过 approval 或 standing-auth。Proactive 决定何时展示摘要属于投递策略，不代表获准发送、通知或写入记忆。D1a 保留 MCP 全量审批门禁，并对未知 server 工具以 R=false、E/M/U=true 和 `Risk=confirm` 失败关闭；必须人工确认。
 
 ## Magpie 与 dsh 的启示
 
