@@ -72,7 +72,9 @@ CLI and Runtime publish artifacts through `app.PublishArtifact`, which owns the 
 
 System prompt assembly order (after the selected profile's base instructions): user profile, curated memory (`MEMORY.md`), today's daily-log tail (`YYYY-MM-DD.md`), then project instructions (AGENTS.md) and skills. Tool surface: `memory_add` accepts `scope=general|daily|person:<name>|group:<name>` (default general); `memory_search` does case-insensitive keyword search across scopes and returns up to 10 `path:line: snippet` hits. Both are hidden when memory is disabled.
 
-CLI `--profile personal` sets `Config.Profile`, selecting a personal identity, `on-request` approval by default, rejection of yolo, and Gmail drafts by default. Unset/empty selects coding; daemon transports keep coding defaults. Both profiles share consequence routing, memory-write gates, and standing grants: asserted E/M/U require a human or matching grant, including under coding `--yolo` / scheduled `--allow-all`. See [Personal Agent (P3)](personal-agent.md).
+CLI `--profile personal` sets `Config.Profile`, selecting a personal identity, `on-request` approval by default, rejection of yolo, and Gmail drafts by default. Unset/empty selects coding; daemon transports keep coding defaults. Both profiles share consequence routing, memory-write gates, and standing grants: asserted E/M/U require a human or matching grant, including under coding `--yolo` / scheduled `--allow-all`. See [Personal Agent (P4 first slice)](personal-agent.md).
+
+`internal/proactive` adds pure local delivery decisions (Summarize/Quiet/Note-only), disabled in coding, with OS notifications off. `gg --profile personal proactive demo` exercises fake digests and the existing standing-auth/CLI denial path without live clients. It does not authorize tool calls or add daemon triggers. The [P4 scope and stop condition](personal-agent.md#p4-scope-and-stop-condition) defers a physical split unless personal defaults systematically hurt coding.
 
 ## Scheduler (cron / once jobs)
 
