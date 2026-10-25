@@ -23,7 +23,7 @@ const jobUsage = `usage:
   gg job add --cron "0 9 * * *" --name NAME [--proactive-digest] [--profile coding|personal] [--timezone TZ] [--allow-all] [--timeout 10m] [PROMPT]
   gg job add --at "2026-09-28 15:04" --name NAME [flags] [PROMPT]
   gg job add --in 20m --name NAME [flags] [PROMPT]
-    --proactive-digest: local only, no model or outbound; defaults to personal; PROMPT optional (otherwise required)
+    --proactive-digest: live read-only Gmail/Calendar, local output, no model or outbound; requires Google; defaults to personal; PROMPT optional (otherwise required)
   gg job list [--all]
   gg job show <id|name>
   gg job pause|resume|remove <id|name>
@@ -74,7 +74,7 @@ func runJobAdd(cfg config.Config, store *scheduler.Store, args []string, stdout,
 	fs.StringVar(&inSpec, "in", "", "one-shot delay (e.g. 20m, 1h30m)")
 	fs.StringVar(&name, "name", "", "job name")
 	fs.StringVar(&profile, "profile", "", "runtime profile (coding|personal; default: inherit, coding in ggd)")
-	fs.BoolVar(&proactiveDigest, "proactive-digest", false, "local stub digest without a model or outbound (default profile: personal; prompt optional)")
+	fs.BoolVar(&proactiveDigest, "proactive-digest", false, "live read-only Gmail/Calendar digest with local output; requires Google, no model or outbound (default profile: personal; prompt optional)")
 	fs.StringVar(&timezone, "timezone", "", "IANA timezone (default: profile timezone, then local)")
 	fs.StringVar(&timeoutSpec, "timeout", "", "per-run timeout (default 10m)")
 	fs.BoolVar(&allowOrdinary, "allow-all", false, "allow ordinary unattended tools only (default: denied); cannot waive asserted E/M/U or dangerous/confirm risks; asserted E/M/U requires matching standing grants")
@@ -361,9 +361,16 @@ func runJobRun(ctx context.Context, cfg config.Config, options Options, store *s
 	}
 	if job.ProactiveDigest {
 		started := time.Now()
-		result, err := proactive.RunDigest(ctx, proactive.DigestOptions{
-			Profile: job.Profile, HomeDir: cfg.HomeDir, Now: started, Writer: stdout,
-		})
+		source := options.DigestSource
+		if source == nil {
+			source, err = proactive.NewGoogleDigestSource(cfg)
+		}
+		var result proactive.DigestResult
+		if err == nil {
+			result, err = proactive.RunDigest(ctx, proactive.DigestOptions{
+				Profile: job.Profile, HomeDir: cfg.HomeDir, Now: started, Writer: stdout, Source: source,
+			})
+		}
 		rec := scheduler.RunRecord{
 			JobID: job.ID, JobName: job.Name, StartedAt: started, FinishedAt: time.Now(),
 			Status: "ok", Summary: result.Summary,

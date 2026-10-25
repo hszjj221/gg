@@ -20,19 +20,19 @@ import (
 
 const proactiveUsage = "usage: gg --profile personal proactive demo|digest [--quiet-hours HH:MM-HH:MM] [--at HH:MM] [--remember-later]"
 
-func runProactiveCommand(ctx context.Context, cfg config.Config, args cli.Args, stdout, stderr io.Writer) int {
+func runProactiveCommand(ctx context.Context, cfg config.Config, args cli.Args, options Options, stdout, stderr io.Writer) int {
 	if len(args.ProactiveArgs) > 0 && args.ProactiveArgs[0] == "digest" {
-		return runProactiveDigest(ctx, cfg, args.ProactiveArgs[1:], stdout, stderr)
+		return runProactiveDigest(ctx, cfg, args.ProactiveArgs[1:], options.DigestSource, stdout, stderr)
 	}
 	return runProactiveDemo(ctx, cfg, args, stdout, stderr)
 }
 
-func runProactiveDigest(ctx context.Context, cfg config.Config, args []string, stdout, stderr io.Writer) int {
+func runProactiveDigest(ctx context.Context, cfg config.Config, args []string, source proactive.DigestSource, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("gg proactive digest", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	quietHours := fs.String("quiet-hours", "", "HH:MM-HH:MM local quiet window (default: disabled)")
 	at := fs.String("at", "", "replay local time HH:MM (default: wall clock)")
-	later := fs.Bool("remember-later", false, "capture stub digests as local note candidates")
+	later := fs.Bool("remember-later", false, "capture read-only digests as local note candidates")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -53,9 +53,17 @@ func runProactiveDigest(ctx context.Context, cfg config.Config, args []string, s
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	if source == nil && cfg.Profile == config.ProfilePersonal {
+		var err error
+		source, err = proactive.NewGoogleDigestSource(cfg)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
 	if _, err := proactive.RunDigest(ctx, proactive.DigestOptions{
 		Profile: cfg.Profile, HomeDir: cfg.HomeDir, Writer: stdout,
-		QuietHours: *quietHours, Now: now, RememberLater: *later,
+		QuietHours: *quietHours, Now: now, RememberLater: *later, Source: source,
 	}); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1

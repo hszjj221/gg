@@ -18,16 +18,26 @@ import (
 // daemonJobExecutor runs local digests or agent turns. Agent firings get a
 // fresh scheduler/<job>-<time> session that can be reopened with gg resume.
 type daemonJobExecutor struct {
-	rt      *app.Runtime
-	logger  *slog.Logger
-	homeDir string
+	rt     *app.Runtime
+	logger *slog.Logger
+	cfg    config.Config
+	// Tests may inject a fake; production builds a live source for each firing.
+	digestSource proactive.DigestSource
 }
 
 func (e *daemonJobExecutor) Execute(ctx context.Context, job scheduler.Job) (string, string, error) {
 	if job.ProactiveDigest {
 		e.logger.Info("scheduled job started", "job", job.Name, "proactive_digest", true)
+		source := e.digestSource
+		if source == nil {
+			var err error
+			source, err = proactive.NewGoogleDigestSource(e.cfg)
+			if err != nil {
+				return "", "", err
+			}
+		}
 		result, err := proactive.RunDigest(ctx, proactive.DigestOptions{
-			Profile: job.Profile, HomeDir: e.homeDir, Now: time.Now(),
+			Profile: job.Profile, HomeDir: e.cfg.HomeDir, Now: time.Now(), Source: source,
 		})
 		return result.Summary, "", err
 	}
@@ -79,7 +89,7 @@ func newSchedulerChannel(cfg config.Config, rt *app.Runtime, logger *slog.Logger
 	if err != nil {
 		return nil, fmt.Errorf("open scheduler store: %w", err)
 	}
-	sched := scheduler.New(store, &daemonJobExecutor{rt: rt, logger: logger, homeDir: cfg.HomeDir},
+	sched := scheduler.New(store, &daemonJobExecutor{rt: rt, logger: logger, cfg: cfg},
 		scheduler.WithErrorReporter(func(err error) {
 			logger.Error("scheduled job failed", "error", err)
 		}))
