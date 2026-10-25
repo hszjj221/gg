@@ -38,14 +38,14 @@ type Job struct {
 	// WorkspaceID is the stable workspace the job runs in. It takes
 	// precedence over Workspace; empty means "the default workspace"
 	// (jobs created before workspace binding existed).
-	WorkspaceID string        `json:"workspace_id,omitempty"`
-	Enabled     bool          `json:"enabled"`
-	AutoApprove bool          `json:"auto_approve"`
-	Timeout     time.Duration `json:"timeout"`
-	CreatedAt   time.Time     `json:"created_at"`
-	LastRun     *time.Time    `json:"last_run,omitempty"`
-	NextRun     *time.Time    `json:"next_run,omitempty"`
-	RunCount    int           `json:"run_count"`
+	WorkspaceID   string        `json:"workspace_id,omitempty"`
+	Enabled       bool          `json:"enabled"`
+	AllowOrdinary bool          `json:"auto_approve"`
+	Timeout       time.Duration `json:"timeout"`
+	CreatedAt     time.Time     `json:"created_at"`
+	LastRun       *time.Time    `json:"last_run,omitempty"`
+	NextRun       *time.Time    `json:"next_run,omitempty"`
+	RunCount      int           `json:"run_count"`
 }
 
 // RunRecord is an append-only log entry for one job execution.

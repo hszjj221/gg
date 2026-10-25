@@ -32,7 +32,7 @@ func TestJobAddListShowRemove(t *testing.T) {
 	var stdout, stderr strings.Builder
 	opts := jobTestOptions(dir, &stdout, &stderr)
 
-	code := Run(context.Background(), []string{"job", "add", "--in", "30m", "--name", "drink", "remind me to drink water"}, opts)
+	code := Run(context.Background(), []string{"job", "add", "--in", "30m", "--name", "drink", "--allow-all", "remind me to drink water"}, opts)
 	if code != 0 {
 		t.Fatalf("job add exit %d: %s", code, stderr.String())
 	}
@@ -53,6 +53,9 @@ func TestJobAddListShowRemove(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "remind me to drink water") {
 		t.Fatalf("job show missing prompt: %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "allow-ordinary: true") {
+		t.Fatalf("job show missing ordinary-tool opt-in: %q", stdout.String())
 	}
 
 	stdout.Reset()

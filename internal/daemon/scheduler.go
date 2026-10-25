@@ -34,7 +34,7 @@ func (e *daemonJobExecutor) Execute(ctx context.Context, job scheduler.Job) (str
 		"[Scheduled job %q fired at %s. You are running unattended: no human will see approval prompts, so only tools permitted by policy will execute. Complete the task and finish with a concise summary of what you did.]\n\n%s",
 		job.Name, firedAt, job.Prompt,
 	)
-	approver := scheduler.UnattendedApprover{AllowAll: job.AutoApprove}
+	approver := scheduler.UnattendedApprover{AllowOrdinary: job.AllowOrdinary}
 	run, err := e.rt.StartTurnWithApprover(ctx, snap.SessionID, prompt, approver)
 	if err != nil {
 		return "", snap.SessionPath, fmt.Errorf("start scheduled turn: %w", err)

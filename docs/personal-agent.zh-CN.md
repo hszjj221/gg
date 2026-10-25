@@ -130,7 +130,7 @@ gg --profile personal -p '使用 gmail_search/gmail_read 汇总最近未读邮�
 `nil`（JSON 省略）表示未知；显式 `false` 表示已经判断且不存在该维度。未知不是安全或授权的声明。`RequiresHumanConfirm()` 判断 E、M、U 是否有任一显式为 true；此检查先于只读快捷放行。R 本身不授予权限，也不覆盖风险判断。
 
 - 交互式 `runApprover` 继续向用户请求审批。CLI 在终端中对明确的 E/M/U 弹出确认，包括 `--yolo`；`--approval never` 或没有终端时拒绝。
-- nil approver 使用 `DefaultApprover`，拒绝明确的 E/M/U。`UnattendedApprover` 同样拒绝，包括 `AllowAll`／定时任务的 `--allow-all`。本地写入的预批准豁免不能绕过明确的 E/M/U。
+- nil approver 使用 `DefaultApprover`，拒绝明确的 E/M/U。`UnattendedApprover` 同样拒绝，包括 `AllowOrdinary`／定时任务的 `--allow-all`。本地写入的预批准豁免不能绕过明确的 E/M/U。
 - E/M/U 未知或为 false 的请求继续沿用现有审批模式和 Risk 规则，包括无人确认时拒绝 `dangerous` / `confirm`。不会推导常驻授权。
 
 P1 为 `gmail_send` 和 `calendar_create` 填写 E/U=true、M=false、R=false。D1b 后，`browser_navigate` 断言 E=true、M/U=false、R=false：导航会留下请求痕迹，但不计费，也不以用户的具名身份行事。`memory_add` 的 E/M/U=false、R=未知：它是持久本地写入，删除条目不能撤销后续已经发生的使用。
@@ -198,13 +198,13 @@ gg standing-auth revoke <id>
 
 命中后先追加并同步审计记录，包含 `timestamp`、`grantId`、`toolName`、`summary` 和 `decision="allow-by-standing-grant"`，再无提示放行。存储损坏／读取失败或审计写入失败时，均失败关闭。审计记录的是授权决定，不代表执行成功。未命中时，原有 P1 审批器保持不变。
 
-授权适用于使用同一 gg home 的所有 profile、工作区和传输入口。`subject` 记录显式声明的行动者／账户；选择 profile 不会限定授权范围或验证 OAuth 账户。实际配置账户应与声明一致，切换时应撤销并重新授权。Telegram 的聊天白名单仍控制谁可以发起轮次；Telegram 保持 `UnattendedApprover{}`，不会变为 AllowAll。
+授权适用于使用同一 gg home 的所有 profile、工作区和传输入口。`subject` 记录显式声明的行动者／账户；选择 profile 不会限定授权范围或验证 OAuth 账户。实际配置账户应与声明一致，切换时应撤销并重新授权。Telegram 的聊天白名单仍控制谁可以发起轮次；Telegram 保持 `UnattendedApprover{}`，不会启用 AllowOrdinary。
 
 定时任务的 `--allow-all` 为兼容保留：仍按 P1 规则放行普通工具，但不能豁免明确的 E/M/U 或 dangerous/confirm 风险。在这些走审批接口的调用中，匹配常驻授权是无人值守时允许明确 E/M/U 的唯一授权路径；命中不需要 `--allow-all`。
 
 ### TODO／后续工作
 
-- 手动任务（`internal/cliapp/job.go`）和 daemon 任务（`internal/daemon/scheduler.go`）仍传入 `AllowAll: job.AutoApprove`。替换普通工具的兼容路径需要明确迁移方案；P2 不做整体删除。
+- D8 已落地：字段／flag 内部命名迁移为 `AllowOrdinary`；JSON `auto_approve` 和 CLI `--allow-all` 为兼容保留；策略不变。
 - D1a media／MCP，以及 D1b computer 审批描述器、browser M/U、artifact 和已分类 bash 后果均已完成。risk 为空的普通 bash 对授权仍未分类；后续补齐时不应强制每条普通命令都确认。MCP、进程终止、剪贴板替换和 dangerous/confirm bash 因风险仍不能匹配常驻授权。未实现 `ApprovalDescriber` 的工具仍在此拦截范围之外；C2 personal 仍禁用 computer。
 - 账户／行动者验证、按传输入口划分授权主体、花费／使用量限制及更丰富的目的地限制留待后续。
 

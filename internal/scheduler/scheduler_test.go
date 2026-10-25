@@ -137,18 +137,18 @@ func TestUnattendedApprover(t *testing.T) {
 	if err != nil || d.Allow {
 		t.Errorf("default approver = %+v,%v; want deny", d, err)
 	}
-	allow := UnattendedApprover{AllowAll: true}
+	allow := UnattendedApprover{AllowOrdinary: true}
 	d, err = allow.Approve(ctx, agent.ApprovalRequest{ToolName: "write"})
 	if err != nil || !d.Allow {
-		t.Errorf("allow-all approver = %+v,%v; want allow", d, err)
+		t.Errorf("AllowOrdinary approver = %+v,%v; want allow", d, err)
 	}
 	d, err = allow.Approve(ctx, agent.ApprovalRequest{ToolName: "bash", Risk: agent.ApprovalRiskDangerous, RiskReason: "rm -rf targets /"})
 	if err != nil || d.Allow || !strings.Contains(d.Reason, "rm -rf targets /") {
-		t.Errorf("allow-all should still deny dangerous commands, got %+v,%v", d, err)
+		t.Errorf("AllowOrdinary should still deny dangerous commands, got %+v,%v", d, err)
 	}
 	d, err = allow.Approve(ctx, agent.ApprovalRequest{ToolName: "bash", Risk: agent.ApprovalRiskConfirm, RiskReason: "jev noul 0.9 > 0.7; confirmation required"})
 	if err != nil || d.Allow || !strings.Contains(d.Reason, "confirmation required") {
-		t.Errorf("allow-all should deny model-confirmation commands, got %+v,%v", d, err)
+		t.Errorf("AllowOrdinary should deny model-confirmation commands, got %+v,%v", d, err)
 	}
 }
 

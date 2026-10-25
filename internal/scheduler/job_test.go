@@ -6,6 +6,46 @@ import (
 	"time"
 )
 
+func TestJobAllowOrdinaryJSONCompatibility(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{"enabled", `{"auto_approve":true}`, true},
+		{"disabled", `{"auto_approve":false}`, false},
+		{"omitted", `{}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var job Job
+			if err := json.Unmarshal([]byte(tc.raw), &job); err != nil {
+				t.Fatal(err)
+			}
+			if job.AllowOrdinary != tc.want {
+				t.Fatalf("AllowOrdinary = %v, want %v", job.AllowOrdinary, tc.want)
+			}
+			encoded, err := json.Marshal(job)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &fields); err != nil {
+				t.Fatal(err)
+			}
+			wantJSON, err := json.Marshal(tc.want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(fields["auto_approve"]) != string(wantJSON) {
+				t.Fatalf("legacy auto_approve key lost: %s", encoded)
+			}
+			if _, ok := fields["allow_ordinary"]; ok {
+				t.Fatalf("unexpected allow_ordinary JSON key: %s", encoded)
+			}
+		})
+	}
+}
+
 func TestParseCronValid(t *testing.T) {
 	for _, expr := range []string{"0 9 * * *", "* * * * *", "*/15 8-18 * * 1-5", "@daily", "@hourly"} {
 		if _, err := ParseCron(expr); err != nil {

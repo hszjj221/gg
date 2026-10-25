@@ -130,7 +130,7 @@ These rules remain the fallback when no standing grant matches.
 `nil` (omitted JSON) means unknown; explicit `false` means the dimension was assessed and is absent. Unknown is not a claim of safety or authorization. `RequiresHumanConfirm()` reports whether E, M, or U is explicitly true. This check precedes read-only shortcuts: R alone never grants permission or overrides risk.
 
 - Interactive `runApprover` continues to ask the human. The CLI prompts for asserted E/M/U in a terminal, including under `--yolo`; `--approval never` or no terminal denies them.
-- A nil approver uses `DefaultApprover`, which denies asserted E/M/U. `UnattendedApprover` also denies them, including with `AllowAll` / scheduled `--allow-all`. Pre-approved local-write exemptions cannot bypass asserted E/M/U.
+- A nil approver uses `DefaultApprover`, which denies asserted E/M/U. `UnattendedApprover` also denies them, including with `AllowOrdinary` / scheduled `--allow-all`. Pre-approved local-write exemptions cannot bypass asserted E/M/U.
 - Requests with unknown or false E/M/U keep existing approval-mode and Risk rules, including `dangerous` / `confirm` denial without a human. No standing grant is inferred.
 
 P1 populates `gmail_send` and `calendar_create` with E/U=true, M=false, R=false. With D1b, `browser_navigate` asserts E=true, M/U=false, R=false: navigation leaves a request trace, without billing or acting as the user's named identity. `memory_add` carries E/M/U=false and R=unknown: it is a durable local write, and removing an entry cannot undo later use.
@@ -198,13 +198,13 @@ Before asking or denying, the wrapper reads current grants in ID order. A match 
 
 On a hit, gg appends and syncs an audit record containing `timestamp`, `grantId`, `toolName`, `summary`, and `decision="allow-by-standing-grant"`, then allows without prompting. Storage corruption/read errors or an audit write failure fail closed. The audit records authorization, not successful execution. On a miss, the existing P1 approver runs unchanged.
 
-Grants apply across profiles, workspaces, and transports using the same gg home. `subject` records the explicitly declared actor/account; selecting a profile does not scope a grant or verify an OAuth account. Keep the configured account consistent with that declaration and revoke/recreate grants when changing it. Telegram's chat allowlist still controls who may initiate turns; Telegram remains `UnattendedApprover{}`, never AllowAll.
+Grants apply across profiles, workspaces, and transports using the same gg home. `subject` records the explicitly declared actor/account; selecting a profile does not scope a grant or verify an OAuth account. Keep the configured account consistent with that declaration and revoke/recreate grants when changing it. Telegram's chat allowlist still controls who may initiate turns; Telegram remains `UnattendedApprover{}`, never opts into AllowOrdinary.
 
 Scheduled `--allow-all` is retained for backward compatibility: it still permits ordinary tools under P1 rules, but cannot waive asserted E/M/U or dangerous/confirm risks. Matching standing grants are the only unattended authorization path for asserted E/M/U in these approval-gated calls; no `--allow-all` is needed for a hit.
 
 ### TODO / follow-ups
 
-- Manual jobs (`internal/cliapp/job.go`) and daemon jobs (`internal/daemon/scheduler.go`) still pass `AllowAll: job.AutoApprove`. Replace that ordinary-tool compatibility path only with an explicit migration; there is no blanket removal in P2.
+- D8 landed: field/flag naming migrated to `AllowOrdinary`; JSON `auto_approve` and CLI `--allow-all` retained for compatibility; policy unchanged.
 - D1a media/MCP and D1b computer describers, browser M/U, artifacts, and classified bash consequences have landed. Ordinary bash with empty risk remains unclassified for grants; follow up on that gap without forcing confirmation on every ordinary command. MCP, process termination, clipboard replacement, and dangerous/confirm bash remain ineligible for standing-grant matching because of their risk. Tools without `ApprovalDescriber` remain outside this gate; C2 personal still disables computer.
 - Account/actor verification, transport-specific grant subjects, spending/usage limits, and richer destination limits remain follow-ups.
 

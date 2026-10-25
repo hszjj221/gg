@@ -79,7 +79,7 @@ func TestApproversRouteConsequencesBeforeRisk(t *testing.T) {
 				}{
 					{DefaultApprover{}, true},
 					{UnattendedApprover{}, false},
-					{UnattendedApprover{AllowAll: true}, true},
+					{UnattendedApprover{AllowOrdinary: true}, true},
 				} {
 					got, err := policy.approver.Approve(context.Background(), req)
 					want := !tc.confirm && (risk == ApprovalRiskReadOnly || (risk == "" && policy.ordinary))
