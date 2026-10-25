@@ -22,7 +22,7 @@ func buildGoogleTools(ctx context.Context, tc ToolContext, cstore *connector.Sto
 		ClientSecret: tc.Config.Connectors.Google.ClientSecret,
 	})
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 	// Register only the tools the user actually granted: a partial
 	// (granular-consent) grant must not advertise tools that would just 403.

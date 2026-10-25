@@ -69,6 +69,16 @@ func (r Registry) Providers() []ToolProvider {
 	return append([]ToolProvider{}, r.providers...)
 }
 
+// Keep the profile enable table in docs/core-plugin.md in sync.
+var personalEnabledNames = map[string]bool{
+	"":          true,
+	"memory":    true,
+	"kb":        true,
+	"artifact":  true,
+	"connector": true,
+	"browser":   true,
+}
+
 // ForProfile resolves Core's enable list in registration order. Coding (including
 // an empty profile) retains every registration, including host extensions. Personal
 // keeps unnamed core providers and an explicit subset of named capabilities.
@@ -79,8 +89,7 @@ func (r Registry) ForProfile(profile string) Registry {
 	}
 	var enabled []ToolProvider
 	for _, p := range r.providers {
-		switch p.Name {
-		case "", "memory", "kb", "artifact", "connector", "browser":
+		if personalEnabledNames[p.Name] {
 			enabled = append(enabled, p)
 		}
 	}
