@@ -1,8 +1,8 @@
-# Personal Agent: live read-only Gmail/Calendar digests (P4d)
+# Personal Agent: Web/Electron profile selection (P4e)
 
 English | [简体中文](personal-agent.zh-CN.md)
 
-P0 defined the consequence language and approval baseline. P1 added consequence routing, memory-write approval, and Gmail drafts. P2 added explicit standing grants and audited matching. P3 added a personal profile with its own base identity and stricter defaults. P4 adds a deterministic proactive policy and a runnable fake dogfood path that checks those brakes. P4c made local Policy digests schedulable; P4d supplies live read-only Gmail/Calendar content by default, without an agent turn, model, or outbound delivery. Missing connections or read scopes fail closed. The default `gg` CLI remains coding-first.
+P0 defined the consequence language and approval baseline. P1 added consequence routing, memory-write approval, and Gmail drafts. P2 added explicit standing grants and audited matching. P3 added a personal profile with its own base identity and stricter defaults. P4 adds a deterministic proactive policy and a runnable fake dogfood path that checks those brakes. P4c made local Policy digests schedulable; P4d supplies live read-only Gmail/Calendar content by default, without an agent turn, model, or outbound delivery. Missing connections or read scopes fail closed. P4e adds explicit Web/Electron new-session profile selection. Defaults remain coding-first.
 
 ## Personal and coding agents
 
@@ -47,7 +47,15 @@ gg job run local-digest
 
 `ggd` honors a stored `coding` or `personal` profile for each scheduled session. An omitted or empty job profile inherits the daemon's existing coding configuration. For manual `gg job run`, a stored profile **wins over the parent CLI `--profile`**; when unset, the job inherits the parent selector, so `gg --profile personal job run ...` still works for legacy jobs. `job show` and `job list` display unset profiles as `(inherit; daemon: coding)`. Manual and daemon jobs retain their existing unattended approval policy (`--allow-all`) and standing-grant matching.
 
-P4b enables scheduled personal agent turns through the existing `gg job` scheduler. P4c added scheduled local Policy digests without an agent turn; P4d replaces their stub bodies with live read-only mailbox/calendar content, as described below. Web/Electron and Telegram profile selectors, outbound Telegram delivery, and automatic trigger discovery beyond scheduled jobs remain deferred. The original P4 demo remains an explicit CLI invocation using fake data.
+P4b enables scheduled personal agent turns through the existing `gg job` scheduler. P4c added scheduled local Policy digests without an agent turn; P4d replaces their stub bodies with live read-only mailbox/calendar content, as described below. P4e adds the Web/Electron selector below. Telegram profile selection, outbound Telegram delivery, and automatic trigger discovery beyond scheduled jobs remain deferred. The original P4 demo remains an explicit CLI invocation using fake data.
+
+### Web/Electron new sessions (P4e — landed)
+
+The **新会话模式** selector next to **新建会话** offers **编码** (`coding`, the default) and **个人** (`personal`). It applies to the next session created by the button, keyboard shortcut, or first message when no session is open. The tab remembers this preference in `sessionStorage` as `gg.profile`; it does not save a gg config or `USER.md` default or change an existing session. Electron shares the same Web App and selector.
+
+JSON-RPC protocol **1.5** adds optional `profile` to `session.create`, for example `{"name":"Inbox","profile":"personal"}`. Only `coding` and `personal` are accepted after trimming whitespace; an empty or absent profile inherits the runtime configuration, which is coding for `ggd`. Invalid values return invalid params without creating a session. The session service's `Config.Profile` selects the same personal base instructions, C2 capability cuts, and Gmail draft-by-default behavior as the CLI. Web/Electron keeps on-request approval prompts through its existing `run.start` `requireApproval: true` path; consequence and standing-authorization gates still apply.
+
+The override belongs only to the created session's in-memory service, using the P4b `CreateSessionInWorkspaceWithProfile` seam. It is **not persisted in the session header**. Forks/clones inherit the live service configuration. After a daemon restart, reopening the saved session inherits coding; create a new session with personal selected to use personal again.
 
 ## Proactive policy (P4 first slice)
 
@@ -128,7 +136,7 @@ This exercises the P4d read-only source without a model key or terminal approval
 | Plan item | Landed in this slice | Deferred |
 | --- | --- | --- |
 | Proactive trigger policy | Deterministic Summarize/Quiet/Note-only decisions, personal-only defaults, quiet hours, notification suppression, and consequence boundary. | Automatic trigger discovery beyond scheduled jobs. |
-| Scheduled personal turns (P4b) | Stored job profile selector; daemon honors it and manual runs prefer it over the parent CLI profile. | Web/Electron/Telegram profile selectors and outbound Telegram delivery. |
+| Scheduled personal turns / selectors (P4b, P4e) | Stored job profile selector; daemon honors it and manual runs prefer it over the parent CLI profile. Web/Electron new-session selector and optional `session.create` profile in protocol 1.5; service override stays in memory. | Telegram profile selector and outbound Telegram delivery. |
 | Schedulable local Policy digests (P4c) | `gg proactive digest` and `gg job add --proactive-digest`; local Summarize/Quiet/Note-only without an agent turn, model, or outbound delivery. | Outbound delivery. |
 | Live mailbox/calendar Policy digests (P4d) | Read-only Gmail Search/Read and Calendar Agenda by default; fail closed on missing Google connection/scopes; fake source injection for tests. | Telegram/email delivery, drafts, event creation, and OS notifications. |
 | First-user dogfood | Fake email digest, calendar reminder, and standing-auth denial scene through the discoverable CLI, with tests and optional live read-only instructions. | Automatic proactive outbound delivery. |
@@ -300,4 +308,4 @@ The tables use R/E/M/U as shorthand for the dimensions above. They describe effe
 
 Current runtime policy is documented in the architecture's [Security model](architecture.md#security-model) and [Approval modes](architecture.md#approval-modes). P1 extends #53's fail-closed nil-approver handling for `dangerous`/`confirm` risks to asserted E/M/U consequences, while retaining existing Risk behavior for unclassified tools.
 
-P1 shipped the fields, routing, memory-write gate, and optional Gmail draft switch described above. P2 shipped explicit standing authorization with durable storage, CLI management, shared matching, and an allow audit. P3 shipped the personal profile selector, personal base identity, stricter personal defaults, and Gmail draft preference while retaining the shared runtime. P4's first slice ships the local proactive policy and fake dogfood CLI above; P4b adds stored job profiles for scheduled personal turns; P4c adds schedulable local Policy digests without a model or agent turn; P4d supplies live read-only Gmail/Calendar bodies with explicit connection/scope failures. Outbound delivery remains deferred under the stated stop condition.
+P1 shipped the fields, routing, memory-write gate, and optional Gmail draft switch described above. P2 shipped explicit standing authorization with durable storage, CLI management, shared matching, and an allow audit. P3 shipped the personal profile selector, personal base identity, stricter personal defaults, and Gmail draft preference while retaining the shared runtime. P4's first slice ships the local proactive policy and fake dogfood CLI above; P4b adds stored job profiles for scheduled personal turns; P4c adds schedulable local Policy digests without a model or agent turn; P4d supplies live read-only Gmail/Calendar bodies with explicit connection/scope failures; P4e adds Web/Electron new-session profile selection. Outbound delivery remains deferred under the stated stop condition.

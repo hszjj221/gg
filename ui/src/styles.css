@@ -63,6 +63,8 @@ kbd { font: 10px/1.5 inherit; color: #7a8375; }
 .new-session-button:hover:not(:disabled) { background: #d6e2cb; border-color: #c4d4b6; }
 .new-session-button span { flex: 1; text-align: left; }
 .new-session-button kbd { color: #7b8a70; font-weight: 400; }
+.new-session-profile { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; padding: 0 4px; color: var(--muted); font-size: 11px; }
+.new-session-profile select { padding: 5px 8px; color: var(--accent); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; font: inherit; }
 .sidebar-nav { display: flex; flex-direction: column; gap: 4px; margin-top: 17px; }
 .sidebar-nav button { justify-content: flex-start; width: 100%; height: 39px; padding: 0 12px; color: #717c69; text-align: left; background: none; border: 1px solid transparent; border-radius: 8px; font-size: 12px; }
 .sidebar-nav button:hover { background: #e8ece2; }

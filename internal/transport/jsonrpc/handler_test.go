@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,6 +48,71 @@ func TestHandlerCreatesAndListsSessionsWithoutPaths(t *testing.T) {
 	items, ok := listed.Result.([]app.SessionSummary)
 	if !ok || len(items) != 1 || items[0].Name != "demo" {
 		t.Fatalf("unexpected list result: %#v", listed.Result)
+	}
+}
+
+func TestHandlerCreatesSessionsWithProfile(t *testing.T) {
+	profiles := make(chan string, 1)
+	rt := testWorkspaceWithFactory(t, func(cfg config.Config) agent.Provider {
+		profiles <- cfg.Profile
+		return fakeProvider{}
+	}, config.ProfileCoding)
+	defer rt.Close(context.Background())
+	handler := NewHandler(rt)
+	for _, tc := range []struct {
+		name, params, want string
+	}{
+		{"personal", `{"name":"personal","profile":"personal"}`, config.ProfilePersonal},
+		{"absent inherits coding", `{"name":"default"}`, config.ProfileCoding},
+		{"empty inherits coding", `{"profile":""}`, config.ProfileCoding},
+		{"whitespace inherits coding", `{"profile":"  "}`, config.ProfileCoding},
+		{"coding", `{"profile":"coding"}`, config.ProfileCoding},
+		{"trimmed personal", `{"profile":" personal "}`, config.ProfilePersonal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			created := handler.Handle(context.Background(), Request{Method: "session.create", Params: []byte(tc.params)})
+			snapshot, ok := created.Result.(app.Snapshot)
+			if created.Error != nil || !ok || snapshot.SessionID == "" {
+				t.Fatalf("create session: %+v", created)
+			}
+			if _, err := rt.Snapshot(snapshot.SessionID); err != nil {
+				t.Fatal(err)
+			}
+			started := handler.Handle(context.Background(), Request{
+				Method: "run.start",
+				Params: []byte(`{"sessionId":"` + snapshot.SessionID + `","prompt":"hello"}`),
+			})
+			if started.Error != nil {
+				t.Fatal(started.Error)
+			}
+			waitRunDone(t, rt, started)
+			select {
+			case got := <-profiles:
+				if got != tc.want {
+					t.Fatalf("session service profile = %q, want %q", got, tc.want)
+				}
+			default:
+				t.Fatal("session service did not construct a provider")
+			}
+		})
+	}
+}
+
+func TestHandlerRejectsInvalidSessionProfileWithoutCreatingSession(t *testing.T) {
+	rt := testWorkspace(t)
+	defer rt.Close(context.Background())
+	response := NewHandler(rt).Handle(context.Background(), Request{
+		Method: "session.create", Params: []byte(`{"name":"invalid","profile":"garbage"}`),
+	})
+	if response.Error == nil || response.Error.Code != -32602 || !strings.Contains(response.Error.Message, "profile must be coding or personal") {
+		t.Fatalf("unexpected invalid-profile response: %+v", response)
+	}
+	sessions, err := rt.ListSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("invalid profile leaked sessions: %+v", sessions)
 	}
 }
 
@@ -180,11 +246,16 @@ func testWorkspaceWithProvider(t *testing.T, provider agent.Provider) *app.Runti
 
 func testWorkspaceWithProfile(t *testing.T, provider agent.Provider, profile string) *app.Runtime {
 	t.Helper()
+	return testWorkspaceWithFactory(t, func(config.Config) agent.Provider { return provider }, profile)
+}
+
+func testWorkspaceWithFactory(t *testing.T, factory app.ProviderFactory, profile string) *app.Runtime {
+	t.Helper()
 	root := t.TempDir()
 	cfg := config.Config{Profile: profile, CWD: testWorkspaceDir(t, root, "project"), Selection: "test:model"}
 	rt, err := app.NewRuntime(app.RuntimeOptions{
 		Config:            cfg,
-		ProviderFactory:   func(config.Config) agent.Provider { return provider },
+		ProviderFactory:   factory,
 		WorkspaceRegistry: testRegistry(t),
 		NoSkills:          true,
 		Repository:        session.NewFileRepository(filepath.Join(root, "sessions")),

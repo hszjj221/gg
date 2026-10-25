@@ -16,6 +16,9 @@ export function App() {
   const desktop = Boolean(window.ggDesktop);
   const [endpoint, setEndpoint] = useState(() => sessionStorage.getItem('gg.endpoint') || '');
   const [token, setToken] = useState(() => sessionStorage.getItem('gg.token') || '');
+  const [profile, setProfile] = useState<'coding' | 'personal'>(
+    () => sessionStorage.getItem('gg.profile') === 'personal' ? 'personal' : 'coding',
+  );
   const [api, setAPI] = useState<API | null>(null);
   const [workspace, setWorkspace] = useState('');
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -274,7 +277,7 @@ export function App() {
   async function createSession() {
     if (!api || busy || actionLockRef.current) return;
     await action(async () => {
-      const snapshot = await api.createSession();
+      const snapshot = await api.createSession('', profile);
       if (!current) {
         sessionStorage.setItem(
           `gg.draft.${snapshot.sessionId}`,
@@ -376,7 +379,7 @@ export function App() {
     let started: { runId: string };
     try {
       if (!snapshot) {
-        snapshot = await api.createSession();
+        snapshot = await api.createSession('', profile);
         sessionStorage.setItem('gg.sessionId', snapshot.sessionId);
         sessionStorage.removeItem('gg.draft.new');
         setCurrent(snapshot);
@@ -676,6 +679,22 @@ export function App() {
           <span>新建会话</span>
           <kbd>{modifier} N</kbd>
         </button>
+        <label className="new-session-profile">
+          新会话模式
+          <select
+            aria-label="新会话模式"
+            title="仅用于新建会话：编码 (coding) / 个人助理 (personal)"
+            value={profile}
+            onChange={(event) => {
+              const selected = event.target.value === 'personal' ? 'personal' : 'coding';
+              setProfile(selected);
+              sessionStorage.setItem('gg.profile', selected);
+            }}
+          >
+            <option value="coding">编码</option>
+            <option value="personal">个人</option>
+          </select>
+        </label>
         <div className="sidebar-nav" aria-label="视图切换">
           <button
             aria-current={view === 'chat' ? 'page' : undefined}
