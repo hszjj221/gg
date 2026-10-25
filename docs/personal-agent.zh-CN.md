@@ -1,8 +1,8 @@
-# Personal Agent：真实只读 Gmail／Calendar 摘要（P4d）
+# Personal Agent：Web/Electron profile 选择（P4e）
 
 [English](personal-agent.md) | 简体中文
 
-P0 定义后果语言与审批基线。P1 增加后果路由、记忆写入审批及 Gmail 草稿。P2 增加显式常驻授权与审计匹配。P3 增加独立基础身份与更严格默认策略的个人 profile。P4 增加确定性的主动性策略，以及验证这些刹车仍有效的可运行假数据自用路径。P4c 让本地 Policy 摘要可以调度；P4d 默认提供真实只读 Gmail／Calendar 内容，无需 agent 轮次、模型或对外投递。缺少连接或读取 scope 时失败关闭。默认 `gg` CLI 仍以编码为主。
+P0 定义后果语言与审批基线。P1 增加后果路由、记忆写入审批及 Gmail 草稿。P2 增加显式常驻授权与审计匹配。P3 增加独立基础身份与更严格默认策略的个人 profile。P4 增加确定性的主动性策略，以及验证这些刹车仍有效的可运行假数据自用路径。P4c 让本地 Policy 摘要可以调度；P4d 默认提供真实只读 Gmail／Calendar 内容，无需 agent 轮次、模型或对外投递。缺少连接或读取 scope 时失败关闭。P4e 增加 Web/Electron 新会话的显式 profile 选择。默认仍以编码为主。
 
 ## 个人代理与编码代理
 
@@ -47,7 +47,15 @@ gg job run local-digest
 
 `ggd` 在每次定时会话中使用已保存的 `coding` 或 `personal` profile。任务 profile 未设置或为空时，继承 daemon 现有的 coding 配置。手动 `gg job run` **优先使用已保存的 profile，覆盖父级 CLI `--profile`**；未设置时继承父级选择器，因此旧任务仍可用 `gg --profile personal job run ...` 运行。`job show` 与 `job list` 将未设置的 profile 显示为 `(inherit; daemon: coding)`。手动和 daemon 任务保留现有无人值守审批策略（`--allow-all`）与常驻授权匹配。
 
-P4b 让现有 `gg job` 调度器能够运行 personal agent 轮次。P4c 增加不经过 agent 轮次的本地 Policy 摘要；P4d 将占位正文替换为真实只读邮箱／日历内容，见下文。Web/Electron 和 Telegram profile 选择器、Telegram 主动外发投递，以及定时任务以外的自动触发条件发现仍留待后续。原 P4 demo 仍由用户显式调用 CLI，使用假数据。
+P4b 让现有 `gg job` 调度器能够运行 personal agent 轮次。P4c 增加不经过 agent 轮次的本地 Policy 摘要；P4d 将占位正文替换为真实只读邮箱／日历内容，见下文。P4e 增加下述 Web/Electron 选择器。Telegram profile 选择器、Telegram 主动外发投递，以及定时任务以外的自动触发条件发现仍留待后续。原 P4 demo 仍由用户显式调用 CLI，使用假数据。
+
+### Web/Electron 新会话（P4e，已交付）
+
+**新建会话**旁的**新会话模式**选择器提供**编码**（`coding`，默认）和**个人**（`personal`）。它用于通过按钮、快捷键或尚未打开会话时发送首条消息所创建的下一个会话。当前标签页通过 `sessionStorage` 的 `gg.profile` 记住偏好，不保存 gg config 或 `USER.md` 默认值，也不改变已有会话。Electron 共用同一个 Web App 和选择器。
+
+JSON-RPC 协议 **1.5** 为 `session.create` 增加可选 `profile`，例如 `{"name":"Inbox","profile":"personal"}`。去除首尾空白后仅接受 `coding` 和 `personal`；空值或省略时继承运行时配置，`ggd` 中为 coding。非法值返回 invalid params，不创建会话。会话服务的 `Config.Profile` 选择与 CLI 相同的个人基础指令、C2 能力裁剪与 Gmail 默认草稿行为。Web/Electron 通过既有 `run.start` 的 `requireApproval: true` 路径保留 on-request 审批提示；后果与常驻授权门控仍然适用。
+
+覆盖仅属于新建会话的内存服务，复用 P4b 的 `CreateSessionInWorkspaceWithProfile` 接口，**不持久化到会话 header**。Fork／clone 继承当前服务配置。Daemon 重启后重新打开已保存会话会继承 coding；再次使用 personal 时，需选择个人模式并创建新会话。
 
 ## 主动性策略（P4 首个切片）
 
@@ -128,7 +136,7 @@ gg job run morning-digest
 | 计划项 | 本切片已交付 | 延后 |
 | --- | --- | --- |
 | 主动触发策略 | 确定性的 Summarize／Quiet／Note-only 决定、仅 personal 启用的默认值、安静时段、通知抑制与后果边界。 | 定时任务以外的自动触发条件发现。 |
-| 定时 personal 轮次（P4b） | 持久化任务 profile 选择器；daemon 按此运行，手动运行优先于父级 CLI profile。 | Web/Electron/Telegram profile 选择器和 Telegram 主动外发投递。 |
+| 定时 personal 轮次／选择器（P4b、P4e） | 持久化任务 profile 选择器；daemon 按此运行，手动运行优先于父级 CLI profile。Web/Electron 新会话选择器及协议 1.5 的 `session.create` 可选 profile；服务覆盖仅保留在内存中。 | Telegram profile 选择器和 Telegram 主动外发投递。 |
 | 可调度本地 Policy 摘要（P4c） | `gg proactive digest` 与 `gg job add --proactive-digest`；本地 Summarize／Quiet／Note-only，无需 agent 轮次、模型或对外投递。 | 对外投递。 |
 | 真实邮箱／日历 Policy 摘要（P4d） | 默认只读 Gmail Search／Read 与 Calendar Agenda；缺少 Google 连接／scope 时失败关闭；测试显式注入假数据源。 | Telegram／邮件投递、草稿、事件创建和 OS 通知。 |
 | 首位用户自用验证 | 可发现的 CLI 假邮件摘要、日历提醒与常驻授权拒绝场景，配套测试及可选真实只读操作说明。 | 自动主动外发投递。 |
@@ -300,4 +308,4 @@ P0（#54）之后的 P1 清单，已更新至 D3、D1a 和 D1b，并对照了[�
 
 当前运行时策略见架构文档的[安全模型](architecture.zh-CN.md#安全模型)和[审批模式](architecture.zh-CN.md#审批模式)。P1 将 #53 对 `dangerous`/`confirm` 风险的 nil approver 失败关闭处理扩展到明确的 E/M/U 后果，同时保留未分类工具现有的 Risk 行为。
 
-P1 已交付上述字段、路由、记忆写入审批和可选 Gmail 草稿开关。P2 已交付显式常驻授权的持久存储、CLI 管理、共享匹配与放行审计。P3 已交付 personal profile 选择器、个人基础身份、更严默认与 Gmail 草稿偏好，并继续共享运行时。P4 首个切片交付上方本地主动性策略及假数据自用 CLI；P4b 增加任务 profile 持久化，使定时 personal 轮次可用；P4c 增加无需模型或 agent 轮次的可调度本地 Policy 摘要；P4d 提供真实只读 Gmail／Calendar 正文，并明确返回连接／scope 错误。对外投递仍按已述停止条件延后。
+P1 已交付上述字段、路由、记忆写入审批和可选 Gmail 草稿开关。P2 已交付显式常驻授权的持久存储、CLI 管理、共享匹配与放行审计。P3 已交付 personal profile 选择器、个人基础身份、更严默认与 Gmail 草稿偏好，并继续共享运行时。P4 首个切片交付上方本地主动性策略及假数据自用 CLI；P4b 增加任务 profile 持久化，使定时 personal 轮次可用；P4c 增加无需模型或 agent 轮次的可调度本地 Policy 摘要；P4d 提供真实只读 Gmail／Calendar 正文，并明确返回连接／scope 错误；P4e 增加 Web/Electron 新会话 profile 选择。对外投递仍按已述停止条件延后。
