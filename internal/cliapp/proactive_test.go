@@ -11,8 +11,20 @@ import (
 
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/config"
+	"github.com/hszjj221/gg/internal/connector"
+	"github.com/hszjj221/gg/internal/connector/google"
 	"github.com/hszjj221/gg/internal/standingauth"
 )
+
+type fakeDigestSource struct{}
+
+func (fakeDigestSource) EmailSummary(context.Context, time.Time) (string, error) {
+	return "From: alex@example.com; Subject: Planning notes", nil
+}
+
+func (fakeDigestSource) CalendarReminder(context.Context, time.Time) (string, error) {
+	return "Today's agenda: 10:30 Planning", nil
+}
 
 func TestProactiveBrakes(t *testing.T) {
 	for _, command := range []string{"demo", "digest"} {
@@ -45,6 +57,7 @@ func TestProactiveBrakes(t *testing.T) {
 					CWD: dir, HomeDir: home, Stdout: &stdout, Stderr: &stderr,
 					Stdin: strings.NewReader(""), IsTerminal: func(any) bool { return false },
 					ProviderFactory: func(config.Config) agent.Provider { t.Fatal("proactive command called model provider"); return nil },
+					DigestSource:    fakeDigestSource{},
 				}
 				argv := append([]string{"--profile", "personal", "proactive", command}, tc.flags...)
 				if code := Run(context.Background(), argv, opts); code != 0 || stderr.Len() != 0 {
@@ -71,13 +84,14 @@ func TestProactiveBrakes(t *testing.T) {
 				if command == "digest" && !strings.Contains(stdout.String(), "local only; no model; no outbound") {
 					t.Fatalf("missing local-only outcome: %s", stdout.String())
 				}
-				prefix := "Fake "
+				inbox, agenda := "Fake inbox:", "Fake agenda:"
 				if command == "digest" {
-					prefix = "Stub "
+					inbox, _ = (fakeDigestSource{}).EmailSummary(context.Background(), time.Time{})
+					agenda, _ = (fakeDigestSource{}).CalendarReminder(context.Background(), time.Time{})
 				}
 				// Only Summarize may surface payloads; Quiet and Note-only hide them.
-				if strings.Contains(stdout.String(), prefix+"inbox:") != (tc.want == "Summarize") ||
-					strings.Contains(stdout.String(), prefix+"agenda:") != (tc.want == "Summarize") {
+				if strings.Contains(stdout.String(), inbox) != (tc.want == "Summarize") ||
+					strings.Contains(stdout.String(), agenda) != (tc.want == "Summarize") {
 					t.Fatalf("unexpected payload visibility: %s", stdout.String())
 				}
 				notePaths, err := filepath.Glob(filepath.Join(home, ".gg", "proactive", command+"-*", "*.txt"))
@@ -87,7 +101,7 @@ func TestProactiveBrakes(t *testing.T) {
 				}
 				for _, path := range notePaths {
 					data, err := os.ReadFile(path)
-					if err != nil || !strings.HasPrefix(string(data), prefix) {
+					if err != nil || (!strings.Contains(string(data), inbox) && !strings.Contains(string(data), agenda)) {
 						t.Fatalf("local candidate %s: %q %v", path, data, err)
 					}
 				}
@@ -106,6 +120,47 @@ func TestProactiveBrakes(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestProactiveDigestRequiresGoogle(t *testing.T) {
+	for _, tc := range []struct {
+		name, want string
+		scopes     []string
+		flags      []string
+	}{
+		{name: "disconnected", want: "google not connected"},
+		{name: "disconnected during quiet", want: "google not connected", flags: []string{"--quiet-hours", "22:00-07:00", "--at", "23:00"}},
+		{name: "missing Gmail scope", scopes: []string{google.ScopeCalendar}, want: google.ScopeGmailRead},
+		{name: "missing Calendar scope", scopes: []string{google.ScopeGmailRead}, want: "calendar.events.readonly"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			home := filepath.Join(dir, "home")
+			if tc.scopes != nil {
+				store, err := connector.Open(filepath.Join(home, ".gg", "connectors"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := store.Save(google.Name, connector.Token{AccessToken: "fake", RefreshToken: "fake", Scopes: tc.scopes}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var stdout, stderr strings.Builder
+			opts := Options{CWD: dir, HomeDir: home, Stdout: &stdout, Stderr: &stderr,
+				ProviderFactory: func(config.Config) agent.Provider { t.Fatal("digest constructed provider"); return nil },
+			}
+			argv := append([]string{"--profile", "personal", "proactive", "digest"}, tc.flags...)
+			if code := Run(context.Background(), argv, opts); code != 1 || !strings.Contains(stderr.String(), tc.want) || !strings.Contains(stderr.String(), "gg connect google") {
+				t.Fatalf("exit=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("failed connection emitted digest: %s", stdout.String())
+			}
+			if _, err := os.Stat(filepath.Join(home, ".gg", "proactive")); !os.IsNotExist(err) {
+				t.Fatalf("failed connection wrote digest state: %v", err)
+			}
+		})
 	}
 }
 

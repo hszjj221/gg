@@ -16,13 +16,21 @@ import (
 	"github.com/hszjj221/gg/internal/tools"
 )
 
+// DigestSource supplies bodies for local digests. Implementations must not
+// send mail, create events, draft, notify, execute tools, or call a model.
+type DigestSource interface {
+	EmailSummary(ctx context.Context, now time.Time) (string, error)
+	CalendarReminder(ctx context.Context, now time.Time) (string, error)
+}
+
 type DigestOptions struct {
 	Profile       string
 	QuietHours    string
 	Now           time.Time // zero uses the local wall clock
 	RememberLater bool
 	HomeDir       string
-	Writer        io.Writer // nil suppresses stdout, including digest bodies
+	Writer        io.Writer    // nil suppresses stdout, including digest bodies
+	Source        DigestSource // required for personal digests; tests inject fakes
 }
 
 type DigestResult struct {
@@ -30,8 +38,8 @@ type DigestResult struct {
 	Summary   string // decisions and paths only, suitable for scheduler history
 }
 
-// RunDigest produces local stub inbox/agenda digests. It never constructs a
-// model or connector client, executes a tool, or loads real standing grants.
+// RunDigest applies Policy before fetching inbox/agenda bodies for local output.
+// It never constructs a model, executes a tool, or loads real standing grants.
 func RunDigest(ctx context.Context, opts DigestOptions) (DigestResult, error) {
 	var result DigestResult
 	policy := Policy{QuietHours: opts.QuietHours}
@@ -49,6 +57,9 @@ func RunDigest(ctx context.Context, opts DigestOptions) (DigestResult, error) {
 		result.Summary = "Quiet: proactivity disabled outside personal profile."
 		_, err := fmt.Fprintln(w, result.Summary)
 		return result, err
+	}
+	if opts.Source == nil {
+		return result, fmt.Errorf("digest source is required (live Google reads require: gg connect google)")
 	}
 	now := opts.Now
 	if now.IsZero() {
@@ -71,11 +82,11 @@ func RunDigest(ctx context.Context, opts DigestOptions) (DigestResult, error) {
 	var summary strings.Builder
 	metadata := io.MultiWriter(w, &summary)
 	for _, scene := range []struct {
-		kind Scenario
-		text string
+		kind  Scenario
+		fetch func(context.Context, time.Time) (string, error)
 	}{
-		{EmailSummary, "Stub inbox: Alex sent the planning notes; Sam confirmed lunch. Two fake messages, no reply needed."},
-		{CalendarReminder, "Stub agenda: fake planning starts at " + now.Add(30*time.Minute).Format("15:04") + ". Read-only reminder; no event created."},
+		{EmailSummary, opts.Source.EmailSummary},
+		{CalendarReminder, opts.Source.CalendarReminder},
 	} {
 		decision := policy.Decide(Input{
 			Profile: opts.Profile, Scenario: scene.kind, Now: now,
@@ -86,8 +97,12 @@ func RunDigest(ctx context.Context, opts DigestOptions) (DigestResult, error) {
 		}
 		switch decision.Decision {
 		case Summarize, NoteOnly:
+			body, err := scene.fetch(ctx, now)
+			if err != nil {
+				return result, fmt.Errorf("digest %s: %w", scene.kind, err)
+			}
 			path := filepath.Join(dir, string(scene.kind)+".txt")
-			if err := os.WriteFile(path, []byte(scene.text+"\n"), 0o600); err != nil {
+			if err := os.WriteFile(path, []byte(body+"\n"), 0o600); err != nil {
 				return result, err
 			}
 			label := "Local digest"
@@ -98,7 +113,7 @@ func RunDigest(ctx context.Context, opts DigestOptions) (DigestResult, error) {
 				return result, err
 			}
 			if decision.Decision == Summarize {
-				if _, err := fmt.Fprintln(w, scene.text); err != nil {
+				if _, err := fmt.Fprintln(w, body); err != nil {
 					return result, err
 				}
 			}
@@ -111,7 +126,7 @@ func RunDigest(ctx context.Context, opts DigestOptions) (DigestResult, error) {
 	if err := checkDigestBrakes(ctx, policy.Decide, approver, now, metadata); err != nil {
 		return result, err
 	}
-	if _, err := fmt.Fprintln(metadata, "Brakes held: local only; no model; no outbound; no tools executed."); err != nil {
+	if _, err := fmt.Fprintln(metadata, "Brakes held: digest output local only; no model; no outbound; no send/draft/create/notify; no tools executed."); err != nil {
 		return result, err
 	}
 	result.Summary = strings.TrimSpace(summary.String())

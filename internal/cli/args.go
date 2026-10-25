@@ -437,7 +437,7 @@ Usage:
   gg memory search <query>
   gg memory show [daily]
   gg standing-auth list|add|revoke   manage explicit standing grants
-  gg --profile personal proactive digest   local stub digests + approval brakes (no model or outbound)
+  gg --profile personal proactive digest   live read-only Gmail/Calendar, local digests + approval brakes (no model or outbound)
   gg job add --cron "0 9 * * *" --name NAME [--proactive-digest] [PROMPT]
   gg job list [--all]
   gg artifact list
@@ -495,9 +495,10 @@ Standing authorization (~/.gg/standing-auth):
   Exact argument limits and explicit effects (E,M,U or none) are required.
   Standing grants never waive dangerous/confirm risks.
 
-Proactive digests (personal only; no model, live connectors, or outbound):
+Proactive digests (personal only; live read-only Gmail/Calendar; no model or outbound):
   gg --profile personal proactive digest [--quiet-hours HH:MM-HH:MM] [--at HH:MM] [--remember-later]
   digest uses the local wall clock by default; --at replays a local HH:MM.
+  digest requires Google read scopes; if disconnected, run: gg connect google.
   Summarize writes local files and stdout; Note-only writes private candidates.
   gg --profile personal proactive demo [--quiet-hours HH:MM-HH:MM] [--at HH:MM] [--remember-later]
   demo --at defaults to fake local time 10:00; quiet hours are disabled by default.
@@ -506,7 +507,8 @@ Proactive digests (personal only; no model, live connectors, or outbound):
 
 Scheduled jobs (fire while the ggd daemon is alive):
   gg job add --cron "0 9 * * *" --name NAME [--proactive-digest] [--profile coding|personal] [--timezone TZ] [--allow-all] [--timeout 10m] [PROMPT]
-  --proactive-digest defaults to personal, allows an empty prompt, and runs locally without an agent turn.
+  --proactive-digest defaults to personal, allows an empty prompt, and reads Google into local files without an agent turn.
+  Disconnected or missing read scopes fails closed; job history records the error; run: gg connect google.
   Other jobs require PROMPT; digest jobs require personal and keep quiet hours disabled.
   gg job add --at "2026-09-28 15:04" --name NAME PROMPT
   gg job add --in 20m --name NAME PROMPT

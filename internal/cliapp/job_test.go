@@ -41,6 +41,7 @@ func TestJobProactiveDigest(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var out, stderr strings.Builder
 			opts := jobTestOptions(t.TempDir(), &out, &stderr)
+			opts.DigestSource = fakeDigestSource{}
 			opts.ProviderFactory = func(config.Config) agent.Provider {
 				t.Fatal("digest job constructed model provider")
 				return nil
@@ -99,6 +100,17 @@ func TestJobProactiveDigest(t *testing.T) {
 				if err != nil || len(records) != 1 || records[0].Status != wantStatus || records[0].Summary == "" || records[0].SessionPath != "" || strings.Contains(records[0].Summary, "Stub ") {
 					t.Fatalf("run records=%+v err=%v", records, err)
 				}
+			}
+			// Production defaults must fail closed and persist the connection error.
+			opts.DigestSource = nil
+			out.Reset()
+			stderr.Reset()
+			if code := Run(context.Background(), []string{"job", "run", "digest"}, opts); code != 1 || !strings.Contains(stderr.String(), "google not connected") {
+				t.Fatalf("disconnected exit=%d stderr=%s", code, stderr.String())
+			}
+			records, err := store.ReadRuns(1)
+			if err != nil || len(records) != 1 || records[0].Status != "error" || records[0].Summary != strings.TrimSpace(stderr.String()) || !strings.Contains(records[0].Summary, "gg connect google") || records[0].SessionPath != "" || out.Len() != 0 {
+				t.Fatalf("disconnected history=%+v err=%v stdout=%s", records, err, out.String())
 			}
 			if _, err := os.Stat(cfg.SessionDir); !os.IsNotExist(err) {
 				t.Fatalf("digest created session directory: %v", err)

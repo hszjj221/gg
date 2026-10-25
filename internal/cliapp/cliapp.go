@@ -17,6 +17,7 @@ import (
 	"github.com/hszjj221/gg/internal/cli"
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/memory"
+	"github.com/hszjj221/gg/internal/proactive"
 	"github.com/hszjj221/gg/internal/runlog"
 	"github.com/hszjj221/gg/internal/session"
 	"github.com/hszjj221/gg/internal/userprofile"
@@ -32,6 +33,9 @@ type Options struct {
 	HomeDir         string
 	IsTerminal      func(any) bool
 	ProviderFactory func(config.Config) agent.Provider
+	// DigestSource optionally injects a read-only source (e.g. for offline tests).
+	// Nil uses the live Google connection for personal digests.
+	DigestSource proactive.DigestSource
 	// NoSkills mirrors cli.Args.NoSkills for subcommands that load skills
 	// themselves (e.g. `gg job run`).
 	NoSkills bool
@@ -83,7 +87,7 @@ func Run(ctx context.Context, argv []string, options Options) int {
 	}
 	cfg.BashSandbox = parsed.Sandbox
 	if parsed.Command == cli.CommandProactive {
-		return runProactiveCommand(ctx, cfg, parsed, stdout, stderr)
+		return runProactiveCommand(ctx, cfg, parsed, options, stdout, stderr)
 	}
 	// P1 workspace: the process working directory is auto-registered as the
 	// "default" workspace on first run after upgrade. Today the runtime

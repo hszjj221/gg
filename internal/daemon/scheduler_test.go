@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hszjj221/gg/internal/agent"
 	"github.com/hszjj221/gg/internal/app"
@@ -127,7 +128,7 @@ func TestDaemonJobExecutorProactiveDigest(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rt.Close(context.Background())
-	executor := &daemonJobExecutor{rt: rt, logger: testStdinLogger(), homeDir: root}
+	executor := &daemonJobExecutor{rt: rt, logger: testStdinLogger(), cfg: config.Config{HomeDir: root}, digestSource: fakeDigestSource{}}
 	summary, path, err := executor.Execute(context.Background(), scheduler.Job{
 		Name: "digest", Profile: config.ProfilePersonal, ProactiveDigest: true,
 	})
@@ -144,6 +145,27 @@ func TestDaemonJobExecutorProactiveDigest(t *testing.T) {
 	if err != nil || len(paths) != 2 {
 		t.Fatalf("digest paths=%q err=%v", paths, err)
 	}
+	// Even with no Runtime, a production digest reaches the connection gate
+	// instead of creating a session/provider or falling back to fake content.
+	executor.rt = nil
+	executor.digestSource = nil
+	executor.cfg.Connectors.Dir = filepath.Join(root, "custom-connectors")
+	summary, path, err = executor.Execute(context.Background(), scheduler.Job{
+		Name: "digest", Profile: config.ProfilePersonal, ProactiveDigest: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "google not connected") || !strings.Contains(err.Error(), "gg connect google") || summary != "" || path != "" {
+		t.Fatalf("disconnected digest summary=%q path=%q err=%v", summary, path, err)
+	}
+}
+
+type fakeDigestSource struct{}
+
+func (fakeDigestSource) EmailSummary(context.Context, time.Time) (string, error) {
+	return "From: alex@example.com; Subject: Planning notes", nil
+}
+
+func (fakeDigestSource) CalendarReminder(context.Context, time.Time) (string, error) {
+	return "Today's agenda: 10:30 Planning", nil
 }
 
 func TestSanitizeJobName(t *testing.T) {
