@@ -27,6 +27,86 @@ func jobTestOptions(dir string, stdout, stderr *strings.Builder) Options {
 	}
 }
 
+func TestJobProactiveDigest(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		flags []string
+		valid bool
+	}{
+		{"default personal", nil, true},
+		{"explicit personal", []string{"--profile", "personal"}, true},
+		{"coding rejected", []string{"--profile", "coding"}, false},
+		{"empty rejected", []string{"--profile", ""}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, stderr strings.Builder
+			opts := jobTestOptions(t.TempDir(), &out, &stderr)
+			opts.ProviderFactory = func(config.Config) agent.Provider {
+				t.Fatal("digest job constructed model provider")
+				return nil
+			}
+			args := append([]string{"job", "add", "--proactive-digest", "--cron", "0 9 * * *", "--name", "digest"}, tc.flags...)
+			code := Run(context.Background(), args, opts)
+			if !tc.valid {
+				if code == 0 || !strings.Contains(stderr.String(), "require profile personal") {
+					t.Fatalf("invalid digest: exit=%d stderr=%s", code, stderr.String())
+				}
+				return
+			}
+			if code != 0 {
+				t.Fatalf("add exit=%d stderr=%s", code, stderr.String())
+			}
+			cfg, err := resolveJobTestConfig(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store, err := scheduler.Open(cfg.Scheduler.Dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			job, err := findJob(store, "digest")
+			if err != nil || !job.ProactiveDigest || job.Profile != config.ProfilePersonal || job.Prompt != "" {
+				t.Fatalf("stored job=%+v err=%v", job, err)
+			}
+			out.Reset()
+			if code := Run(context.Background(), []string{"job", "show", "digest"}, opts); code != 0 || !strings.Contains(out.String(), "proactive-digest: true") {
+				t.Fatalf("show exit=%d stdout=%s stderr=%s", code, out.String(), stderr.String())
+			}
+			// Stored personal wins over the default coding CLI, before personal
+			// setup, skill loading, session creation, or provider construction.
+			for _, fail := range []bool{false, true} {
+				out.Reset()
+				stderr.Reset()
+				if fail {
+					if err := os.RemoveAll(filepath.Join(opts.HomeDir, ".gg", "proactive")); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(opts.HomeDir, ".gg", "proactive"), nil, 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				code := Run(context.Background(), []string{"job", "run", "digest"}, opts)
+				if (code != 0) != fail {
+					t.Fatalf("run fail=%v exit=%d stderr=%s", fail, code, stderr.String())
+				}
+				records, err := store.ReadRuns(1)
+				wantStatus := "ok"
+				if fail {
+					wantStatus = "error"
+				} else if !strings.Contains(out.String(), "email_summary: Summarize") || !strings.Contains(out.String(), "no model; no outbound") {
+					t.Fatalf("missing digest output: %s", out.String())
+				}
+				if err != nil || len(records) != 1 || records[0].Status != wantStatus || records[0].Summary == "" || records[0].SessionPath != "" || strings.Contains(records[0].Summary, "Stub ") {
+					t.Fatalf("run records=%+v err=%v", records, err)
+				}
+			}
+			if _, err := os.Stat(cfg.SessionDir); !os.IsNotExist(err) {
+				t.Fatalf("digest created session directory: %v", err)
+			}
+		})
+	}
+}
+
 func TestJobAddListShowRemove(t *testing.T) {
 	dir := t.TempDir()
 	var stdout, stderr strings.Builder

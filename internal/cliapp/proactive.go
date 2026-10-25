@@ -18,9 +18,52 @@ import (
 	"github.com/hszjj221/gg/internal/tools"
 )
 
-const proactiveUsage = "usage: gg --profile personal proactive demo [--quiet-hours HH:MM-HH:MM] [--at HH:MM] [--remember-later]"
+const proactiveUsage = "usage: gg --profile personal proactive demo|digest [--quiet-hours HH:MM-HH:MM] [--at HH:MM] [--remember-later]"
 
 func runProactiveCommand(ctx context.Context, cfg config.Config, args cli.Args, stdout, stderr io.Writer) int {
+	if len(args.ProactiveArgs) > 0 && args.ProactiveArgs[0] == "digest" {
+		return runProactiveDigest(ctx, cfg, args.ProactiveArgs[1:], stdout, stderr)
+	}
+	return runProactiveDemo(ctx, cfg, args, stdout, stderr)
+}
+
+func runProactiveDigest(ctx context.Context, cfg config.Config, args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("gg proactive digest", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	quietHours := fs.String("quiet-hours", "", "HH:MM-HH:MM local quiet window (default: disabled)")
+	at := fs.String("at", "", "replay local time HH:MM (default: wall clock)")
+	later := fs.Bool("remember-later", false, "capture stub digests as local note candidates")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, proactiveUsage)
+		return 2
+	}
+	now := time.Now()
+	if *at != "" {
+		replay, err := time.ParseInLocation("15:04", *at, time.Local)
+		if err != nil || replay.Format("15:04") != *at {
+			fmt.Fprintln(stderr, "--at must be HH:MM")
+			return 2
+		}
+		now = time.Date(now.Year(), now.Month(), now.Day(), replay.Hour(), replay.Minute(), 0, 0, time.Local)
+	}
+	if _, err := app.NewProactivePolicy(*quietHours); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	if _, err := proactive.RunDigest(ctx, proactive.DigestOptions{
+		Profile: cfg.Profile, HomeDir: cfg.HomeDir, Writer: stdout,
+		QuietHours: *quietHours, Now: now, RememberLater: *later,
+	}); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
+}
+
+func runProactiveDemo(ctx context.Context, cfg config.Config, args cli.Args, stdout, stderr io.Writer) int {
 	if len(args.ProactiveArgs) == 0 || args.ProactiveArgs[0] != "demo" {
 		fmt.Fprintln(stderr, proactiveUsage)
 		return 2

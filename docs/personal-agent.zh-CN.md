@@ -1,8 +1,8 @@
-# Personal Agent：主动性策略与自用验证路径（P4 首个切片）
+# Personal Agent：主动性策略与可调度本地摘要（P4c）
 
 [English](personal-agent.md) | 简体中文
 
-P0 定义后果语言与审批基线。P1 增加后果路由、记忆写入审批及 Gmail 草稿。P2 增加显式常驻授权与审计匹配。P3 增加独立基础身份与更严格默认策略的个人 profile。P4 首个切片增加确定性的主动性策略，以及验证这些刹车仍有效的可运行假数据自用路径。默认 `gg` CLI 仍以编码为主。
+P0 定义后果语言与审批基线。P1 增加后果路由、记忆写入审批及 Gmail 草稿。P2 增加显式常驻授权与审计匹配。P3 增加独立基础身份与更严格默认策略的个人 profile。P4 增加确定性的主动性策略，以及验证这些刹车仍有效的可运行假数据自用路径。P4c 让本地占位数据 Policy 摘要可以调度，无需 agent 轮次、模型或对外投递。默认 `gg` CLI 仍以编码为主。
 
 ## 个人代理与编码代理
 
@@ -47,16 +47,16 @@ gg job run local-digest
 
 `ggd` 在每次定时会话中使用已保存的 `coding` 或 `personal` profile。任务 profile 未设置或为空时，继承 daemon 现有的 coding 配置。手动 `gg job run` **优先使用已保存的 profile，覆盖父级 CLI `--profile`**；未设置时继承父级选择器，因此旧任务仍可用 `gg --profile personal job run ...` 运行。`job show` 与 `job list` 将未设置的 profile 显示为 `(inherit; daemon: coding)`。手动和 daemon 任务保留现有无人值守审批策略（`--allow-all`）与常驻授权匹配。
 
-这使现有 `gg job` 调度器能够运行 personal agent 轮次，例如将本地摘要提示词存为定时任务。Web/Electron 和 Telegram profile 选择器、Telegram 主动外发投递，以及不经过 agent 轮次、仅由 Policy 驱动的持续摘要仍留待后续。下方 P4 demo 仍由用户显式调用 CLI，与定时 agent 轮次分开。
+P4b 让现有 `gg job` 调度器能够运行 personal agent 轮次。P4c 进一步支持不经过 agent 轮次的本地占位数据 Policy 摘要，见下文。Web/Electron 和 Telegram profile 选择器、Telegram 主动外发投递、真实邮箱 Policy 摘要，以及定时任务以外的自动触发条件发现仍留待后续。原 P4 demo 仍由用户显式调用 CLI。
 
 ## 主动性策略（P4 首个切片）
 
-[`internal/proactive.Policy.Decide`](../internal/proactive/policy.go) 是纯函数：不调用模型、不做 I/O、不读取时钟、不推导授权。输入包括运行时 profile、场景（`email_summary`、`calendar_reminder`、`standing_auth_check`）、传入的本地时间、显式的稍后记住请求，以及拟议通知或工具审批请求。本切片在 demo 中调用它，不向普通 agent 轮次或 daemon 添加自动触发器。
+[`internal/proactive.Policy.Decide`](../internal/proactive/policy.go) 是纯函数：不调用模型、不做 I/O、不读取时钟、不推导授权。输入包括运行时 profile、场景（`email_summary`、`calendar_reminder`、`standing_auth_check`）、传入的本地时间、显式的稍后记住请求，以及拟议通知或工具审批请求。demo 与 P4c 本地摘要 runner 直接调用它；摘要任务使用现有调度器，不启动 agent 轮次。普通 agent 轮次不增加自动主动触发器。
 
 | 决定 | 含义 | 本切片中的动作 |
 | --- | --- | --- |
-| **Summarize（摘要）** | 现在提供简短摘要有帮助。 | 将本地摘要输出到 stdout，不向外投递。 |
-| **Quiet（安静）** | 不打扰。 | 不展示正文、不通知、不发送消息；demo 诊断可记录决定。 |
+| **Summarize（摘要）** | 现在提供简短摘要有帮助。 | 提供 Writer 时将本地摘要输出到 stdout；P4c 还保存私有本地文件，不向外投递。 |
+| **Quiet（安静）** | 不打扰。 | 不展示正文、不通知、不发送消息；诊断可记录决定与原因。 |
 | **Note-only（仅记录）** | 留待以后，不在此刻展示内容。 | 写入私有本地候选文件，不插入持久记忆；之后使用 `memory_add` 仍须经过现有审批。 |
 
 默认值与优先顺序：
@@ -66,6 +66,25 @@ gg job run local-digest
 - 显式的稍后记住请求选择 Note-only，包括在安静时段内。它不会改变拟议工具或通知的授权要求。
 - OS `notify` 关闭，每次运行固定最多 **零条通知**，本切片不提供开启选项。拟议通知返回 Quiet；OS 通知按 E 处理。`notify` 工具现已实现 `ApprovalDescriber` 并设置 E=true，可用时走共享审批门禁。C2 仍在 personal 中禁用 computer 工具；本策略不会启用它们。
 - 拟议工具动作返回 Quiet，必须走现有 Approver／常驻授权路径。明确的 E/M/U 始终须人工确认或匹配常驻授权。`gmail_send`（包括真实 Gmail 草稿）和 `calendar_create` 保留 P1–P3 门禁。Summarize 与 Note-only 均不授权工具调用，未知工具元数据也不是许可。
+
+## 可调度本地 Policy 摘要（P4c，已交付）
+
+```sh
+gg job add --proactive-digest --profile personal --cron '0 9 * * *' --name morning-digest
+gg job show morning-digest
+gg job run morning-digest
+gg --profile personal proactive digest
+
+# 重放本地安静时段，或留存私有候选：
+gg --profile personal proactive digest --quiet-hours 22:00-07:00 --at 23:00
+gg --profile personal proactive digest --remember-later
+```
+
+`--proactive-digest` 保存 `proactive_digest: true`；任务 `--profile` 未设置时默认为 `personal`。摘要任务必须使用 personal，显式 coding 或空 profile 会被拒绝。摘要任务的提示词可省略，且不会被使用；普通任务仍要求提示词。`ggd` 和手动 `gg job run` 都在创建会话或初始化 provider 前调用共享本地 runner，将决定与路径记录到任务历史，不创建 agent 会话。定时任务仅在 `ggd` 运行时触发。P4c 的任务安静时段保持关闭；安静时段与稍后记住参数仅用于直接调用 digest 命令。
+
+直接调用默认使用真实本地时钟；可选的 `--at HH:MM` 重放今天的本地时间。收件箱与日程文本明确标记为 **stub（占位数据）**，不读取真实 Gmail／Calendar。Summarize 将 `email_summary.txt` 和 `calendar_reminder.txt` 写入独立的 0700 `~/.gg/proactive/digest-<timestamp>-*/` 目录，文件权限为 0600；提供 Writer 时也输出正文。Note-only 写入候选文件，只输出路径与决定元数据。Quiet 仅输出决定与原因，不写摘要正文；coding 输出 Quiet／禁用，不创建摘要目录。文件保留在本地供检查，不作为记忆加载，之后可删除。
+
+每次 personal 运行都用真实 Gmail 草稿／发送审批元数据，检查 Policy 与 `standingauth.Approver`。授权存储位于本次摘要目录中，初始为空，配合现有无人值守审批器。省略 `as_draft` 和显式 `as_draft:false` 均须被拒绝；意外放行、Policy 不为 Quiet 或审批出错都会使运行失败。从不执行工具。成功输出 **“Brakes held: local only; no model; no outbound”**。此路径不构造模型／provider 或连接器客户端，不发送 Telegram、邮件或 OS 通知。
 
 ## 运行假数据自用验证
 
@@ -102,12 +121,13 @@ gg --profile personal -p '使用 gmail_search/gmail_read 汇总最近未读邮�
 
 | 计划项 | 本切片已交付 | 延后 |
 | --- | --- | --- |
-| 主动触发策略 | 确定性的 Summarize／Quiet／Note-only 决定、仅 personal 启用的默认值、安静时段、通知抑制与后果边界。 | 自动发现触发条件、不经过 agent 轮次且仅由 Policy 驱动的持续摘要。 |
+| 主动触发策略 | 确定性的 Summarize／Quiet／Note-only 决定、仅 personal 启用的默认值、安静时段、通知抑制与后果边界。 | 定时任务以外的自动触发条件发现。 |
 | 定时 personal 轮次（P4b） | 持久化任务 profile 选择器；daemon 按此运行，手动运行优先于父级 CLI profile。 | Web/Electron/Telegram profile 选择器和 Telegram 主动外发投递。 |
+| 可调度本地 Policy 摘要（P4c） | `gg proactive digest` 与 `gg job add --proactive-digest`；本地占位数据 Summarize／Quiet／Note-only，无需 agent 轮次、模型或对外投递。 | 真实邮箱 Policy 摘要与对外投递。 |
 | 首位用户自用验证 | 可发现的 CLI 假邮件摘要、日历提醒与常驻授权拒绝场景，配套测试及可选真实只读操作说明。 | 自动主动外发投递。 |
 | 停止条件指针 | 保持编码优先默认值和共享运行时。 | 物理拆分仓库。 |
 
-**计划停止条件：** 仅当 personal 默认策略**系统性损害 coding**，出现审批噪声、工具循环或 README 人设漂移的证据时，才考虑物理拆分仓库。P4 切片不拆仓库、不重写 agent 循环、不增加第二运行时，也不扩大 MCP／bash 后果分类。现有 `gg job`／`internal/scheduler` 继续承担调度；不新增调度器，也不将 demo 接入调度。
+**计划停止条件：** 仅当 personal 默认策略**系统性损害 coding**，出现审批噪声、工具循环或 README 人设漂移的证据时，才考虑物理拆分仓库。P4 切片不拆仓库、不重写 agent 循环、不增加第二运行时，也不扩大 MCP／bash 后果分类。现有 `gg job`／`internal/scheduler` 调度 P4c 本地摘要任务；不新增调度器，原 demo 保持独立。
 
 ## 四个后果维度
 
@@ -273,4 +293,4 @@ P0（#54）之后的 P1 清单，已更新至 D3、D1a 和 D1b，并对照了[�
 
 当前运行时策略见架构文档的[安全模型](architecture.zh-CN.md#安全模型)和[审批模式](architecture.zh-CN.md#审批模式)。P1 将 #53 对 `dangerous`/`confirm` 风险的 nil approver 失败关闭处理扩展到明确的 E/M/U 后果，同时保留未分类工具现有的 Risk 行为。
 
-P1 已交付上述字段、路由、记忆写入审批和可选 Gmail 草稿开关。P2 已交付显式常驻授权的持久存储、CLI 管理、共享匹配与放行审计。P3 已交付 personal profile 选择器、个人基础身份、更严默认与 Gmail 草稿偏好，并继续共享运行时。P4 首个切片交付上方本地主动性策略及假数据自用 CLI；P4b 增加任务 profile 持久化，使定时 personal 轮次可用。更广泛的投递仍按已述停止条件延后。
+P1 已交付上述字段、路由、记忆写入审批和可选 Gmail 草稿开关。P2 已交付显式常驻授权的持久存储、CLI 管理、共享匹配与放行审计。P3 已交付 personal profile 选择器、个人基础身份、更严默认与 Gmail 草稿偏好，并继续共享运行时。P4 首个切片交付上方本地主动性策略及假数据自用 CLI；P4b 增加任务 profile 持久化，使定时 personal 轮次可用；P4c 增加无需模型或 agent 轮次的可调度本地占位数据 Policy 摘要。真实邮箱 Policy 摘要与对外投递仍按已述停止条件延后。

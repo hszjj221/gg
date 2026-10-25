@@ -26,17 +26,17 @@ const (
 // DefaultTimeout bounds a single job execution.
 const DefaultTimeout = 10 * time.Minute
 
-// Job is a scheduled unit of work: at the scheduled time the daemon wakes an
-// agent with Job.Prompt.
+// Job runs an agent prompt or a local proactive digest at the scheduled time.
 type Job struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Kind      Kind   `json:"kind"`
-	Schedule  string `json:"schedule"` // cron: 5-field expression; once: RFC3339 timestamp
-	Prompt    string `json:"prompt"`
-	Profile   string `json:"profile,omitempty"` // empty inherits the caller's runtime profile
-	Timezone  string `json:"timezone"`
-	Workspace string `json:"workspace,omitempty"` // workspace dir the job was created from (legacy; kept for jobs created before workspace IDs were bound)
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Kind            Kind   `json:"kind"`
+	Schedule        string `json:"schedule"` // cron: 5-field expression; once: RFC3339 timestamp
+	Prompt          string `json:"prompt"`
+	Profile         string `json:"profile,omitempty"`          // empty inherits the caller's runtime profile
+	ProactiveDigest bool   `json:"proactive_digest,omitempty"` // local stub digest, without an agent turn
+	Timezone        string `json:"timezone"`
+	Workspace       string `json:"workspace,omitempty"` // workspace dir the job was created from (legacy; kept for jobs created before workspace IDs were bound)
 	// WorkspaceID is the stable workspace the job runs in. It takes
 	// precedence over Workspace; empty means "the default workspace"
 	// (jobs created before workspace binding existed).
@@ -140,7 +140,10 @@ func (j Job) Validate() error {
 	if strings.TrimSpace(j.Name) == "" {
 		return fmt.Errorf("job name is required")
 	}
-	if strings.TrimSpace(j.Prompt) == "" {
+	if j.ProactiveDigest && j.Profile != config.ProfilePersonal {
+		return fmt.Errorf("proactive digest jobs require profile personal")
+	}
+	if !j.ProactiveDigest && strings.TrimSpace(j.Prompt) == "" {
 		return fmt.Errorf("job prompt is required")
 	}
 	if j.Profile != "" {
