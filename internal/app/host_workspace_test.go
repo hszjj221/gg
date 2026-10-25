@@ -61,6 +61,64 @@ func appCode(t *testing.T, err error) ErrorCode {
 	return appErr.Code
 }
 
+func TestCreateSessionInWorkspaceWithProfile(t *testing.T) {
+	for _, tc := range []struct {
+		name, parent, override, want string
+	}{
+		{"inherit unset", "", "", ""},
+		{"inherit coding", "coding", "", "coding"},
+		{"inherit personal", "personal", "", "personal"},
+		{"personal override", "coding", "personal", "personal"},
+		{"coding override", "personal", "coding", "coding"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt, _, wsB, _ := twoWorkspaceRuntime(t)
+			defer rt.Close(context.Background())
+			rt.cfg.Profile = tc.parent
+			snap, err := rt.CreateSessionInWorkspaceWithProfile("profile", wsB.ID, tc.override)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, svc, err := rt.service(snap.SessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if svc.cfg.Profile != tc.want || svc.cfg.CWD != wsB.Root {
+				t.Fatalf("session profile/root = %q/%q, want %q/%q", svc.cfg.Profile, svc.cfg.CWD, tc.want, wsB.Root)
+			}
+			if rt.cfg.Profile != tc.parent {
+				t.Fatalf("runtime profile changed to %q, want %q", rt.cfg.Profile, tc.parent)
+			}
+			plain, err := rt.CreateSessionInWorkspace("plain", wsB.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, svc, err = rt.service(plain.SessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if svc.cfg.Profile != tc.parent {
+				t.Fatalf("next session inherited %q, want %q", svc.cfg.Profile, tc.parent)
+			}
+		})
+	}
+}
+
+func TestCreateSessionInWorkspaceRejectsInvalidProfile(t *testing.T) {
+	rt, _, _, repo := twoWorkspaceRuntime(t)
+	defer rt.Close(context.Background())
+	if _, err := rt.CreateSessionInWorkspaceWithProfile("invalid", "", "garbage"); err == nil {
+		t.Fatal("expected invalid profile error")
+	}
+	infos, err := repo.List(rt.DefaultWorkspace().Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 0 {
+		t.Fatalf("invalid profile created sessions: %+v", infos)
+	}
+}
+
 func TestRuntimeWorkspaceIsolation(t *testing.T) {
 	rt, wsA, wsB, repo := twoWorkspaceRuntime(t)
 	if got := rt.DefaultWorkspace(); got.ID != wsA.ID {

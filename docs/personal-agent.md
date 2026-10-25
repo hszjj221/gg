@@ -21,7 +21,7 @@ gg --profile personal           # personal assistant face
 gg --profile personal -p 'Prepare a reply draft'
 ```
 
-`--profile` accepts only `coding` and `personal`; unset or empty means `coding`. Selection is per invocation, including resumed sessions. P3 adds no saved config default or second binary.
+`--profile` accepts only `coding` and `personal`; unset or empty means `coding`. The top-level selector applies per invocation, including resumed sessions. P3 adds no saved config default or second binary; P4b adds the stored job override described below.
 
 C2 also filters enabled capabilities: personal keeps core tools, memory, KB, artifacts, Google connectors, and browser, while omitting media, computer, and MCP providers. Coding retains the full existing set. See the [ordered profile enable list](core-plugin.md#profiles-and-coding-compatibility) for prerequisites and host-injection behavior. The draft and approval defaults below remain unchanged; enabling a capability grants no authorization.
 
@@ -36,7 +36,18 @@ Personal's default `on-request` requires stdin and stderr to be terminals; witho
 
 Personal Gmail calls with omitted `as_draft` create real drafts. Explicit `as_draft=false` can still request sending, through the same E/U approval path. Previews and results reflect the effective action. Both draft and send remain E/U; neither is automatically authorized. A failed draft never falls back to sending. Standing-grant argument limits still match the original explicit arguments: a grant constrained to `as_draft=true` requires the call to include it, even in personal mode.
 
-The selected `Config.Profile` reaches the shared prompt and tool registry, including manual `gg --profile personal job run ...` turns. Manual jobs retain their job approval policy (`--allow-all`), rather than the interactive CLI mode. Profiles are not saved in job definitions. `ggd`, Web/Electron, Telegram, and daemon-scheduled jobs keep their existing coding profile and approval policies; adding selectors there is deferred. The P4 demo below is an explicit CLI invocation, separate from scheduled agent turns.
+The selected `Config.Profile` reaches the shared prompt and tool registry, including the personal capability cuts and Gmail draft default. P4b adds a job profile selector, persisted as optional `profile` in the job definition:
+
+```sh
+gg job add --profile personal --cron '0 9 * * *' --name local-digest \
+  'Summarize recent unread mail and today’s calendar in this session. Do not send, create drafts or events, notify, or add memory.'
+gg job show local-digest
+gg job run local-digest
+```
+
+`ggd` honors a stored `coding` or `personal` profile for each scheduled session. An omitted or empty job profile inherits the daemon's existing coding configuration. For manual `gg job run`, a stored profile **wins over the parent CLI `--profile`**; when unset, the job inherits the parent selector, so `gg --profile personal job run ...` still works for legacy jobs. `job show` and `job list` display unset profiles as `(inherit; daemon: coding)`. Manual and daemon jobs retain their existing unattended approval policy (`--allow-all`) and standing-grant matching.
+
+This enables scheduled personal agent turns, including local digest prompts through the existing `gg job` scheduler. Web/Electron and Telegram profile selectors, outbound Telegram delivery, and Policy-only always-on digests without an agent turn remain deferred. The P4 demo below remains an explicit CLI invocation, separate from scheduled agent turns.
 
 ## Proactive policy (P4 first slice)
 
@@ -91,8 +102,9 @@ This uses the normal personal-profile agent path, not the fake demo or automatic
 
 | Plan item | Landed in this slice | Deferred |
 | --- | --- | --- |
-| Proactive trigger policy | Deterministic Summarize/Quiet/Note-only decisions, personal-only defaults, quiet hours, notification suppression, and consequence boundary. | Automatic trigger discovery and always-on digest scheduling. |
-| First-user dogfood | Fake email digest, calendar reminder, and standing-auth denial scene through the discoverable CLI, with tests and optional live read-only instructions. | Daemon/Telegram proactive delivery. |
+| Proactive trigger policy | Deterministic Summarize/Quiet/Note-only decisions, personal-only defaults, quiet hours, notification suppression, and consequence boundary. | Automatic trigger discovery and Policy-only always-on digests without an agent turn. |
+| Scheduled personal turns (P4b) | Stored job profile selector; daemon honors it and manual runs prefer it over the parent CLI profile. | Web/Electron/Telegram profile selectors and outbound Telegram delivery. |
+| First-user dogfood | Fake email digest, calendar reminder, and standing-auth denial scene through the discoverable CLI, with tests and optional live read-only instructions. | Automatic proactive outbound delivery. |
 | Stop-condition pointer | Keep coding-first defaults and the shared runtime. | Physical repository split. |
 
 **Plan stop condition:** only consider a physical repository split if personal defaults **systematically hurt coding**, evidenced by approval noise, tool loops, or README persona drift. The P4 slice does not split the repository, rewrite the agent loop, add a second runtime, or broaden MCP/bash consequence classification. Existing `gg job`/`internal/scheduler` remain the scheduling mechanism; no new scheduler is introduced or wired to this demo.
@@ -261,4 +273,4 @@ The tables use R/E/M/U as shorthand for the dimensions above. They describe effe
 
 Current runtime policy is documented in the architecture's [Security model](architecture.md#security-model) and [Approval modes](architecture.md#approval-modes). P1 extends #53's fail-closed nil-approver handling for `dangerous`/`confirm` risks to asserted E/M/U consequences, while retaining existing Risk behavior for unclassified tools.
 
-P1 shipped the fields, routing, memory-write gate, and optional Gmail draft switch described above. P2 shipped explicit standing authorization with durable storage, CLI management, shared matching, and an allow audit. P3 shipped the personal profile selector, personal base identity, stricter personal defaults, and Gmail draft preference while retaining the shared runtime. P4's first slice ships the local proactive policy and fake dogfood CLI above; broader delivery remains deferred under the stated stop condition.
+P1 shipped the fields, routing, memory-write gate, and optional Gmail draft switch described above. P2 shipped explicit standing authorization with durable storage, CLI management, shared matching, and an allow audit. P3 shipped the personal profile selector, personal base identity, stricter personal defaults, and Gmail draft preference while retaining the shared runtime. P4's first slice ships the local proactive policy and fake dogfood CLI above; P4b adds stored job profiles for scheduled personal turns. Broader delivery remains deferred under the stated stop condition.

@@ -21,7 +21,7 @@ gg --profile personal           # 个人助理面
 gg --profile personal -p '准备一封回复草稿'
 ```
 
-`--profile` 仅接受 `coding` 和 `personal`；未设置或空值均为 `coding`。选择仅作用于本次调用，包括恢复会话。P3 不增加持久化配置默认值或第二个二进制。
+`--profile` 仅接受 `coding` 和 `personal`；未设置或空值均为 `coding`。顶层选择器仅作用于本次调用，包括恢复会话。P3 不增加持久化配置默认值或第二个二进制；P4b 增加下述任务级持久化覆盖。
 
 C2 还会过滤启用能力：personal 保留 core 工具、memory、KB、artifact、Google connector 和 browser，不启用 media、computer 与 MCP provider。Coding 保留既有完整集合。前置条件与宿主注入行为见[有序 profile 启用列表](core-plugin.zh-CN.md#profile-与-coding-兼容性)。下方草稿与审批默认值不变；启用能力不会授予授权。
 
@@ -36,7 +36,18 @@ Personal 默认的 `on-request` 要求 stdin 和 stderr 都是终端，否则 CL
 
 Personal Gmail 调用省略 `as_draft` 时创建真实草稿。显式 `as_draft=false` 仍可请求发送，经过相同的 E/U 审批路径。预览与结果反映实际动作。草稿与发送均为 E/U，不会自动获准；草稿失败绝不回退到发送。常驻授权的参数限制仍匹配原始显式参数：即使在 personal 中，限制 `as_draft=true` 的授权也要求调用明确包含它。
 
-选定的 `Config.Profile` 传入共享提示词与工具注册表，包括手动 `gg --profile personal job run ...` 轮次。手动任务保留任务审批策略（`--allow-all`），不使用交互 CLI 模式；profile 不存入任务定义。`ggd`、Web/Electron、Telegram 及 daemon 定时任务保持现有 coding profile 和审批策略，入口选择器留待后续。下方 P4 demo 由用户显式调用 CLI，与定时 agent 轮次分开。
+选定的 `Config.Profile` 传入共享提示词与工具注册表，包含 personal 能力裁剪与 Gmail 默认草稿行为。P4b 增加任务 profile 选择器，以可选 `profile` 字段保存在任务定义中：
+
+```sh
+gg job add --profile personal --cron '0 9 * * *' --name local-digest \
+  '汇总最近未读邮件和今天日程，摘要只留在此会话中。不发送、不创建草稿或事件、不通知、不添加记忆。'
+gg job show local-digest
+gg job run local-digest
+```
+
+`ggd` 在每次定时会话中使用已保存的 `coding` 或 `personal` profile。任务 profile 未设置或为空时，继承 daemon 现有的 coding 配置。手动 `gg job run` **优先使用已保存的 profile，覆盖父级 CLI `--profile`**；未设置时继承父级选择器，因此旧任务仍可用 `gg --profile personal job run ...` 运行。`job show` 与 `job list` 将未设置的 profile 显示为 `(inherit; daemon: coding)`。手动和 daemon 任务保留现有无人值守审批策略（`--allow-all`）与常驻授权匹配。
+
+这使现有 `gg job` 调度器能够运行 personal agent 轮次，例如将本地摘要提示词存为定时任务。Web/Electron 和 Telegram profile 选择器、Telegram 主动外发投递，以及不经过 agent 轮次、仅由 Policy 驱动的持续摘要仍留待后续。下方 P4 demo 仍由用户显式调用 CLI，与定时 agent 轮次分开。
 
 ## 主动性策略（P4 首个切片）
 
@@ -91,8 +102,9 @@ gg --profile personal -p '使用 gmail_search/gmail_read 汇总最近未读邮�
 
 | 计划项 | 本切片已交付 | 延后 |
 | --- | --- | --- |
-| 主动触发策略 | 确定性的 Summarize／Quiet／Note-only 决定、仅 personal 启用的默认值、安静时段、通知抑制与后果边界。 | 自动发现触发条件、持续运行的摘要调度。 |
-| 首位用户自用验证 | 可发现的 CLI 假邮件摘要、日历提醒与常驻授权拒绝场景，配套测试及可选真实只读操作说明。 | Daemon／Telegram 主动投递。 |
+| 主动触发策略 | 确定性的 Summarize／Quiet／Note-only 决定、仅 personal 启用的默认值、安静时段、通知抑制与后果边界。 | 自动发现触发条件、不经过 agent 轮次且仅由 Policy 驱动的持续摘要。 |
+| 定时 personal 轮次（P4b） | 持久化任务 profile 选择器；daemon 按此运行，手动运行优先于父级 CLI profile。 | Web/Electron/Telegram profile 选择器和 Telegram 主动外发投递。 |
+| 首位用户自用验证 | 可发现的 CLI 假邮件摘要、日历提醒与常驻授权拒绝场景，配套测试及可选真实只读操作说明。 | 自动主动外发投递。 |
 | 停止条件指针 | 保持编码优先默认值和共享运行时。 | 物理拆分仓库。 |
 
 **计划停止条件：** 仅当 personal 默认策略**系统性损害 coding**，出现审批噪声、工具循环或 README 人设漂移的证据时，才考虑物理拆分仓库。P4 切片不拆仓库、不重写 agent 循环、不增加第二运行时，也不扩大 MCP／bash 后果分类。现有 `gg job`／`internal/scheduler` 继续承担调度；不新增调度器，也不将 demo 接入调度。
@@ -261,4 +273,4 @@ P0（#54）之后的 P1 清单，已更新至 D3、D1a 和 D1b，并对照了[�
 
 当前运行时策略见架构文档的[安全模型](architecture.zh-CN.md#安全模型)和[审批模式](architecture.zh-CN.md#审批模式)。P1 将 #53 对 `dangerous`/`confirm` 风险的 nil approver 失败关闭处理扩展到明确的 E/M/U 后果，同时保留未分类工具现有的 Risk 行为。
 
-P1 已交付上述字段、路由、记忆写入审批和可选 Gmail 草稿开关。P2 已交付显式常驻授权的持久存储、CLI 管理、共享匹配与放行审计。P3 已交付 personal profile 选择器、个人基础身份、更严默认与 Gmail 草稿偏好，并继续共享运行时。P4 首个切片交付上方本地主动性策略及假数据自用 CLI；更广泛的投递仍按已述停止条件延后。
+P1 已交付上述字段、路由、记忆写入审批和可选 Gmail 草稿开关。P2 已交付显式常驻授权的持久存储、CLI 管理、共享匹配与放行审计。P3 已交付 personal profile 选择器、个人基础身份、更严默认与 Gmail 草稿偏好，并继续共享运行时。P4 首个切片交付上方本地主动性策略及假数据自用 CLI；P4b 增加任务 profile 持久化，使定时 personal 轮次可用。更广泛的投递仍按已述停止条件延后。

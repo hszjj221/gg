@@ -102,6 +102,7 @@ func TestJobAddValidation(t *testing.T) {
 		{"two schedules", []string{"job", "add", "--cron", "* * * * *", "--in", "5m", "--name", "x", "prompt"}, 2},
 		{"no prompt", []string{"job", "add", "--in", "5m", "--name", "x"}, 2},
 		{"bad at", []string{"job", "add", "--at", "someday", "--name", "x", "prompt"}, 1},
+		{"bad profile", []string{"job", "add", "--in", "5m", "--name", "x", "--profile", "garbage", "prompt"}, 2},
 		{"unknown job", []string{"job", "show", "nope"}, 1},
 	}
 	for _, c := range cases {
@@ -109,6 +110,105 @@ func TestJobAddValidation(t *testing.T) {
 		if code := Run(context.Background(), c.args, jobTestOptions(dir, &stdout, &stderr)); code != c.code {
 			t.Errorf("%s: exit %d, want %d (stderr: %s)", c.name, code, c.code, stderr.String())
 		}
+	}
+}
+
+func TestJobAddProfile(t *testing.T) {
+	for _, tc := range []struct {
+		name, want string
+		flags      []string
+	}{
+		{name: "omitted"},
+		{name: "empty", flags: []string{"--profile", ""}},
+		{name: "blank", flags: []string{"--profile", "  "}},
+		{name: "coding", flags: []string{"--profile", "coding"}, want: "coding"},
+		{name: "personal", flags: []string{"--profile", "personal"}, want: "personal"},
+		{name: "trimmed", flags: []string{"--profile", " personal "}, want: "personal"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr strings.Builder
+			opts := jobTestOptions(t.TempDir(), &stdout, &stderr)
+			// The parent selector must not implicitly persist on a new job.
+			args := append([]string{"--profile", "personal", "job", "add", "--in", "30m", "--name", "p"}, tc.flags...)
+			if code := Run(context.Background(), append(args, "prompt"), opts); code != 0 {
+				t.Fatalf("job add exit %d: %s", code, stderr.String())
+			}
+			cfg, err := resolveJobTestConfig(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store, err := scheduler.Open(cfg.Scheduler.Dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			job, err := findJob(store, "p")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if job.Profile != tc.want {
+				t.Fatalf("stored profile = %q, want %q", job.Profile, tc.want)
+			}
+			wantDisplay := tc.want
+			if wantDisplay == "" {
+				wantDisplay = "(inherit; daemon: coding)"
+			}
+			stdout.Reset()
+			if code := Run(context.Background(), []string{"job", "show", "p"}, opts); code != 0 {
+				t.Fatalf("job show exit %d: %s", code, stderr.String())
+			}
+			if !strings.Contains(stdout.String(), "profile:        "+wantDisplay+"\n") {
+				t.Fatalf("job show missing profile %q: %s", wantDisplay, stdout.String())
+			}
+			stdout.Reset()
+			if code := Run(context.Background(), []string{"job", "list"}, opts); code != 0 {
+				t.Fatalf("job list exit %d: %s", code, stderr.String())
+			}
+			if !strings.Contains(stdout.String(), "PROFILE") || !strings.Contains(stdout.String(), wantDisplay) {
+				t.Fatalf("job list missing profile: %s", stdout.String())
+			}
+		})
+	}
+}
+
+func TestJobRunProfile(t *testing.T) {
+	for _, tc := range []struct {
+		name, parent, stored, want string
+	}{
+		{"legacy coding", "coding", "", "coding"},
+		{"legacy personal", "personal", "", "personal"},
+		{"stored personal wins", "coding", "personal", "personal"},
+		{"stored coding wins", "personal", "coding", "coding"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr strings.Builder
+			opts := jobTestOptions(t.TempDir(), &stdout, &stderr)
+			provider := &appFakeProvider{}
+			var profiles []string
+			opts.ProviderFactory = func(cfg config.Config) agent.Provider {
+				profiles = append(profiles, cfg.Profile)
+				return provider
+			}
+			args := []string{"job", "add", "--in", "30m", "--name", "p"}
+			if tc.stored != "" {
+				args = append(args, "--profile", tc.stored)
+			}
+			if code := Run(context.Background(), append(args, "say hi"), opts); code != 0 {
+				t.Fatalf("job add exit %d: %s", code, stderr.String())
+			}
+			if code := Run(context.Background(), []string{"--profile", tc.parent, "--no-skills", "job", "run", "p"}, opts); code != 0 {
+				t.Fatalf("job run exit %d: %s", code, stderr.String())
+			}
+			if len(profiles) != 1 || profiles[0] != tc.want {
+				t.Fatalf("provider profiles = %q, want [%s]", profiles, tc.want)
+			}
+			identity := "You are gg, a coding agent"
+			if tc.want == config.ProfilePersonal {
+				identity = "You are gg, the user's personal assistant"
+			}
+			if len(provider.requests) != 1 || !strings.Contains(provider.requests[0].Messages[0].Content, identity) {
+				t.Fatalf("job run missing identity %q", identity)
+			}
+		})
 	}
 }
 

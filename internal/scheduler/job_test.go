@@ -2,9 +2,65 @@ package scheduler
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestJobProfile(t *testing.T) {
+	for _, tc := range []struct {
+		name, profile string
+		invalid       bool
+	}{
+		{name: "legacy"},
+		{name: "coding", profile: "coding"},
+		{name: "personal", profile: "personal"},
+		{name: "unknown", profile: "garbage", invalid: true},
+		{name: "whitespace", profile: " ", invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			job := Job{Name: "profile", Prompt: "p", Kind: KindCron, Schedule: "0 9 * * *", Profile: tc.profile}
+			err := job.Validate()
+			if tc.invalid {
+				if err == nil || !strings.Contains(err.Error(), "profile must be coding or personal") {
+					t.Fatalf("Validate() = %v, want invalid profile error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(job)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(raw), `"profile":`) != (tc.profile != "") {
+				t.Fatalf("unexpected profile JSON: %s", raw)
+			}
+			var decoded Job
+			if err := json.Unmarshal(raw, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if decoded.Profile != tc.profile {
+				t.Fatalf("JSON profile = %q, want %q", decoded.Profile, tc.profile)
+			}
+			store, err := Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Add(decoded); err != nil {
+				t.Fatal(err)
+			}
+			jobs, err := store.List()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(jobs) != 1 || jobs[0].Profile != tc.profile {
+				t.Fatalf("persisted jobs = %+v, want profile %q", jobs, tc.profile)
+			}
+		})
+	}
+}
 
 func TestJobAllowOrdinaryJSONCompatibility(t *testing.T) {
 	for _, tc := range []struct {

@@ -25,7 +25,7 @@ type daemonJobExecutor struct {
 func (e *daemonJobExecutor) Execute(ctx context.Context, job scheduler.Job) (string, string, error) {
 	name := fmt.Sprintf("scheduler/%s-%s", sanitizeJobName(job.Name), time.Now().Format("20060102-150405"))
 	e.logger.Info("scheduled job started", "job", job.Name, "session", name)
-	snap, err := e.rt.CreateSessionInWorkspace(name, resolveJobWorkspaceRef(job, e.rt.WorkspaceRegistry()))
+	snap, err := e.rt.CreateSessionInWorkspaceWithProfile(name, resolveJobWorkspaceRef(job, e.rt.WorkspaceRegistry()), job.Profile)
 	if err != nil {
 		return "", "", fmt.Errorf("create scheduler session: %w", err)
 	}
