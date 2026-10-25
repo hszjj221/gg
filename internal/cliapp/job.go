@@ -19,14 +19,14 @@ import (
 )
 
 const jobUsage = `usage:
-  gg job add --cron "0 9 * * *" --name NAME [--timezone TZ] [--allow-all] [--timeout 10m] PROMPT
+  gg job add --cron "0 9 * * *" --name NAME [--profile coding|personal] [--timezone TZ] [--allow-all] [--timeout 10m] PROMPT
   gg job add --at "2026-09-28 15:04" --name NAME [flags] PROMPT
   gg job add --in 20m --name NAME [flags] PROMPT
   gg job list [--all]
   gg job show <id|name>
   gg job pause|resume|remove <id|name>
   gg job log [--job <id|name>] [--limit N]
-  gg job run <id|name>   # run once now; does not change the schedule`
+  gg job run <id|name>   # run once now; stored profile wins, else inherit CLI --profile; schedule unchanged`
 
 // runJobCommand implements `gg job ...`: manage background scheduled jobs.
 // Jobs only fire while the ggd daemon is alive; the CLI itself never runs the
@@ -65,12 +65,13 @@ func runJobCommand(ctx context.Context, cfg config.Config, options Options, jobA
 func runJobAdd(cfg config.Config, store *scheduler.Store, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("gg job add", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	var cronExpr, atSpec, inSpec, name, timezone, timeoutSpec string
+	var cronExpr, atSpec, inSpec, name, profile, timezone, timeoutSpec string
 	var allowOrdinary bool
 	fs.StringVar(&cronExpr, "cron", "", "cron schedule (5-field, e.g. \"0 9 * * *\")")
 	fs.StringVar(&atSpec, "at", "", "one-shot time (RFC3339 or \"2006-01-02 15:04\")")
 	fs.StringVar(&inSpec, "in", "", "one-shot delay (e.g. 20m, 1h30m)")
 	fs.StringVar(&name, "name", "", "job name")
+	fs.StringVar(&profile, "profile", "", "runtime profile (coding|personal; default: inherit, coding in ggd)")
 	fs.StringVar(&timezone, "timezone", "", "IANA timezone (default: profile timezone, then local)")
 	fs.StringVar(&timeoutSpec, "timeout", "", "per-run timeout (default 10m)")
 	fs.BoolVar(&allowOrdinary, "allow-all", false, "allow ordinary unattended tools only (default: denied); cannot waive asserted E/M/U or dangerous/confirm risks; asserted E/M/U requires matching standing grants")
@@ -91,6 +92,14 @@ func runJobAdd(cfg config.Config, store *scheduler.Store, args []string, stdout,
 		Timezone:      timezone,
 		Workspace:     cfg.CWD,
 		AllowOrdinary: allowOrdinary,
+	}
+	if profile = strings.TrimSpace(profile); profile != "" {
+		parsed, err := config.ParseProfile(profile)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+		job.Profile = parsed
 	}
 	// Bind the job to the workspace whose root is the current directory so
 	// the daemon runs it inside the right workspace. When the registry
@@ -170,7 +179,7 @@ func runJobList(store *scheduler.Store, args []string, stdout, stderr io.Writer)
 		return 1
 	}
 	w := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tNAME\tKIND\tSCHEDULE\tNEXT RUN\tLAST RUN\tSTATUS")
+	fmt.Fprintln(w, "ID\tNAME\tPROFILE\tKIND\tSCHEDULE\tNEXT RUN\tLAST RUN\tSTATUS")
 	for _, job := range jobs {
 		if !showAll && !job.Enabled {
 			continue
@@ -179,8 +188,8 @@ func runJobList(store *scheduler.Store, args []string, stdout, stderr io.Writer)
 		if !job.Enabled {
 			status = "paused"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			job.ID, job.Name, job.Kind, job.Schedule,
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			job.ID, job.Name, displayJobProfile(job), job.Kind, job.Schedule,
 			formatJobTime(job.NextRun), formatJobTime(job.LastRun), status)
 	}
 	w.Flush()
@@ -197,8 +206,8 @@ func runJobShow(store *scheduler.Store, args []string, stdout, stderr io.Writer)
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "id:             %s\nname:           %s\nkind:           %s\nschedule:       %s\ntimezone:       %s\nworkspace:      %s\nenabled:        %v\nallow-ordinary: %v\ntimeout:        %s\ncreated:        %s\nlast run:       %s\nnext run:       %s\nruns:           %d\nprompt:         %s\n",
-		job.ID, job.Name, job.Kind, job.Schedule, displayTimezone(job), displayWorkspace(job),
+	fmt.Fprintf(stdout, "id:             %s\nname:           %s\nprofile:        %s\nkind:           %s\nschedule:       %s\ntimezone:       %s\nworkspace:      %s\nenabled:        %v\nallow-ordinary: %v\ntimeout:        %s\ncreated:        %s\nlast run:       %s\nnext run:       %s\nruns:           %d\nprompt:         %s\n",
+		job.ID, job.Name, displayJobProfile(job), job.Kind, job.Schedule, displayTimezone(job), displayWorkspace(job),
 		job.Enabled, job.AllowOrdinary, job.Timeout,
 		job.CreatedAt.Format("2006-01-02 15:04"),
 		formatJobTime(job.LastRun), formatJobTime(job.NextRun), job.RunCount, job.Prompt)
@@ -335,6 +344,15 @@ func runJobRun(ctx context.Context, cfg config.Config, options Options, store *s
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	// A stored profile wins over the parent CLI selector. Legacy jobs keep
+	// the caller's profile, including `gg --profile personal job run`.
+	if job.Profile != "" {
+		cfg.Profile, err = config.ParseProfile(job.Profile)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
 	}
 	personal, notice, err := app.SetupPersonal(cfg)
 	if err != nil {
@@ -476,6 +494,13 @@ func displayTimezone(job scheduler.Job) string {
 		return job.Timezone
 	}
 	return "local"
+}
+
+func displayJobProfile(job scheduler.Job) string {
+	if job.Profile != "" {
+		return job.Profile
+	}
+	return "(inherit; daemon: coding)"
 }
 
 func displayWorkspace(job scheduler.Job) string {

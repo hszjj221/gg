@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hszjj221/gg/internal/config"
 	"github.com/robfig/cron/v3"
 )
 
@@ -33,6 +34,7 @@ type Job struct {
 	Kind      Kind   `json:"kind"`
 	Schedule  string `json:"schedule"` // cron: 5-field expression; once: RFC3339 timestamp
 	Prompt    string `json:"prompt"`
+	Profile   string `json:"profile,omitempty"` // empty inherits the caller's runtime profile
 	Timezone  string `json:"timezone"`
 	Workspace string `json:"workspace,omitempty"` // workspace dir the job was created from (legacy; kept for jobs created before workspace IDs were bound)
 	// WorkspaceID is the stable workspace the job runs in. It takes
@@ -140,6 +142,11 @@ func (j Job) Validate() error {
 	}
 	if strings.TrimSpace(j.Prompt) == "" {
 		return fmt.Errorf("job prompt is required")
+	}
+	if j.Profile != "" {
+		if _, err := config.ParseProfile(j.Profile); err != nil {
+			return fmt.Errorf("bad job profile: %w", err)
+		}
 	}
 	if j.Timezone != "" {
 		if _, err := time.LoadLocation(j.Timezone); err != nil {

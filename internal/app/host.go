@@ -272,6 +272,20 @@ func (w *Runtime) CreateSession(name string) (Snapshot, error) {
 // workspaceRef (see ResolveWorkspace); an empty ref selects the default
 // workspace. The new session is bound to the workspace in its header.
 func (w *Runtime) CreateSessionInWorkspace(name, workspaceRef string) (Snapshot, error) {
+	return w.CreateSessionInWorkspaceWithProfile(name, workspaceRef, "")
+}
+
+// CreateSessionInWorkspaceWithProfile creates a session with a runtime profile
+// override. Empty inherits the runtime's configuration. The override applies
+// only to this session's service; it is not persisted in the session header.
+func (w *Runtime) CreateSessionInWorkspaceWithProfile(name, workspaceRef, profile string) (Snapshot, error) {
+	if profile != "" {
+		parsed, err := config.ParseProfile(profile)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		profile = parsed
+	}
 	ws, err := w.ResolveWorkspace(workspaceRef)
 	if err != nil {
 		return Snapshot{}, err
@@ -290,7 +304,7 @@ func (w *Runtime) CreateSessionInWorkspace(name, workspaceRef string) (Snapshot,
 		}
 		loaded = store.State()
 	}
-	_, service, err := w.addLoaded(store, loaded)
+	_, service, err := w.addLoaded(store, loaded, profile)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -434,7 +448,7 @@ func (w *Runtime) serviceInWorkspace(sessionID, workspaceRef string) (*workspace
 		return nil, nil, errorf(ErrorWorkspaceMismatch, false,
 			"session %q belongs to workspace %q", sessionID, resolved.Name)
 	}
-	return w.addLoaded(store, loaded)
+	return w.addLoaded(store, loaded, "")
 }
 
 func (w *Runtime) WaitRun(ctx context.Context, runID string, afterSequence int64) ([]Event, bool, error) {
@@ -529,7 +543,7 @@ func (w *Runtime) openSessionAnywhere(sessionID string) (*workspaceState, *Servi
 			}
 			continue
 		}
-		return w.addLoaded(store, loaded)
+		return w.addLoaded(store, loaded, "")
 	}
 	if firstErr != nil {
 		return nil, nil, firstErr
@@ -563,7 +577,7 @@ func (w *Runtime) DegradedProviders() []DegradedProvider {
 	return out
 }
 
-func (w *Runtime) addLoaded(store *session.Store, loaded session.Loaded) (*workspaceState, *Service, error) {
+func (w *Runtime) addLoaded(store *session.Store, loaded session.Loaded, profile string) (*workspaceState, *Service, error) {
 	ws, err := w.workspaceForSession(store, loaded)
 	if err != nil {
 		return nil, nil, err
@@ -576,6 +590,9 @@ func (w *Runtime) addLoaded(store *session.Store, loaded session.Loaded) (*works
 	// tools run sandboxed to the workspace the session belongs to.
 	cfg := w.cfg
 	cfg.CWD = ws.Root
+	if profile != "" {
+		cfg.Profile = profile
+	}
 	service, err := NewSessionService(Options{
 		Config:          cfg,
 		ProviderFactory: w.providerFactory,
