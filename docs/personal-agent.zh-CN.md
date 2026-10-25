@@ -133,13 +133,17 @@ gg --profile personal -p '使用 gmail_search/gmail_read 汇总最近未读邮�
 - nil approver 使用 `DefaultApprover`，拒绝明确的 E/M/U。`UnattendedApprover` 同样拒绝，包括 `AllowAll`／定时任务的 `--allow-all`。本地写入的预批准豁免不能绕过明确的 E/M/U。
 - E/M/U 未知或为 false 的请求继续沿用现有审批模式和 Risk 规则，包括无人确认时拒绝 `dangerous` / `confirm`。不会推导常驻授权。
 
-P1 为 `gmail_send` 和 `calendar_create` 填写 E/U=true、M=false、R=false，为 `browser_navigate` 填写 E=true、R=false。`memory_add` 的 E/M/U=false、R=未知：它是持久本地写入，删除条目不能撤销后续已经发生的使用。
+P1 为 `gmail_send` 和 `calendar_create` 填写 E/U=true、M=false、R=false。D1b 后，`browser_navigate` 断言 E=true、M/U=false、R=false：导航会留下请求痕迹，但不计费，也不以用户的具名身份行事。`memory_add` 的 E/M/U=false、R=未知：它是持久本地写入，删除条目不能撤销后续已经发生的使用。
 
 D1a 已完成 media 和 MCP 的后果分类。`image_generate`、`tts`、`stt` 断言 R=false、E/M=true、U=false：删除本地文件不能撤销远程披露或已产生的 API 费用，API-key 调用也不以用户的第三方身份行事。未知 MCP server 工具断言 R=false、E/M/U=true，并设置 `Risk=confirm`；常驻授权不能豁免该风险，因此仍需人工确认。C2 仍在 personal 中排除 media 和 MCP provider。
 
+D1b 已完成 computer 的审批描述器、browser M/U、artifact 及已分类 bash 调用。`process_kill` 断言 R=false、E/M/U=false，并设置 `Risk=dangerous`；`clipboard_write` 断言 E/M/U=false，并设置 `Risk=confirm`。这些风险即使在 yolo 或无人值守 allow-all 下仍需人工确认，常驻授权也不能豁免。`open` 断言 R=false、M/U=false，仅解析后的 HTTP(S) 目标为 E=true。`clipboard_read` 断言 E/M/U=false，并保留敏感读取审批。两个 artifact 工具对可删除或保留版本的本地内容断言 R=true、E/M/U=false。
+
+Bash 复用现有分类器和可选风险判断：`readonly` 断言 E/M/U=false，R 保持未知；`dangerous`／`confirm` 以 R=false、E/M/U=true 失败关闭。Risk 和 RiskReason 保持不变。risk 为空的普通 bash 保持 R/E/M/U 未知，常驻授权仍无法匹配；继续沿用普通审批策略。
+
 `memory_add` 在两种 profile 中均实现 `ApprovalDescriber`。审批预览展示内容、scope 及请求的 workspace/global target（没有工作区上下文时均写入全局记忆）。`memory_search` 保持只读且不加审批。
 
-`notify` 现已在共享运行时实现 `ApprovalDescriber`，并设置 E=true，因为 OS 通知会展示内容且可能打扰用户。预览展示截断后的标题／正文；M/U 保持未知。这解决了 notify 审批缺口，但不改变 C2：personal 仍禁用 computer 工具。
+`notify` 在共享运行时实现 `ApprovalDescriber`，并设置 E=true，因为 OS 通知会展示内容且可能打扰用户。预览展示截断后的标题／正文；D1b 补齐 M/U=false，R 保持未知。C2 仍在 personal 中禁用 computer 工具。
 
 `gmail_send` 接受可选 `as_draft`（coding 默认 `false`，personal 默认 `true`）。为 `true` 时创建真实 Gmail 草稿，返回**草稿 ID**，不发送；API 失败绝不回退到发送。预览和结果明确标注 “not sent”。草稿仍为 E/U=true，因为 Google 可见，且内容以用户身份创建在其邮箱内。草稿内容可以删除，但整个效果仍为 R=false，因为服务方痕迹无法在本地撤销。两种模式都必须人工确认，或匹配显式常驻授权。
 
@@ -201,12 +205,12 @@ gg standing-auth revoke <id>
 ### TODO／后续工作
 
 - 手动任务（`internal/cliapp/job.go`）和 daemon 任务（`internal/daemon/scheduler.go`）仍传入 `AllowAll: job.AutoApprove`。替换普通工具的兼容路径需要明确迁移方案；P2 不做整体删除。
-- D1a 已完成 media／MCP 分类；MCP 因 `confirm` 风险仍不能匹配常驻授权。后续批次还需补齐 bash／computer、浏览器导航中未知的 M/U 及 artifact 工具的后果元数据，授权才能匹配这些调用。未实现 `ApprovalDescriber` 的工具仍在此拦截范围之外。
+- D1a media／MCP，以及 D1b computer 审批描述器、browser M/U、artifact 和已分类 bash 后果均已完成。risk 为空的普通 bash 对授权仍未分类；后续补齐时不应强制每条普通命令都确认。MCP、进程终止、剪贴板替换和 dangerous/confirm bash 因风险仍不能匹配常驻授权。未实现 `ApprovalDescriber` 的工具仍在此拦截范围之外；C2 personal 仍禁用 computer。
 - 账户／行动者验证、按传输入口划分授权主体、花费／使用量限制及更丰富的目的地限制留待后续。
 
 ## 当前审批清单
 
-P0（#54）之后的 P1 清单，已更新至 D3 和 D1a，并对照了[内置工具实现](../internal/tools/)、[工具注册表](../internal/app/toolregistry.go)和 [MCP 桥接](../internal/mcp/tool.go)。覆盖 **30 个内置工具：16 个实现、14 个未实现 `agent.ApprovalDescriber`**，另加全部动态注册的 MCP 工具。实际注册取决于配置、已授予的 scope、provider 可用性和平台支持，并非每个会话都会暴露全部工具。
+P0（#54）之后的 P1 清单，已更新至 D3、D1a 和 D1b，并对照了[内置工具实现](../internal/tools/)、[工具注册表](../internal/app/toolregistry.go)和 [MCP 桥接](../internal/mcp/tool.go)。覆盖 **30 个内置工具：16 个实现、14 个未实现 `agent.ApprovalDescriber`**，另加全部动态注册的 MCP 工具。实际注册取决于配置、已授予的 scope、provider 可用性和平台支持，并非每个会话都会暴露全部工具。
 
 [`agent.ApprovalDescriber`](../internal/agent/types.go) 是包含 `ApprovalRequest` 方法的接口。“是”表示工具向 [runner](../internal/agent/runner.go)提供审批请求，不表示每次调用都会弹出人工确认。现有策略可以允许或拒绝请求，`write`/`edit` 还有狭窄的预批准豁免。“否”表示该接口不拦截此工具，不表示工具没有后果。
 
@@ -218,21 +222,21 @@ P0（#54）之后的 P1 清单，已更新至 D3 和 D1a，并对照了[内置�
 | --- | --- | --- | --- |
 | [`write`](../internal/tools/write.go) | 是 | R：取决于能否恢复被覆盖内容；通常是本地操作。 | 创建／覆盖工作区文件。真实 `.gg/agent/` 目录中的写入预先放行；本阶段保留此豁免。 |
 | [`edit`](../internal/tools/edit.go) | 是 | R：取决于能否恢复旧内容；通常是本地操作。 | 精确替换并展示修改前后预览。具有同样的真实 `.gg/agent/` 目录预批准豁免。 |
-| [`bash`](../internal/tools/bash.go) | 是 | R/E/M/U：取决于命令和目标。 | 现有分类器和可选风险检查填写 `risk`/`riskReason`。shell 命令可能涉及任意维度。 |
+| [`bash`](../internal/tools/bash.go) | 是 | `readonly`：R 未知，E/M/U=false；`dangerous`／`confirm`：R=false，E/M/U=true；risk 为空：均未知。 | D1b 映射现有风险结果，不增加第二套分类器。保留风险／原因及普通审批策略；risk 为空的 bash 仍不能匹配授权。无论授权范围如何，dangerous/confirm 风险均需人工确认。 |
 | [`memory_add`](../internal/tools/memory_add.go) | 是 | R：未知，取决于能否在复用前移除条目；E/M/U：false。 | 持久写入工作区／全局记忆，现已在共享运行时加审批。预览展示内容、scope 和 target；可影响后续轮次。 |
-| [`browser_navigate`](../internal/tools/browser.go) | 是 | R：第三方请求痕迹不可逆；E。 | 初始 URL 经 SSRF 检查，导航走审批。重定向和子资源限制仍见架构文档。 |
+| [`browser_navigate`](../internal/tools/browser.go) | 是 | R=false；E=true；M/U=false。 | D1b 补齐 M/U：导航不计费，也不以用户的具名身份行事。初始 URL 经 SSRF 检查，导航走审批。重定向和子资源限制仍见架构文档。 |
 | [`gmail_send`](../internal/tools/connectors.go) | 是 | R：外部痕迹不可逆；E、U。 | Coding 默认发送，personal 默认草稿；显式 `as_draft` 覆盖两者默认值。两种模式均断言 E/U；删除草稿内容不能撤销服务方痕迹。 |
 | [`calendar_create`](../internal/tools/connectors.go) | 是 | R：外部痕迹不可逆；E、U。 | 以用户账户在主日历创建事件。当前参数不包含参会人；发送邀请是边界示例，不代表此工具具备该能力。 |
-| [`artifact_create`](../internal/tools/artifact.go) | 是 | R：本地创建可移除；无直接 E/M/U。 | 写入工作区之外的本地 artifact store，不会发布到外部服务。 |
-| [`artifact_edit`](../internal/tools/artifact.go) | 是 | R：保留的版本可恢复旧内容；无直接 E/M/U。 | 追加完整本地版本。发布到 library 是独立的应用／CLI 操作，不是此工具。 |
+| [`artifact_create`](../internal/tools/artifact.go) | 是 | R=true；E/M/U=false。 | D1b 分类可删除的本地创建。写入工作区之外的本地 artifact store，不会发布到外部服务。 |
+| [`artifact_edit`](../internal/tools/artifact.go) | 是 | R=true；E/M/U=false。 | D1b 分类本地版本写入；旧内容可恢复。发布到 library 是独立的应用／CLI 操作，不是此工具。 |
 | [`image_generate`](../internal/tools/media.go) | 是 | R=false；E/M=true；U=false。 | D1a 为计费的 API-key 调用填写全部四个维度。向媒体端点发送 prompt，将图片保存在本地；删除输出不能撤销披露或费用。 |
 | [`tts`](../internal/tools/media.go) | 是 | R=false；E/M=true；U=false。 | D1a 为计费的 API-key 调用填写全部四个维度。向语音端点发送文本，将音频保存在本地。 |
 | [`stt`](../internal/tools/media.go) | 是 | R=false；E/M=true；U=false。 | D1a 为计费的 API-key 调用填写全部四个维度。上传本地音频进行转写，不只是读取本地文件。 |
-| [`process_kill`](../internal/tools/computer.go) | 是 | R：丢失的进程状态通常不可逆；联网服务可能涉及 E。 | 发送 SIGTERM 或 SIGKILL。重启不一定恢复状态或撤销中断。 |
-| [`open`](../internal/tools/computer.go) | 是 | R：视情况；第三方 URL 涉及 E；其他维度取决于目标／应用。 | 将文件或 URL 交给默认应用。应判断后续效果，不能只看本地启动动作。 |
-| [`notify`](../internal/tools/computer.go) | 是 | R：已展示／打扰后不可逆；E（OS 通知）。 | 审批缺口已由 D3 解决：预览标题／正文并设置 E=true；M/U 保持未知。C2 仍在 personal 中禁用 computer 工具。 |
-| [`clipboard_read`](../internal/tools/computer.go) | 是 | R：本地读取；无直接 E/M/U。 | 剪贴板可能有敏感内容，因此有意加审批。后续披露不能靠清空剪贴板撤销。 |
-| [`clipboard_write`](../internal/tools/computer.go) | 是 | R：取决于能否恢复被替换内容；同步或外部消费时可能涉及 E。 | 替换系统剪贴板文本。本地写入可能影响其他应用或设备。 |
+| [`process_kill`](../internal/tools/computer.go) | 是 | R=false；E/M/U=false。 | D1b 分类直接的本地 SIGTERM/SIGKILL，并增加 `Risk=dangerous`，防止 yolo/allow-all 或授权绕过。重启不一定恢复进程状态或撤销中断。 |
+| [`open`](../internal/tools/computer.go) | 是 | R=false；解析后的 HTTP(S) 目标 E=true，其他为 false；M/U=false。 | D1b 分类交给默认应用的解析后目标。相对文件按工作区解析。 |
+| [`notify`](../internal/tools/computer.go) | 是 | R 未知；E=true；M/U=false。 | D3 增加标题／正文预览及 E=true 审批；D1b 补齐 M/U。C2 仍在 personal 中禁用 computer 工具。 |
+| [`clipboard_read`](../internal/tools/computer.go) | 是 | R 未知；E/M/U=false。 | D1b 分类直接的本地读取。剪贴板可能有敏感内容，因此有意加审批；后续披露不能靠清空剪贴板撤销。 |
+| [`clipboard_write`](../internal/tools/computer.go) | 是 | R 未知；E/M/U=false。 | D1b 分类直接的本地替换，并增加 `Risk=confirm`，防止 yolo/allow-all 或授权绕过。其他应用可能消费新文本。 |
 | [`mcp_<server>_<tool>`](../internal/mcp/tool.go) | 是，全部 MCP 工具 | 实际效果取决于 server；D1a 以 R=false、E/M/U=true 失败关闭。 | 每个桥接的 MCP 调用都带有 `Risk=confirm`，包括自称只读的远程工具。必须人工确认；yolo、无人值守 allow-all 和常驻授权均不能绕过。C2 仍在 personal 中排除 MCP。 |
 
 ### 未实现 ApprovalDescriber 的工具

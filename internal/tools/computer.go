@@ -238,10 +238,15 @@ func (t ProcessKillTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalReq
 		sig = "SIGKILL"
 	}
 	return agent.ApprovalRequest{
-		ToolName:  "process_kill",
-		Summary:   fmt.Sprintf("kill process %d (%s)", pid, sig),
-		Details:   fmt.Sprintf("pid: %d\nsignal: %s", pid, sig),
-		Arguments: raw,
+		ToolName:                        "process_kill",
+		Summary:                         fmt.Sprintf("kill process %d (%s)", pid, sig),
+		Details:                         fmt.Sprintf("pid: %d\nsignal: %s", pid, sig),
+		Arguments:                       raw,
+		Risk:                            agent.ApprovalRiskDangerous,
+		Reversible:                      new(false),
+		ExternallyVisible:               new(false),
+		SpendsMoneyOrChangesPermissions: new(false),
+		ActsInUserName:                  new(false),
 	}, nil
 }
 
@@ -324,10 +329,14 @@ func (t OpenTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, e
 	}
 	resolved := t.resolveTarget(target)
 	return agent.ApprovalRequest{
-		ToolName:  "open",
-		Summary:   "open with default application: " + resolved,
-		Details:   "target: " + resolved,
-		Arguments: raw,
+		ToolName:                        "open",
+		Summary:                         "open with default application: " + resolved,
+		Details:                         "target: " + resolved,
+		Arguments:                       raw,
+		Reversible:                      new(false),
+		ExternallyVisible:               new(strings.HasPrefix(strings.ToLower(resolved), "http://") || strings.HasPrefix(strings.ToLower(resolved), "https://")),
+		SpendsMoneyOrChangesPermissions: new(false),
+		ActsInUserName:                  new(false),
 	}, nil
 }
 
@@ -392,11 +401,13 @@ func (t NotifyTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest,
 		return agent.ApprovalRequest{}, err
 	}
 	return agent.ApprovalRequest{
-		ToolName:          "notify",
-		Summary:           fmt.Sprintf("show OS notification %q: %q", truncateRunes(title, 80), truncateRunes(body, 120)),
-		Details:           fmt.Sprintf("title: %s\nbody: %s", title, body),
-		Arguments:         raw,
-		ExternallyVisible: new(true),
+		ToolName:                        "notify",
+		Summary:                         fmt.Sprintf("show OS notification %q: %q", truncateRunes(title, 80), truncateRunes(body, 120)),
+		Details:                         fmt.Sprintf("title: %s\nbody: %s", title, body),
+		Arguments:                       raw,
+		ExternallyVisible:               new(true),
+		SpendsMoneyOrChangesPermissions: new(false),
+		ActsInUserName:                  new(false),
 	}, nil
 }
 
@@ -436,10 +447,13 @@ func (t ClipboardReadTool) Definition() agent.ToolDefinition {
 
 func (t ClipboardReadTool) ApprovalRequest(raw json.RawMessage) (agent.ApprovalRequest, error) {
 	return agent.ApprovalRequest{
-		ToolName:  "clipboard_read",
-		Summary:   "read the system clipboard",
-		Details:   "The clipboard content will be visible to the agent. It may contain passwords or other sensitive data.",
-		Arguments: raw,
+		ToolName:                        "clipboard_read",
+		Summary:                         "read the system clipboard",
+		Details:                         "The clipboard content will be visible to the agent. It may contain passwords or other sensitive data.",
+		Arguments:                       raw,
+		ExternallyVisible:               new(false),
+		SpendsMoneyOrChangesPermissions: new(false),
+		ActsInUserName:                  new(false),
 	}, nil
 }
 
@@ -481,10 +495,14 @@ func (t ClipboardWriteTool) ApprovalRequest(raw json.RawMessage) (agent.Approval
 		return agent.ApprovalRequest{}, fmt.Errorf("invalid clipboard_write arguments: %w", err)
 	}
 	return agent.ApprovalRequest{
-		ToolName:  "clipboard_write",
-		Summary:   "write to the system clipboard",
-		Details:   fmt.Sprintf("The clipboard's current content will be replaced with:\n%s", truncateRunes(input.Text, 200)),
-		Arguments: raw,
+		ToolName:                        "clipboard_write",
+		Summary:                         "write to the system clipboard",
+		Details:                         fmt.Sprintf("The clipboard's current content will be replaced with:\n%s", truncateRunes(input.Text, 200)),
+		Arguments:                       raw,
+		Risk:                            agent.ApprovalRiskConfirm,
+		ExternallyVisible:               new(false),
+		SpendsMoneyOrChangesPermissions: new(false),
+		ActsInUserName:                  new(false),
 	}, nil
 }
 

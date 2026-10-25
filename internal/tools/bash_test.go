@@ -98,6 +98,7 @@ func TestBashToolApprovalRequestDescribesCommand(t *testing.T) {
 	if req.Risk != "" {
 		t.Fatalf("go test should keep the normal approval policy, risk=%q", req.Risk)
 	}
+	assertToolConsequences(t, req, nil, nil, nil, nil)
 }
 
 func TestBashApprovalRequestClassifiesDangerousCommand(t *testing.T) {
@@ -109,6 +110,19 @@ func TestBashApprovalRequestClassifiesDangerousCommand(t *testing.T) {
 	if req.Risk != agent.ApprovalRiskDangerous || !strings.Contains(req.RiskReason, "rm -rf") || !strings.Contains(req.Details, req.RiskReason) {
 		t.Fatalf("dangerous command not described on the approval request: %+v", req)
 	}
+	assertToolConsequences(t, req, new(false), new(true), new(true), new(true))
+}
+
+func TestBashApprovalReadOnlyConsequences(t *testing.T) {
+	tool := NewBashTool(t.TempDir(), BashOptions{})
+	req, err := tool.ApprovalRequest(json.RawMessage(`{"command":"ls -la"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Risk != agent.ApprovalRiskReadOnly {
+		t.Fatalf("read-only command risk = %q", req.Risk)
+	}
+	assertToolConsequences(t, req, nil, new(false), new(false), new(false))
 }
 
 func TestBashSandboxDegradesOrRuns(t *testing.T) {

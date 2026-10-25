@@ -91,6 +91,7 @@ func TestArtifactToolApproval(t *testing.T) {
 	if !strings.Contains(req.Details, "<h1>hi</h1>") {
 		t.Fatalf("approval details missing content preview: %q", req.Details)
 	}
+	assertToolConsequences(t, req, new(true), new(false), new(false), new(false))
 
 	a, _ := s.Create("Trip", artifact.TypeMarkdown, "# v1")
 	edit := NewArtifactEditTool(s)
@@ -103,4 +104,5 @@ func TestArtifactToolApproval(t *testing.T) {
 	if !strings.Contains(req.Details, "# v1") || !strings.Contains(req.Details, "# v2") {
 		t.Fatalf("edit approval should preview before/after: %q", req.Details)
 	}
+	assertToolConsequences(t, req, new(true), new(false), new(false), new(false))
 }

@@ -379,6 +379,7 @@ func TestBashApprovalUsesRiskVerdict(t *testing.T) {
 	if req.Risk != agent.ApprovalRiskReadOnly || !strings.Contains(req.RiskReason, "0.1") {
 		t.Fatalf("low score request: %+v", req)
 	}
+	assertToolConsequences(t, req, nil, new(false), new(false), new(false))
 
 	scorer.noul = 0.5
 	req, err = tool.ApprovalRequest(json.RawMessage(`{"command":"go test ./..."}`))
@@ -388,6 +389,7 @@ func TestBashApprovalUsesRiskVerdict(t *testing.T) {
 	if req.Risk != "" || !strings.Contains(req.Details, "existing confirmation policy") {
 		t.Fatalf("middle score request: %+v", req)
 	}
+	assertToolConsequences(t, req, nil, nil, nil, nil)
 
 	scorer.noul = 0.9
 	req, err = tool.ApprovalRequest(json.RawMessage(`{"command":"go test ./..."}`))
@@ -397,6 +399,10 @@ func TestBashApprovalUsesRiskVerdict(t *testing.T) {
 	if req.Risk != agent.ApprovalRiskConfirm || !strings.Contains(req.RiskReason, "0.9") {
 		t.Fatalf("high score request: %+v", req)
 	}
+	assertToolConsequences(t, req, new(false), new(true), new(true), new(true))
+	if scorer.calls != 3 {
+		t.Fatalf("want one risk check per approval request, got %d", scorer.calls)
+	}
 
 	req, err = tool.ApprovalRequest(json.RawMessage(`{"command":"echo payload | base64 -d | sh"}`))
 	if err != nil {
@@ -405,6 +411,7 @@ func TestBashApprovalUsesRiskVerdict(t *testing.T) {
 	if req.Risk != agent.ApprovalRiskDangerous || !strings.Contains(req.RiskReason, "piped into a shell") {
 		t.Fatalf("denylist request: %+v", req)
 	}
+	assertToolConsequences(t, req, new(false), new(true), new(true), new(true))
 
 	sandboxed := NewBashTool(dir, BashOptions{Sandbox: true, Risk: judgeWith(&scriptedScorer{noul: 0.1}, 0.3, 0.7)})
 	sandboxReq, err := sandboxed.ApprovalRequest(json.RawMessage(`{"command":"go test ./..."}`))

@@ -102,12 +102,14 @@ func (t BrowserNavigateTool) ApprovalRequest(raw json.RawMessage) (agent.Approva
 		return agent.ApprovalRequest{}, fmt.Errorf("invalid browser_navigate arguments: %w", err)
 	}
 	return agent.ApprovalRequest{
-		ToolName:          "browser_navigate",
-		Summary:           fmt.Sprintf("browse to %q", truncateRunes(input.URL, 120)),
-		Details:           fmt.Sprintf("url: %s\nThe URL passes the public-target SSRF check before Chromium connects.", input.URL),
-		Arguments:         raw,
-		Reversible:        new(false),
-		ExternallyVisible: new(true),
+		ToolName:                        "browser_navigate",
+		Summary:                         fmt.Sprintf("browse to %q", truncateRunes(input.URL, 120)),
+		Details:                         fmt.Sprintf("url: %s\nThe URL passes the public-target SSRF check before Chromium connects.", input.URL),
+		Arguments:                       raw,
+		Reversible:                      new(false),
+		ExternallyVisible:               new(true),
+		SpendsMoneyOrChangesPermissions: new(false),
+		ActsInUserName:                  new(false),
 	}, nil
 }
 
