@@ -1,8 +1,8 @@
-# Personal Agent: proactive policy and dogfood path (P4 first slice)
+# Personal Agent: proactive policy and schedulable local digests (P4c)
 
 English | [简体中文](personal-agent.zh-CN.md)
 
-P0 defined the consequence language and approval baseline. P1 added consequence routing, memory-write approval, and Gmail drafts. P2 added explicit standing grants and audited matching. P3 added a personal profile with its own base identity and stricter defaults. P4's first slice adds a deterministic proactive policy and a runnable fake dogfood path that checks those brakes. The default `gg` CLI remains coding-first.
+P0 defined the consequence language and approval baseline. P1 added consequence routing, memory-write approval, and Gmail drafts. P2 added explicit standing grants and audited matching. P3 added a personal profile with its own base identity and stricter defaults. P4 adds a deterministic proactive policy and a runnable fake dogfood path that checks those brakes. P4c makes local stub Policy digests schedulable without an agent turn, model, or outbound delivery. The default `gg` CLI remains coding-first.
 
 ## Personal and coding agents
 
@@ -47,16 +47,16 @@ gg job run local-digest
 
 `ggd` honors a stored `coding` or `personal` profile for each scheduled session. An omitted or empty job profile inherits the daemon's existing coding configuration. For manual `gg job run`, a stored profile **wins over the parent CLI `--profile`**; when unset, the job inherits the parent selector, so `gg --profile personal job run ...` still works for legacy jobs. `job show` and `job list` display unset profiles as `(inherit; daemon: coding)`. Manual and daemon jobs retain their existing unattended approval policy (`--allow-all`) and standing-grant matching.
 
-This enables scheduled personal agent turns, including local digest prompts through the existing `gg job` scheduler. Web/Electron and Telegram profile selectors, outbound Telegram delivery, and Policy-only always-on digests without an agent turn remain deferred. The P4 demo below remains an explicit CLI invocation, separate from scheduled agent turns.
+P4b enables scheduled personal agent turns through the existing `gg job` scheduler. P4c also supports scheduled local stub Policy digests without an agent turn, as described below. Web/Electron and Telegram profile selectors, outbound Telegram delivery, live mailbox Policy digests, and automatic trigger discovery beyond scheduled jobs remain deferred. The original P4 demo remains an explicit CLI invocation.
 
 ## Proactive policy (P4 first slice)
 
-[`internal/proactive.Policy.Decide`](../internal/proactive/policy.go) is a pure function: no model, I/O, clock reads, or inferred authorization. Inputs are the runtime profile, scenario (`email_summary`, `calendar_reminder`, `standing_auth_check`), supplied local time, an explicit remember-later request, and any proposed notification or tool approval request. This slice calls it from the demo; it does not add triggers to ordinary agent turns or the daemon.
+[`internal/proactive.Policy.Decide`](../internal/proactive/policy.go) is a pure function: no model, I/O, clock reads, or inferred authorization. Inputs are the runtime profile, scenario (`email_summary`, `calendar_reminder`, `standing_auth_check`), supplied local time, an explicit remember-later request, and any proposed notification or tool approval request. The demo and P4c local digest runner call it directly; digest jobs use the existing scheduler without starting an agent turn. Ordinary agent turns do not gain automatic proactive triggers.
 
 | Decision | Meaning | Action in this slice |
 | --- | --- | --- |
-| **Summarize** | A brief digest would help now. | Print a local digest to stdout; no outbound delivery. |
-| **Quiet** | Do not interrupt. | No payload, notification, or outbound message; demo diagnostics may show the decision. |
+| **Summarize** | A brief digest would help now. | Print a local digest to stdout when a writer is supplied; P4c also saves private local files. No outbound delivery. |
+| **Quiet** | Do not interrupt. | No payload, notification, or outbound message; diagnostics may show the decision and reason. |
 | **Note-only** | Capture for later without surfacing content now. | Write a private local candidate file; do not insert it into durable memory. Using `memory_add` later still goes through its existing approval gate. |
 
 Defaults and precedence:
@@ -66,6 +66,25 @@ Defaults and precedence:
 - An explicit remember-later request selects Note-only, including during quiet hours. It never changes authorization for a proposed tool or notification.
 - OS `notify` is off, with a fixed maximum of **zero notifications per run** and no opt-in in this slice. A proposed notification returns Quiet; OS notifications count as E. The `notify` tool now implements `ApprovalDescriber` with E=true and uses the shared approval gate when available. C2 still disables computer tools in personal; this policy does not enable them.
 - A proposed tool action returns Quiet and must use the existing Approver/standing-auth path. In particular, asserted E/M/U always requires human confirmation or a matching standing grant. `gmail_send`, including a real Gmail draft, and `calendar_create` retain P1–P3 gates. Neither Summarize nor Note-only authorizes any tool, and unknown tool metadata is not permission.
+
+## Schedulable local Policy digests (P4c — landed)
+
+```sh
+gg job add --proactive-digest --profile personal --cron '0 9 * * *' --name morning-digest
+gg job show morning-digest
+gg job run morning-digest
+gg --profile personal proactive digest
+
+# Replay a local quiet window, or keep private candidates for later:
+gg --profile personal proactive digest --quiet-hours 22:00-07:00 --at 23:00
+gg --profile personal proactive digest --remember-later
+```
+
+`--proactive-digest` persists `proactive_digest: true` and defaults an omitted job `--profile` to `personal`. Digest jobs require personal; explicit coding or empty profiles are rejected. The prompt is optional and unused for digest jobs; ordinary jobs still require one. Both `ggd` and manual `gg job run` call the shared local runner before session creation or provider setup, record decisions and paths in job history, and create no agent session. Scheduled runs fire only while `ggd` is alive. Quiet hours remain disabled for jobs in P4c; the quiet-hours and remember-later flags belong to the direct digest command.
+
+The direct command uses the real local wall clock by default. Optional `--at HH:MM` replays today's local time. Its inbox and agenda text are explicitly **stubs**, with no live Gmail/Calendar reads. Summarize writes `email_summary.txt` and `calendar_reminder.txt` under a unique 0700 `~/.gg/proactive/digest-<timestamp>-*/` directory, with 0600 files, and prints their bodies when a writer is supplied. Note-only writes candidate files and prints only paths and decision metadata. Quiet prints decisions and reasons without writing digest bodies; coding prints Quiet/disabled and creates no digest directory. Files remain local for inspection, are never loaded as memory, and may be removed afterward.
+
+Every personal run checks real Gmail draft/send approval metadata against Policy and `standingauth.Approver`, using a fresh empty grant store inside its digest directory and the existing unattended approver. Both omitted `as_draft` and explicit `as_draft:false` must be denied; an unexpected allow, non-Quiet policy decision, or approval error fails the run. No tool is executed. Successful runs report **“Brakes held: local only; no model; no outbound”**. This path constructs no model/provider or connector clients and sends no Telegram, email, or OS notification.
 
 ## Run the fake dogfood path
 
@@ -102,12 +121,13 @@ This uses the normal personal-profile agent path, not the fake demo or automatic
 
 | Plan item | Landed in this slice | Deferred |
 | --- | --- | --- |
-| Proactive trigger policy | Deterministic Summarize/Quiet/Note-only decisions, personal-only defaults, quiet hours, notification suppression, and consequence boundary. | Automatic trigger discovery and Policy-only always-on digests without an agent turn. |
+| Proactive trigger policy | Deterministic Summarize/Quiet/Note-only decisions, personal-only defaults, quiet hours, notification suppression, and consequence boundary. | Automatic trigger discovery beyond scheduled jobs. |
 | Scheduled personal turns (P4b) | Stored job profile selector; daemon honors it and manual runs prefer it over the parent CLI profile. | Web/Electron/Telegram profile selectors and outbound Telegram delivery. |
+| Schedulable local Policy digests (P4c) | `gg proactive digest` and `gg job add --proactive-digest`; local stub Summarize/Quiet/Note-only without an agent turn, model, or outbound delivery. | Live mailbox Policy digests and outbound delivery. |
 | First-user dogfood | Fake email digest, calendar reminder, and standing-auth denial scene through the discoverable CLI, with tests and optional live read-only instructions. | Automatic proactive outbound delivery. |
 | Stop-condition pointer | Keep coding-first defaults and the shared runtime. | Physical repository split. |
 
-**Plan stop condition:** only consider a physical repository split if personal defaults **systematically hurt coding**, evidenced by approval noise, tool loops, or README persona drift. The P4 slice does not split the repository, rewrite the agent loop, add a second runtime, or broaden MCP/bash consequence classification. Existing `gg job`/`internal/scheduler` remain the scheduling mechanism; no new scheduler is introduced or wired to this demo.
+**Plan stop condition:** only consider a physical repository split if personal defaults **systematically hurt coding**, evidenced by approval noise, tool loops, or README persona drift. The P4 slice does not split the repository, rewrite the agent loop, add a second runtime, or broaden MCP/bash consequence classification. Existing `gg job`/`internal/scheduler` schedule P4c local digest jobs; no new scheduler is introduced, and the original demo stays separate.
 
 ## Four consequence dimensions
 
@@ -273,4 +293,4 @@ The tables use R/E/M/U as shorthand for the dimensions above. They describe effe
 
 Current runtime policy is documented in the architecture's [Security model](architecture.md#security-model) and [Approval modes](architecture.md#approval-modes). P1 extends #53's fail-closed nil-approver handling for `dangerous`/`confirm` risks to asserted E/M/U consequences, while retaining existing Risk behavior for unclassified tools.
 
-P1 shipped the fields, routing, memory-write gate, and optional Gmail draft switch described above. P2 shipped explicit standing authorization with durable storage, CLI management, shared matching, and an allow audit. P3 shipped the personal profile selector, personal base identity, stricter personal defaults, and Gmail draft preference while retaining the shared runtime. P4's first slice ships the local proactive policy and fake dogfood CLI above; P4b adds stored job profiles for scheduled personal turns. Broader delivery remains deferred under the stated stop condition.
+P1 shipped the fields, routing, memory-write gate, and optional Gmail draft switch described above. P2 shipped explicit standing authorization with durable storage, CLI management, shared matching, and an allow audit. P3 shipped the personal profile selector, personal base identity, stricter personal defaults, and Gmail draft preference while retaining the shared runtime. P4's first slice ships the local proactive policy and fake dogfood CLI above; P4b adds stored job profiles for scheduled personal turns; P4c adds schedulable local stub Policy digests without a model or agent turn. Live mailbox Policy digests and outbound delivery remain deferred under the stated stop condition.

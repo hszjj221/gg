@@ -50,7 +50,7 @@ type Args struct {
 	JobArgs []string
 	// StandingAuthArgs carries `gg standing-auth list|add|revoke`.
 	StandingAuthArgs []string
-	// ProactiveArgs carries the fake proactive demo subcommand.
+	// ProactiveArgs carries local proactive demo/digest subcommands.
 	ProactiveArgs []string
 	// ArtifactArgs carries the subcommand for `gg artifact ...`.
 	ArtifactArgs []string
@@ -227,7 +227,7 @@ func parseCommand(args *Args, rest []string) error {
 			args.Prompt = strings.Join(rest, " ")
 		}
 	case "proactive":
-		if len(rest) == 1 || rest[1] == "demo" {
+		if len(rest) == 1 || rest[1] == "demo" || rest[1] == "digest" {
 			args.Command = CommandProactive
 			args.ProactiveArgs = rest[1:]
 		} else {
@@ -437,8 +437,8 @@ Usage:
   gg memory search <query>
   gg memory show [daily]
   gg standing-auth list|add|revoke   manage explicit standing grants
-  gg --profile personal proactive demo   fake local digests + approval brakes (no credentials)
-  gg job add --cron "0 9 * * *" --name NAME PROMPT
+  gg --profile personal proactive digest   local stub digests + approval brakes (no model or outbound)
+  gg job add --cron "0 9 * * *" --name NAME [--proactive-digest] [PROMPT]
   gg job list [--all]
   gg artifact list
   gg artifact show <id>
@@ -495,14 +495,19 @@ Standing authorization (~/.gg/standing-auth):
   Exact argument limits and explicit effects (E,M,U or none) are required.
   Standing grants never waive dangerous/confirm risks.
 
-Proactive demo (personal only; no model or live connectors):
+Proactive digests (personal only; no model, live connectors, or outbound):
+  gg --profile personal proactive digest [--quiet-hours HH:MM-HH:MM] [--at HH:MM] [--remember-later]
+  digest uses the local wall clock by default; --at replays a local HH:MM.
+  Summarize writes local files and stdout; Note-only writes private candidates.
   gg --profile personal proactive demo [--quiet-hours HH:MM-HH:MM] [--at HH:MM] [--remember-later]
-  --at defaults to fake local time 10:00; quiet hours are disabled by default.
+  demo --at defaults to fake local time 10:00; quiet hours are disabled by default.
   --remember-later writes local candidates, without inserting durable memory.
   OS notify is off; maximum notifications per run is zero.
 
 Scheduled jobs (fire while the ggd daemon is alive):
-  gg job add --cron "0 9 * * *" --name NAME [--timezone TZ] [--allow-all] [--timeout 10m] PROMPT
+  gg job add --cron "0 9 * * *" --name NAME [--proactive-digest] [--profile coding|personal] [--timezone TZ] [--allow-all] [--timeout 10m] [PROMPT]
+  --proactive-digest defaults to personal, allows an empty prompt, and runs locally without an agent turn.
+  Other jobs require PROMPT; digest jobs require personal and keep quiet hours disabled.
   gg job add --at "2026-09-28 15:04" --name NAME PROMPT
   gg job add --in 20m --name NAME PROMPT
   gg job list [--all]      list jobs (paused hidden unless --all)

@@ -13,15 +13,17 @@ import (
 	"github.com/hszjj221/gg/internal/bootstrap"
 	"github.com/hszjj221/gg/internal/config"
 	"github.com/hszjj221/gg/internal/daemon"
+	"github.com/hszjj221/gg/internal/proactive"
 	"github.com/hszjj221/gg/internal/scheduler"
 	"github.com/hszjj221/gg/internal/userprofile"
 	"github.com/hszjj221/gg/internal/workspace"
 )
 
 const jobUsage = `usage:
-  gg job add --cron "0 9 * * *" --name NAME [--profile coding|personal] [--timezone TZ] [--allow-all] [--timeout 10m] PROMPT
-  gg job add --at "2026-09-28 15:04" --name NAME [flags] PROMPT
-  gg job add --in 20m --name NAME [flags] PROMPT
+  gg job add --cron "0 9 * * *" --name NAME [--proactive-digest] [--profile coding|personal] [--timezone TZ] [--allow-all] [--timeout 10m] [PROMPT]
+  gg job add --at "2026-09-28 15:04" --name NAME [flags] [PROMPT]
+  gg job add --in 20m --name NAME [flags] [PROMPT]
+    --proactive-digest: local only, no model or outbound; defaults to personal; PROMPT optional (otherwise required)
   gg job list [--all]
   gg job show <id|name>
   gg job pause|resume|remove <id|name>
@@ -66,12 +68,13 @@ func runJobAdd(cfg config.Config, store *scheduler.Store, args []string, stdout,
 	fs := flag.NewFlagSet("gg job add", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var cronExpr, atSpec, inSpec, name, profile, timezone, timeoutSpec string
-	var allowOrdinary bool
+	var allowOrdinary, proactiveDigest bool
 	fs.StringVar(&cronExpr, "cron", "", "cron schedule (5-field, e.g. \"0 9 * * *\")")
 	fs.StringVar(&atSpec, "at", "", "one-shot time (RFC3339 or \"2006-01-02 15:04\")")
 	fs.StringVar(&inSpec, "in", "", "one-shot delay (e.g. 20m, 1h30m)")
 	fs.StringVar(&name, "name", "", "job name")
 	fs.StringVar(&profile, "profile", "", "runtime profile (coding|personal; default: inherit, coding in ggd)")
+	fs.BoolVar(&proactiveDigest, "proactive-digest", false, "local stub digest without a model or outbound (default profile: personal; prompt optional)")
 	fs.StringVar(&timezone, "timezone", "", "IANA timezone (default: profile timezone, then local)")
 	fs.StringVar(&timeoutSpec, "timeout", "", "per-run timeout (default 10m)")
 	fs.BoolVar(&allowOrdinary, "allow-all", false, "allow ordinary unattended tools only (default: denied); cannot waive asserted E/M/U or dangerous/confirm risks; asserted E/M/U requires matching standing grants")
@@ -79,19 +82,29 @@ func runJobAdd(cfg config.Config, store *scheduler.Store, args []string, stdout,
 		return 2
 	}
 	prompt := strings.TrimSpace(strings.Join(fs.Args(), " "))
-	if prompt == "" {
-		fmt.Fprintln(stderr, "usage: gg job add (--cron EXPR|--at TIME|--in DURATION) --name NAME PROMPT")
+	if prompt == "" && !proactiveDigest {
+		fmt.Fprintln(stderr, "usage: gg job add (--cron EXPR|--at TIME|--in DURATION) --name NAME [--proactive-digest] [PROMPT] (prompt required without --proactive-digest)")
 		return 2
+	}
+	profileSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "profile" {
+			profileSet = true
+		}
+	})
+	if proactiveDigest && !profileSet {
+		profile = config.ProfilePersonal
 	}
 	if timezone == "" {
 		timezone = defaultJobTimezone(cfg)
 	}
 	job := scheduler.Job{
-		Name:          strings.TrimSpace(name),
-		Prompt:        prompt,
-		Timezone:      timezone,
-		Workspace:     cfg.CWD,
-		AllowOrdinary: allowOrdinary,
+		Name:            strings.TrimSpace(name),
+		Prompt:          prompt,
+		Timezone:        timezone,
+		Workspace:       cfg.CWD,
+		AllowOrdinary:   allowOrdinary,
+		ProactiveDigest: proactiveDigest,
 	}
 	if profile = strings.TrimSpace(profile); profile != "" {
 		parsed, err := config.ParseProfile(profile)
@@ -211,6 +224,7 @@ func runJobShow(store *scheduler.Store, args []string, stdout, stderr io.Writer)
 		job.Enabled, job.AllowOrdinary, job.Timeout,
 		job.CreatedAt.Format("2006-01-02 15:04"),
 		formatJobTime(job.LastRun), formatJobTime(job.NextRun), job.RunCount, job.Prompt)
+	fmt.Fprintf(stdout, "proactive-digest: %v\n", job.ProactiveDigest)
 	return 0
 }
 
@@ -332,7 +346,7 @@ func runJobLog(store *scheduler.Store, args []string, stdout, stderr io.Writer) 
 	return 0
 }
 
-// runJobRun fires a job immediately from the CLI by running one agent turn in
+// runJobRun fires a job immediately as a local digest or an agent turn in
 // this process. It does not go through the daemon's scheduler and does not
 // change the job's schedule; the firing is recorded in the run log.
 func runJobRun(ctx context.Context, cfg config.Config, options Options, store *scheduler.Store, args []string, stdout, stderr io.Writer) int {
@@ -344,6 +358,26 @@ func runJobRun(ctx context.Context, cfg config.Config, options Options, store *s
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if job.ProactiveDigest {
+		started := time.Now()
+		result, err := proactive.RunDigest(ctx, proactive.DigestOptions{
+			Profile: job.Profile, HomeDir: cfg.HomeDir, Now: started, Writer: stdout,
+		})
+		rec := scheduler.RunRecord{
+			JobID: job.ID, JobName: job.Name, StartedAt: started, FinishedAt: time.Now(),
+			Status: "ok", Summary: result.Summary,
+		}
+		code := 0
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			rec.Status, rec.Summary = "error", err.Error()
+			code = 1
+		}
+		if err := store.AppendRun(rec); err != nil {
+			fmt.Fprintln(stderr, "warning: could not record the run:", err)
+		}
+		return code
 	}
 	// A stored profile wins over the parent CLI selector. Legacy jobs keep
 	// the caller's profile, including `gg --profile personal job run`.

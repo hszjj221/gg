@@ -10,19 +10,27 @@ import (
 
 	"github.com/hszjj221/gg/internal/app"
 	"github.com/hszjj221/gg/internal/config"
+	"github.com/hszjj221/gg/internal/proactive"
 	"github.com/hszjj221/gg/internal/scheduler"
 	"github.com/hszjj221/gg/internal/workspace"
 )
 
-// daemonJobExecutor runs scheduled jobs as agent turns inside the daemon's
-// runtime. Each firing gets a fresh session named scheduler/<job>-<time> so
-// runs are auditable and can be reopened with gg resume.
+// daemonJobExecutor runs local digests or agent turns. Agent firings get a
+// fresh scheduler/<job>-<time> session that can be reopened with gg resume.
 type daemonJobExecutor struct {
-	rt     *app.Runtime
-	logger *slog.Logger
+	rt      *app.Runtime
+	logger  *slog.Logger
+	homeDir string
 }
 
 func (e *daemonJobExecutor) Execute(ctx context.Context, job scheduler.Job) (string, string, error) {
+	if job.ProactiveDigest {
+		e.logger.Info("scheduled job started", "job", job.Name, "proactive_digest", true)
+		result, err := proactive.RunDigest(ctx, proactive.DigestOptions{
+			Profile: job.Profile, HomeDir: e.homeDir, Now: time.Now(),
+		})
+		return result.Summary, "", err
+	}
 	name := fmt.Sprintf("scheduler/%s-%s", sanitizeJobName(job.Name), time.Now().Format("20060102-150405"))
 	e.logger.Info("scheduled job started", "job", job.Name, "session", name)
 	snap, err := e.rt.CreateSessionInWorkspaceWithProfile(name, resolveJobWorkspaceRef(job, e.rt.WorkspaceRegistry()), job.Profile)
@@ -65,13 +73,13 @@ func resolveJobWorkspaceRef(job scheduler.Job, reg *workspace.Registry) string {
 }
 
 // startScheduler loads persisted jobs and runs the scheduling loop in the
-// background. Jobs fire as agent turns in the daemon's rt.
+// background. Digest jobs bypass the daemon's agent runtime.
 func newSchedulerChannel(cfg config.Config, rt *app.Runtime, logger *slog.Logger) (Channel, error) {
 	store, err := scheduler.Open(cfg.Scheduler.Dir)
 	if err != nil {
 		return nil, fmt.Errorf("open scheduler store: %w", err)
 	}
-	sched := scheduler.New(store, &daemonJobExecutor{rt: rt, logger: logger},
+	sched := scheduler.New(store, &daemonJobExecutor{rt: rt, logger: logger, homeDir: cfg.HomeDir},
 		scheduler.WithErrorReporter(func(err error) {
 			logger.Error("scheduled job failed", "error", err)
 		}))

@@ -7,6 +7,48 @@ import (
 	"time"
 )
 
+func TestJobProactiveDigest(t *testing.T) {
+	for _, tc := range []struct {
+		name, profile, prompt, wantError string
+		digest                           bool
+	}{
+		{"digest personal", "personal", "", "", true},
+		{"digest with prompt", "personal", "ignored", "", true},
+		{"digest empty profile", "", "", "require profile personal", true},
+		{"digest coding", "coding", "p", "require profile personal", true},
+		{"agent empty prompt", "personal", "", "job prompt is required", false},
+		{"legacy agent", "", "p", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			job := Job{Name: "digest", Kind: KindCron, Schedule: "0 9 * * *", Profile: tc.profile, Prompt: tc.prompt, ProactiveDigest: tc.digest}
+			err := job.Validate()
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("Validate() = %v, want %q", err, tc.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(job)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(raw), `"proactive_digest":true`) != tc.digest || (!tc.digest && strings.Contains(string(raw), "proactive_digest")) {
+				t.Fatalf("unexpected JSON: %s", raw)
+			}
+			var decoded Job
+			if err := json.Unmarshal(raw, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if decoded.ProactiveDigest != tc.digest || decoded.Prompt != tc.prompt {
+				t.Fatalf("round trip = %+v", decoded)
+			}
+		})
+	}
+}
+
 func TestJobProfile(t *testing.T) {
 	for _, tc := range []struct {
 		name, profile string

@@ -94,13 +94,56 @@ func TestDaemonJobExecutorProfile(t *testing.T) {
 
 type jobProfileProvider struct {
 	request agent.Request
+	calls   int
 }
 
 func (p *jobProfileProvider) Complete(_ context.Context, req agent.Request, _ func(agent.Event)) (agent.AssistantMessage, error) {
+	p.calls++
 	p.request = req
 	return agent.AssistantMessage{
 		Message: agent.Message{Role: agent.RoleAssistant, Content: "done"}, StopReason: agent.StopReasonEndTurn,
 	}, nil
+}
+
+func TestDaemonJobExecutorProactiveDigest(t *testing.T) {
+	root := t.TempDir()
+	reg, err := workspace.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &jobProfileProvider{}
+	factories := 0
+	rt, err := app.NewRuntime(app.RuntimeOptions{
+		Config: config.Config{CWD: root, HomeDir: root, Profile: config.ProfileCoding, Selection: "test:model", NoContextFiles: true},
+		ProviderFactory: func(config.Config) agent.Provider {
+			factories++
+			return provider
+		},
+		WorkspaceRegistry: reg, NoSkills: true,
+		Repository: session.NewFileRepository(filepath.Join(root, "sessions")),
+		Log:        testStdinLogger(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close(context.Background())
+	executor := &daemonJobExecutor{rt: rt, logger: testStdinLogger(), homeDir: root}
+	summary, path, err := executor.Execute(context.Background(), scheduler.Job{
+		Name: "digest", Profile: config.ProfilePersonal, ProactiveDigest: true,
+	})
+	if err != nil || path != "" || !strings.Contains(summary, "email_summary: Summarize") || !strings.Contains(summary, "no model; no outbound") || strings.Contains(summary, "Stub ") {
+		t.Fatalf("digest summary=%q path=%q err=%v", summary, path, err)
+	}
+	if factories != 0 || provider.calls != 0 {
+		t.Fatalf("digest used provider: factories=%d Complete=%d", factories, provider.calls)
+	}
+	if _, err := os.Stat(filepath.Join(root, "sessions")); !os.IsNotExist(err) {
+		t.Fatalf("digest created sessions: %v", err)
+	}
+	paths, err := filepath.Glob(filepath.Join(root, ".gg", "proactive", "digest-*", "*.txt"))
+	if err != nil || len(paths) != 2 {
+		t.Fatalf("digest paths=%q err=%v", paths, err)
+	}
 }
 
 func TestSanitizeJobName(t *testing.T) {
