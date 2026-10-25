@@ -232,15 +232,15 @@ func (DefaultApprover) Approve(_ context.Context, req ApprovalRequest) (Approval
 
 // UnattendedApprover is the approval policy for runs where no human is
 // present to answer prompts: scheduled jobs, daemon jobs, and chat bots. It
-// allows clearly read-only calls, denies ordinary calls unless AllowAll was
+// allows clearly read-only calls, denies ordinary calls unless AllowOrdinary was
 // opted into, and always denies asserted E/M/U and dangerous/confirm calls —
-// even with AllowAll.
+// even with AllowOrdinary.
 type UnattendedApprover struct {
-	AllowAll bool
+	AllowOrdinary bool
 }
 
 // Approve implements Approver. Asserted E/M/U consequences, dangerous
-// commands, and risk-check confirmations are denied even with --allow-all,
+// commands, and risk-check confirmations are denied even with AllowOrdinary,
 // because nobody is present to approve them.
 func (a UnattendedApprover) Approve(_ context.Context, req ApprovalRequest) (ApprovalDecision, error) {
 	if req.RequiresHumanConfirm() {
@@ -269,7 +269,7 @@ func (a UnattendedApprover) Approve(_ context.Context, req ApprovalRequest) (App
 			Reason: fmt.Sprintf("tool call %q denied: %s. Commands that need confirmation are not run unattended, including with --allow-all.", req.ToolName, why),
 		}, nil
 	}
-	return ApprovalDecision{Allow: a.AllowAll}, nil
+	return ApprovalDecision{Allow: a.AllowOrdinary}, nil
 }
 
 type ApprovalDescriber interface {

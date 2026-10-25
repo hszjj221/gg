@@ -110,7 +110,7 @@ func TestComputerToolApprovalConsequences(t *testing.T) {
 				t.Errorf("Risk = %q, want %q", req.Risk, tc.risk)
 			}
 			if tc.risk != "" || tc.e {
-				for _, approver := range []agent.Approver{agent.DefaultApprover{}, agent.UnattendedApprover{AllowAll: true}} {
+				for _, approver := range []agent.Approver{agent.DefaultApprover{}, agent.UnattendedApprover{AllowOrdinary: true}} {
 					decision, err := approver.Approve(context.Background(), req)
 					if err != nil || decision.Allow {
 						t.Errorf("%T must deny without a human: %+v, %v", approver, decision, err)

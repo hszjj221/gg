@@ -445,20 +445,20 @@ func TestUnattendedApproverAllowsReadOnly(t *testing.T) {
 	}
 }
 
-func TestUnattendedApproverDeniesWithoutAllowAll(t *testing.T) {
+func TestUnattendedApproverDeniesWithoutAllowOrdinary(t *testing.T) {
 	got, err := UnattendedApprover{}.Approve(context.Background(), ApprovalRequest{})
 	if err != nil || got.Allow {
 		t.Fatalf("ordinary = %+v, %v; want deny", got, err)
 	}
-	got, _ = UnattendedApprover{AllowAll: true}.Approve(context.Background(), ApprovalRequest{})
+	got, _ = UnattendedApprover{AllowOrdinary: true}.Approve(context.Background(), ApprovalRequest{})
 	if !got.Allow {
-		t.Fatal("allow-all should allow ordinary tools")
+		t.Fatal("AllowOrdinary should allow ordinary tools")
 	}
 }
 
 func TestUnattendedApproverNeverAllowsDangerous(t *testing.T) {
 	for _, risk := range []string{ApprovalRiskDangerous, ApprovalRiskConfirm} {
-		got, _ := UnattendedApprover{AllowAll: true}.Approve(context.Background(), ApprovalRequest{Risk: risk})
+		got, _ := UnattendedApprover{AllowOrdinary: true}.Approve(context.Background(), ApprovalRequest{Risk: risk})
 		if got.Allow {
 			t.Fatalf("risk %q allowed unattended", risk)
 		}

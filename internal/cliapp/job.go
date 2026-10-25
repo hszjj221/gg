@@ -66,14 +66,14 @@ func runJobAdd(cfg config.Config, store *scheduler.Store, args []string, stdout,
 	fs := flag.NewFlagSet("gg job add", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var cronExpr, atSpec, inSpec, name, timezone, timeoutSpec string
-	var allowAll bool
+	var allowOrdinary bool
 	fs.StringVar(&cronExpr, "cron", "", "cron schedule (5-field, e.g. \"0 9 * * *\")")
 	fs.StringVar(&atSpec, "at", "", "one-shot time (RFC3339 or \"2006-01-02 15:04\")")
 	fs.StringVar(&inSpec, "in", "", "one-shot delay (e.g. 20m, 1h30m)")
 	fs.StringVar(&name, "name", "", "job name")
 	fs.StringVar(&timezone, "timezone", "", "IANA timezone (default: profile timezone, then local)")
 	fs.StringVar(&timeoutSpec, "timeout", "", "per-run timeout (default 10m)")
-	fs.BoolVar(&allowAll, "allow-all", false, "allow the unattended run to use tools that need approval (default: denied)")
+	fs.BoolVar(&allowOrdinary, "allow-all", false, "allow ordinary unattended tools only (default: denied); cannot waive asserted E/M/U or dangerous/confirm risks; asserted E/M/U requires matching standing grants")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -86,11 +86,11 @@ func runJobAdd(cfg config.Config, store *scheduler.Store, args []string, stdout,
 		timezone = defaultJobTimezone(cfg)
 	}
 	job := scheduler.Job{
-		Name:        strings.TrimSpace(name),
-		Prompt:      prompt,
-		Timezone:    timezone,
-		Workspace:   cfg.CWD,
-		AutoApprove: allowAll,
+		Name:          strings.TrimSpace(name),
+		Prompt:        prompt,
+		Timezone:      timezone,
+		Workspace:     cfg.CWD,
+		AllowOrdinary: allowOrdinary,
 	}
 	// Bind the job to the workspace whose root is the current directory so
 	// the daemon runs it inside the right workspace. When the registry
@@ -197,9 +197,9 @@ func runJobShow(store *scheduler.Store, args []string, stdout, stderr io.Writer)
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "id:          %s\nname:        %s\nkind:        %s\nschedule:    %s\ntimezone:    %s\nworkspace:   %s\nenabled:     %v\nauto-approve: %v\ntimeout:     %s\ncreated:     %s\nlast run:    %s\nnext run:    %s\nruns:        %d\nprompt:      %s\n",
+	fmt.Fprintf(stdout, "id:             %s\nname:           %s\nkind:           %s\nschedule:       %s\ntimezone:       %s\nworkspace:      %s\nenabled:        %v\nallow-ordinary: %v\ntimeout:        %s\ncreated:        %s\nlast run:       %s\nnext run:       %s\nruns:           %d\nprompt:         %s\n",
 		job.ID, job.Name, job.Kind, job.Schedule, displayTimezone(job), displayWorkspace(job),
-		job.Enabled, job.AutoApprove, job.Timeout,
+		job.Enabled, job.AllowOrdinary, job.Timeout,
 		job.CreatedAt.Format("2006-01-02 15:04"),
 		formatJobTime(job.LastRun), formatJobTime(job.NextRun), job.RunCount, job.Prompt)
 	return 0
@@ -379,7 +379,7 @@ func runJobRun(ctx context.Context, cfg config.Config, options Options, store *s
 	}()
 	prompt := fmt.Sprintf("[Manual trigger of scheduled job %q. You are running unattended: no human will see approval prompts, so only tools permitted by policy will execute. Complete the task and finish with a concise summary.]\n\n%s",
 		job.Name, job.Prompt)
-	approver := scheduler.UnattendedApprover{AllowAll: job.AutoApprove}
+	approver := scheduler.UnattendedApprover{AllowOrdinary: job.AllowOrdinary}
 	timeout := job.Timeout
 	if timeout <= 0 {
 		timeout = scheduler.DefaultTimeout

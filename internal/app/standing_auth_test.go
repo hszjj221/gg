@@ -81,7 +81,7 @@ func TestSharedRuntimeStandingAuthorization(t *testing.T) {
 				case "telegram":
 					approver = agent.UnattendedApprover{}
 				case "job allow-all":
-					approver = agent.UnattendedApprover{AllowAll: true}
+					approver = agent.UnattendedApprover{AllowOrdinary: true}
 				}
 				if _, err := svc.Run(context.Background(), "create a draft", nil, approver); err != nil {
 					t.Fatal(err)
