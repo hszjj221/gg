@@ -76,7 +76,7 @@ beforeEach(() => {
     const session = fixture.sessions.find((item) => item.sessionId === params.sessionId);
     switch (method) {
       case 'system.info':
-        return response({ protocolVersion: '1.3', capabilities: [] });
+        return response({ protocolVersion: '1.5', capabilities: [] });
       case 'session.list':
         return response(
           fixture.sessions.map((item) => ({
@@ -298,6 +298,49 @@ for (const trigger of ['button', 'shortcut']) {
     root = createRoot(document.getElementById('root'));
     await act(async () => root.render(createElement(App)));
     assert.equal(document.querySelector('#prompt').value, 'Draft before the first session');
+  });
+}
+
+test('New sessions default to coding and reject stale profile preferences', async () => {
+  sessionStorage.setItem('gg.profile', 'garbage');
+  await mountApp();
+  assert.equal(document.querySelector('[aria-label="新会话模式"]').value, 'coding');
+  await click(document.querySelector('.new-session-button'));
+  assert.deepEqual(fixture.calls.find((call) => call.method === 'session.create').params, {
+    name: '', profile: 'coding',
+  });
+});
+
+for (const trigger of ['button', 'shortcut', 'first message']) {
+  test(`The personal selector applies to session creation by ${trigger} and survives reload`, async () => {
+    fixture.sessions = [];
+    await act(async () => root.render(createElement(App)));
+    const selector = document.querySelector('[aria-label="新会话模式"]');
+    assert.equal(selector.value, 'coding');
+    await act(async () => {
+      selector.value = 'personal';
+      selector.dispatchEvent(new window.Event('change', { bubbles: true }));
+    });
+    assert.equal(sessionStorage.getItem('gg.profile'), 'personal');
+    assert.equal(fixture.calls.filter((call) => call.method === 'session.create').length, 0);
+    await act(async () => root.unmount());
+    root = createRoot(document.getElementById('root'));
+    await act(async () => root.render(createElement(App)));
+    assert.equal(document.querySelector('[aria-label="新会话模式"]').value, 'personal');
+    if (trigger === 'button') {
+      await click(document.querySelector('.new-session-button'));
+    } else if (trigger === 'shortcut') {
+      await act(async () => window.dispatchEvent(
+        new window.KeyboardEvent('keydown', { key: 'n', ctrlKey: true, bubbles: true, cancelable: true }),
+      ));
+    } else {
+      await input(document.querySelector('#prompt'), 'Hello personal assistant');
+      await click(document.querySelector('[aria-label="发送消息"]'));
+      assert.ok(fixture.calls.some((call) => call.method === 'run.start'));
+    }
+    assert.deepEqual(fixture.calls.find((call) => call.method === 'session.create').params, {
+      name: '', profile: 'personal',
+    });
   });
 }
 

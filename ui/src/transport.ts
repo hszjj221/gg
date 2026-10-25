@@ -1,6 +1,6 @@
 import type { ArtifactMeta, ArtifactPublishResult, ArtifactView, RunEvent, RunStatus, SessionSummary, SessionUpdate, Snapshot, SystemInfo, WaitResult } from './types';
 
-export const protocolVersion = '1.3';
+export const protocolVersion = '1.5';
 
 export class RPCError extends Error {
   constructor(
@@ -152,8 +152,8 @@ export class API {
     return this.transport.call<SessionSummary[]>('session.list');
   }
 
-  createSession(name = '') {
-    return this.transport.call<Snapshot>('session.create', { name });
+  createSession(name = '', profile = '') {
+    return this.transport.call<Snapshot>('session.create', { name, profile });
   }
 
   openSession(sessionId: string) {
