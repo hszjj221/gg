@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/hszjj221/gg/internal/app"
+	"github.com/hszjj221/gg/internal/config"
 )
 
 const Version = "2.0"
@@ -20,11 +21,13 @@ const Version = "2.0"
 // listing tool providers whose build failed and degraded to absent.
 // 1.4: run.start accepts an optional workspace (name or ID); absent → the
 // session's bound workspace.
+// 1.5: session.create accepts optional profile (coding|personal); empty/absent
+// inherits the runtime configuration (coding for ggd).
 //
 // requireApproval=false disables interactive prompts for ordinary tools
 // only: dangerous and confirm-risk calls are still denied by the agent's
 // default policy when no approver is available.
-const ProtocolVersion = "1.4"
+const ProtocolVersion = "1.5"
 
 // capabilities lists transport-level features. system.info appends the runtime's
 // profile-filtered tool capabilities without building providers.
@@ -122,12 +125,19 @@ func (h *Handler) call(ctx context.Context, method string, raw json.RawMessage) 
 		return h.rt.ListSessions()
 	case "session.create":
 		var params struct {
-			Name string `json:"name"`
+			Name    string `json:"name"`
+			Profile string `json:"profile"`
 		}
 		if err := decodeParams(raw, &params); err != nil {
 			return nil, err
 		}
-		return h.rt.CreateSession(params.Name)
+		profile := strings.TrimSpace(params.Profile)
+		if profile != "" {
+			if _, err := config.ParseProfile(profile); err != nil {
+				return nil, invalidParams(err.Error())
+			}
+		}
+		return h.rt.CreateSessionInWorkspaceWithProfile(params.Name, "", profile)
 	case "session.open", "session.get":
 		var params sessionParams
 		if err := decodeParams(raw, &params); err != nil {

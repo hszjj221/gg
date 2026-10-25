@@ -114,11 +114,11 @@ func TestRunStartAcceptsWorkspace(t *testing.T) {
 	})
 }
 
-// TestProtocolVersionBump pins the 1.4 protocol: run.start accepts an
-// optional workspace.
+// TestProtocolVersionBump pins the 1.5 protocol: session.create accepts an
+// optional profile.
 func TestProtocolVersionBump(t *testing.T) {
-	if ProtocolVersion != "1.4" {
-		t.Fatalf("ProtocolVersion = %q, want 1.4", ProtocolVersion)
+	if ProtocolVersion != "1.5" {
+		t.Fatalf("ProtocolVersion = %q, want 1.5", ProtocolVersion)
 	}
 	handler := NewHandler(testWorkspace(t))
 	resp := handler.Handle(context.Background(), Request{JSONRPC: Version, ID: []byte(`1`), Method: "system.info"})
@@ -126,7 +126,7 @@ func TestProtocolVersionBump(t *testing.T) {
 		t.Fatal(resp.Error)
 	}
 	info, ok := resp.Result.(SystemInfo)
-	if !ok || info.ProtocolVersion != "1.4" {
+	if !ok || info.ProtocolVersion != "1.5" {
 		t.Fatalf("system.info protocolVersion = %#v", resp.Result)
 	}
 }
